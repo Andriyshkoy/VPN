@@ -6,4 +6,5 @@ exclude =
    tests
    venv
    env
+   scripts
    alembic/versions/*.py
