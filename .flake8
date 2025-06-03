@@ -1,0 +1,9 @@
+[flake8]
+ignore = E265, F811, PT001, DJ05, D100, D105, D104, W504, W292
+max-line-length = 100
+max-complexity = 10
+exclude = 
+   tests
+   venv
+   env
+   alembic/versions/*.py
