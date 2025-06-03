@@ -1,29 +1,35 @@
+# core/db/models/config.py
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.db import Base
-from core.db.models import Server, User
+
+from .server import Server
+from .user import User
 
 
 class VPN_Config(Base):
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(128))
+    name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
 
     server_id: Mapped[int] = mapped_column(ForeignKey("server.id"))
-    server: Mapped[Server] = relationship("Server")
+    server: Mapped[Server] = relationship("Server", back_populates="vpn_configs",
+                                          cascade="all, delete-orphan")
 
     owner_id: Mapped[int] = mapped_column(ForeignKey("user.id"))
-    owner: Mapped[User] = relationship("User")
+    owner: Mapped[User] = relationship("User", back_populates="vpn_configs",
+                                       cascade="all, delete-orphan")
+
+    display_name: Mapped[str] = mapped_column(String(128))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=func.now(),
         server_default=func.now()
     )
-    suspended: Mapped[bool] = mapped_column(Boolean, default=False)
+    suspended: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     suspended_at: Mapped[datetime | None] = mapped_column(
         DateTime,
         nullable=True

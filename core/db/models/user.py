@@ -1,3 +1,4 @@
+# core/db/models/user.py
 from datetime import datetime
 
 from sqlalchemy import DateTime, Float, String, func
