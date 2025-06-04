@@ -83,11 +83,7 @@ class ConfigRepo(BaseRepo[VPN_Config]):
         return result.scalar_one_or_none()
 
     async def create(
-        self,
-        server_id: int,
-        owner_id: int,
-        name: str,
-        display_name: str
+        self, server_id: int, owner_id: int, name: str, display_name: str
     ) -> VPN_Config:
         """
         Create a new VPN configuration.
