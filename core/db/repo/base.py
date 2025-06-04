@@ -28,19 +28,25 @@ class BaseRepo(Generic[T]):
         await self.session.flush()
         return obj
 
-    async def get(self, **filters) -> T | None:
-        """
-        Get a single object by filters.
+    async def get(
+        self,
+        *,
+        joined_load: Sequence[str] | None = None,
+        **filters,
+    ) -> T | None:
+        """Get a single object by filters.
 
         Args:
+            joined_load: Optional list of relationship names to load eagerly.
             **filters: Filter arguments to match
 
         Returns:
             Found object or None if not found
         """
-        stmt = select(self.model).filter_by(**filters).options(
-            selectinload(self.model.relations)
-        )
+        stmt = select(self.model).filter_by(**filters)
+        if joined_load:
+            for rel in joined_load:
+                stmt = stmt.options(selectinload(getattr(self.model, rel)))
         res = await self.session.scalar(stmt)
         return res
 
@@ -62,12 +68,7 @@ class BaseRepo(Generic[T]):
         Returns:
             Sequence of objects matching the criteria
         """
-        stmt = (
-            select(self.model)
-            .filter_by(**filters)
-            .offset(offset)
-            .limit(limit)
-        )
+        stmt = select(self.model).filter_by(**filters).offset(offset).limit(limit)
         res = await self.session.scalars(stmt)
         return res.all()
 
