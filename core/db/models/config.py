@@ -15,12 +15,16 @@ class VPN_Config(Base):
     name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
 
     server_id: Mapped[int] = mapped_column(ForeignKey("server.id"))
-    server: Mapped[Server] = relationship("Server", back_populates="vpn_configs",
-                                          cascade="all, delete-orphan")
+    server: Mapped[Server] = relationship(
+        "Server",
+        back_populates="vpn_configs",
+    )
 
     owner_id: Mapped[int] = mapped_column(ForeignKey("user.id"))
-    owner: Mapped[User] = relationship("User", back_populates="vpn_configs",
-                                       cascade="all, delete-orphan")
+    owner: Mapped[User] = relationship(
+        "User",
+        back_populates="vpn_configs",
+    )
 
     display_name: Mapped[str] = mapped_column(String(128))
 
