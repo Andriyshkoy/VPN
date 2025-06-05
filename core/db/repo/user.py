@@ -2,7 +2,7 @@
 
 from typing import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from core.db.models import User
 
@@ -46,3 +46,15 @@ class UserRepo(BaseRepo[User]):
         )
         users = await self.session.scalars(stmt)
         return users.all()
+
+    async def update(self, user_id: int, **kwargs) -> User:
+        """Update a user and return the updated object."""
+        stmt = (
+            update(self.model)
+            .where(self.model.id == user_id)
+            .values(**kwargs)
+            .returning(self.model)
+        )
+        result = await self.session.execute(stmt)
+        await self.session.flush()
+        return result.scalar_one_or_none()

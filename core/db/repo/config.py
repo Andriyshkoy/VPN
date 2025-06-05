@@ -82,6 +82,28 @@ class ConfigRepo(BaseRepo[VPN_Config]):
         await self.session.flush()
         return result.scalar_one_or_none()
 
+    async def suspend_all(self, owner_id: int) -> int:
+        """Suspend all active configs for a given user."""
+        stmt = (
+            update(self.model)
+            .where(self.model.owner_id == owner_id, self.model.suspended.is_(False))
+            .values(suspended=True, suspended_at=datetime.now())
+        )
+        result = await self.session.execute(stmt)
+        await self.session.flush()
+        return result.rowcount
+
+    async def unsuspend_all(self, owner_id: int) -> int:
+        """Unsuspend all configs for a given user."""
+        stmt = (
+            update(self.model)
+            .where(self.model.owner_id == owner_id, self.model.suspended.is_(True))
+            .values(suspended=False, suspended_at=None)
+        )
+        result = await self.session.execute(stmt)
+        await self.session.flush()
+        return result.rowcount
+
     async def create(
         self, server_id: int, owner_id: int, name: str, display_name: str
     ) -> VPN_Config:
