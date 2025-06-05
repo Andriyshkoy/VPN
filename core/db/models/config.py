@@ -14,7 +14,9 @@ class VPN_Config(Base):
 
     name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
 
-    server_id: Mapped[int] = mapped_column(ForeignKey("server.id"))
+    server_id: Mapped[int] = mapped_column(
+        ForeignKey("server.id", ondelete="CASCADE")
+    )
     server: Mapped[Server] = relationship(
         "Server",
         back_populates="vpn_configs",

@@ -1,4 +1,5 @@
-# core/db/models/server.py
+from __future__ import annotations
+
 from decimal import Decimal
 
 from sqlalchemy import Integer, Numeric, String
@@ -21,7 +22,7 @@ class Server(Base):
 
     api_key: Mapped[str] = mapped_column(EncryptedString)
 
-    vpn_configs: Mapped[list["VPN_Config"]] = relationship(
+    vpn_configs: Mapped[list["VPN_Config"]] = relationship(  # noqa F821 # type: ignore
         "VPN_Config",
         back_populates="server",
         cascade="all, delete-orphan",
