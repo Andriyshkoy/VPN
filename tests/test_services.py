@@ -1,6 +1,7 @@
 import pytest
 
 from core.services import UserService, ServerService, ConfigService, BillingService
+from core.exceptions import InsufficientBalanceError
 from core.db.unit_of_work import uow
 
 class DummyGateway:
@@ -23,12 +24,42 @@ class DummyGateway:
 
 
 @pytest.mark.asyncio
+async def test_create_requires_balance(monkeypatch, sessionmaker):
+    monkeypatch.setattr("core.services.config.APIGateway", lambda *a, **kw: DummyGateway())
+
+    server_svc = ServerService(uow)
+    user_svc = UserService(uow)
+    config_svc = ConfigService(uow)
+    billing = BillingService(uow, per_config_cost=1)
+
+    user = await user_svc.register(55)
+    server = await server_svc.create(
+        name="srvbalance",
+        ip="1.1.1.1",
+        port=22,
+        host="host",
+        location="US",
+        api_key="k",
+        cost=1,
+    )
+
+    with pytest.raises(InsufficientBalanceError):
+        await config_svc.create_config(
+            server_id=server.id,
+            owner_id=user.id,
+            name="bal",
+            display_name="disp",
+        )
+
+
+@pytest.mark.asyncio
 async def test_services_workflow(monkeypatch, sessionmaker):
     monkeypatch.setattr("core.services.config.APIGateway", lambda *a, **kw: DummyGateway())
 
     server_svc = ServerService(uow)
     user_svc = UserService(uow)
     config_svc = ConfigService(uow)
+    billing = BillingService(uow, per_config_cost=1)
 
     # create user and server
     user = await user_svc.register(100)
@@ -41,6 +72,8 @@ async def test_services_workflow(monkeypatch, sessionmaker):
         api_key="k",
         cost=1,
     )
+
+    await billing.top_up(user.id, 1)
 
     # create config
     cfg = await config_svc.create_config(
