@@ -67,7 +67,7 @@ class APIGateway:
                 response = await self._client.request(method, url, **kwargs)
                 response.raise_for_status()
                 return response
-            except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+            except (httpx.RequestError, httpx.HTTPStatusError) as exc:  # noqa: F841
                 attempts += 1
                 if attempts > self._retries:
                     raise
