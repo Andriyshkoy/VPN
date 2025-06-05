@@ -4,6 +4,7 @@ from typing import Callable, Sequence
 
 from .api_gateway import APIGateway
 from .models import Config
+from core.exceptions import InsufficientBalanceError
 
 
 class ConfigService:
@@ -27,6 +28,12 @@ class ConfigService:
             server = await repos["servers"].get(id=server_id)
             if not server:
                 raise ValueError(f"Server {server_id} not found")
+
+            user = await repos["users"].get(id=owner_id)
+            if not user:
+                raise ValueError(f"User {owner_id} not found")
+            if user.balance <= 0:
+                raise InsufficientBalanceError("Insufficient balance")
 
             async with APIGateway(server.ip, server.port, server.api_key) as api:
                 await api.create_client(name, use_password=use_password)

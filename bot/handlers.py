@@ -10,6 +10,7 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
 
 from core.db.unit_of_work import uow
 from core.services import ConfigService, ServerService, UserService
+from core.exceptions import InsufficientBalanceError
 
 from .states import CreateConfig
 
@@ -34,6 +35,12 @@ async def cmd_start(message: Message):
 async def cmd_balance(message: Message):
     user = await get_or_create_user(message.from_user.id, message.from_user.username)
     await message.answer(f"Your balance: {user.balance}")
+
+
+@router.message(Command("topup"))
+async def cmd_topup(message: Message):
+    await get_or_create_user(message.from_user.id, message.from_user.username)
+    await message.answer("Для пополнения баланса свяжитесь с администратором сервиса")
 
 
 @router.message(Command("configs"))
@@ -81,12 +88,17 @@ async def got_name(message: Message, state: FSMContext, bot: Bot):
         return
     user = await get_or_create_user(message.from_user.id, message.from_user.username)
     unique_name = uuid.uuid4().hex
-    cfg = await config_service.create_config(
-        server_id=server_id,
-        owner_id=user.id,
-        name=unique_name,
-        display_name=message.text,
-    )
+    try:
+        cfg = await config_service.create_config(
+            server_id=server_id,
+            owner_id=user.id,
+            name=unique_name,
+            display_name=message.text,
+        )
+    except InsufficientBalanceError:
+        await message.answer("Недостаточно средств. Пополните баланс")
+        await state.clear()
+        return
     content = await config_service.download_config(cfg.id)
     path = f"/tmp/{message.text}.ovpn"
     with open(path, "wb") as f:
