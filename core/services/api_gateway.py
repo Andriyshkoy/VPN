@@ -97,6 +97,5 @@ class APIGateway:
         await self._request("POST", f"/clients/{name}/unsuspend")
 
     async def list_blocked(self) -> Sequence[str]:
-        r = await self._client.get("/clients/blocked")
         r = await self._request("GET", "/clients/blocked")
         return r.json().get("blocked_clients", [])

@@ -27,7 +27,7 @@ class BillingService:
     async def charge_all(self) -> None:
         """Charge all users for their active configurations."""
         async with self._uow() as repos:
-            users: Sequence = await repos["users"].list()
+            users: Sequence[User] = await repos["users"].list()
             for user in users:
                 configs = await repos["configs"].get_active(owner_id=user.id)
                 charge = len(configs) * self._cost

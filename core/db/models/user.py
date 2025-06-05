@@ -1,4 +1,4 @@
-# core/db/models/user.py
+from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import DateTime, Float, String, func
@@ -18,7 +18,7 @@ class User(Base):
 
     balance: Mapped[float] = mapped_column(Float, default=0)
 
-    vpn_configs: Mapped[list["VPN_Config"]] = relationship(
+    vpn_configs: Mapped[list["VPN_Config"]] = relationship(  # noqa F821 # type: ignore
         "VPN_Config",
         back_populates="owner",
         cascade="all, delete-orphan",

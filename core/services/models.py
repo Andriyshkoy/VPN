@@ -22,7 +22,7 @@ class Server:
             ip=obj.ip,
             port=obj.port,
             host=obj.host,
-            monthly_cost=getattr(obj, "monthly_cost", obj.cost if hasattr(obj, "cost") else obj.monthly_cost),
+            monthly_cost=obj.monthly_cost,
             location=obj.location,
             api_key=obj.api_key,
         )
