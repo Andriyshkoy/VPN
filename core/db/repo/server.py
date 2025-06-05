@@ -98,3 +98,12 @@ class ServerRepo(BaseRepo[Server]):
         result = await self.session.execute(stmt)
         await self.session.flush()
         return result.scalar_one_or_none()
+
+    async def delete(self, **filters) -> int:
+        """Delete a server and cascade delete its VPN configs."""
+        server = await self.get(**filters, joined_load=["vpn_configs"])
+        if not server:
+            return 0
+        await self.session.delete(server)
+        await self.session.flush()
+        return 1
