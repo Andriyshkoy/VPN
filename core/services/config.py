@@ -1,9 +1,9 @@
 from __future__ import annotations
-from datetime import datetime
+
 from typing import Callable, Sequence
 
-from .models import Config
 from .api_gateway import APIGateway
+from .models import Config
 
 
 class ConfigService:

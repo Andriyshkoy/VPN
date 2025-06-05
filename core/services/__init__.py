@@ -1,8 +1,8 @@
 from .api_gateway import APIGateway
 from .config import ConfigService
+from .models import Config, Server, User
 from .server import ServerService
 from .user import UserService
-from .models import Config, Server, User
 
 __all__ = [
     "APIGateway",
