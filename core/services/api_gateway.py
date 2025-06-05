@@ -6,7 +6,13 @@ import httpx
 class APIGateway:
     """Thin async wrapper around the remote VPN‑management REST API."""
 
-    def __init__(self, ip: str, port: int, api_key: str, *, timeout: float = 20.0) -> None:
+    def __init__(self, ip: str | object, port: int | None = None, api_key: str | None = None, *, timeout: float = 20.0) -> None:
+        if port is None and hasattr(ip, "ip"):
+            server = ip
+            ip = server.ip
+            port = server.port
+            api_key = server.api_key
+        assert port is not None and api_key is not None
         self._base_url = f"http://{ip}:{port}"
         self._headers = {"X-API-Key": api_key}
         self._timeout = timeout
