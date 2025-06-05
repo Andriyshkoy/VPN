@@ -3,6 +3,7 @@ from core.db.models import User, Server
 from core.db.repo import UserRepo, ServerRepo, ConfigRepo
 from core.db.unit_of_work import uow
 
+
 @pytest.mark.asyncio
 async def test_user_repo_get_or_create(session):
     repo = UserRepo(session)
@@ -101,3 +102,23 @@ async def test_uow(monkeypatch, engine):
         repo = UserRepo(sess)
         user = await repo.get(tg_id=1)
         assert user is not None
+
+
+@pytest.mark.asyncio
+async def test_server_delete_cascades_configs(session):
+    user_repo = UserRepo(session)
+    server_repo = ServerRepo(session)
+    config_repo = ConfigRepo(session)
+
+    user = await user_repo.get_or_create(42)
+    server = await server_repo.create(
+        name="srv", ip="1.1.1.1", port=22,
+        host="host", location="US", api_key="k", cost=1
+    )
+    cfg = await config_repo.create(server.id, user.id, "cfg", "d")
+
+    # delete server
+    await server_repo.delete(id=server.id)
+
+    # config should also be removed
+    assert await config_repo.get(id=cfg.id) is None

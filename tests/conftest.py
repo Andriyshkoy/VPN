@@ -14,9 +14,11 @@ os.environ.setdefault("ENCRYPTION_KEY", Fernet.generate_key().decode())
 from core.db import Base
 import core.db as db
 
+
 @pytest.fixture(scope="session")
 def anyio_backend():
     return "asyncio"
+
 
 @pytest_asyncio.fixture()
 async def engine():
@@ -31,6 +33,7 @@ async def engine():
     yield engine
     await engine.dispose()
 
+
 @pytest_asyncio.fixture()
 def sessionmaker(engine, monkeypatch):
     maker = async_sessionmaker(engine, expire_on_commit=False)
@@ -39,9 +42,8 @@ def sessionmaker(engine, monkeypatch):
     monkeypatch.setattr(db, "engine", engine, raising=False)
     return maker
 
+
 @pytest_asyncio.fixture()
 async def session(sessionmaker):
     async with sessionmaker() as session:
         yield session
-
-
