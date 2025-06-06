@@ -43,7 +43,8 @@ python scripts/init_db.py
 
 ## Configuration
 
-All settings are read from environment variables (see `core/config.py`):
+All settings are read from environment variables (see `core/config.py`).
+Create a `.env` file (see `.env.example`) to provide them:
 
 - `DATABASE_URL` – database connection string
 - `ENCRYPTION_KEY` – Fernet key used to encrypt server API keys
@@ -70,3 +71,24 @@ pytest
 - Temporary configuration files created by the bot are placed in the system temp directory and removed immediately after sending.
 - Communication with VPN servers is performed over plain HTTP; ensure your environment is trusted or switch to HTTPS.
 
+
+## Deployment with Docker
+
+A `docker-compose.yml` file is included to run the full stack with PostgreSQL.
+Build the images and initialize the database first:
+
+```bash
+docker compose build
+docker compose run --rm bot python scripts/init_db.py
+```
+
+Then start all services in the background:
+
+```bash
+docker compose up -d
+```
+
+Copy `.env.example` to `.env` and adjust the values (such as `BOT_TOKEN`,
+`ENCRYPTION_KEY` and `ADMIN_PASSWORD`) for your production setup. Docker
+Compose will pick them up automatically. The admin panel will be available on
+port 5000.

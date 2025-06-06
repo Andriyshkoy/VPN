@@ -1,0 +1,54 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:16
+    restart: always
+    env_file: .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  bot:
+    build: .
+    command: python -m bot.main
+    env_file: .env
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      BOT_TOKEN: ${BOT_TOKEN}
+      PER_CONFIG_COST: ${PER_CONFIG_COST}
+      BILLING_INTERVAL: ${BILLING_INTERVAL}
+
+  admin:
+    build: .
+    command: python -m admin.app
+    env_file: .env
+    ports:
+      - "5000:5000"
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+
+  billing:
+    build: .
+    command: python scripts/billing_daemon.py
+    env_file: .env
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      PER_CONFIG_COST: ${PER_CONFIG_COST}
+      BILLING_INTERVAL: ${BILLING_INTERVAL}
+
+volumes:
+  db_data:
