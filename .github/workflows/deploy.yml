@@ -1,0 +1,44 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-test-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: pytest -q
+      - name: Login to registry
+        run: echo '${{ secrets.REGISTRY_PASSWORD }}' | docker login -u ${{ secrets.REGISTRY_USERNAME }} --password-stdin
+      - name: Build image
+        id: build
+        run: |
+          IMAGE="${{ secrets.REGISTRY_USERNAME }}/vpn:${{ github.sha }}"
+          docker build -t "$IMAGE" .
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+      - name: Push image
+        run: docker push ${{ steps.build.outputs.image }}
+
+  deploy:
+    needs: build-test-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /opt/vpn
+            docker pull ${{ needs.build-test-push.outputs.image }}
+            IMAGE=${{ needs.build-test-push.outputs.image }} docker compose up -d
+
