@@ -13,6 +13,7 @@ services:
       - db_data:/var/lib/postgresql/data
 
   bot:
+    image: ${IMAGE:-vpn}
     build: .
     command: python -m bot.main
     env_file: .env
@@ -26,11 +27,12 @@ services:
       BILLING_INTERVAL: ${BILLING_INTERVAL}
 
   admin:
+    image: ${IMAGE:-vpn}
     build: .
     command: python -m admin.app
     env_file: .env
     ports:
-      - "5000:5000"
+      - "14081:5000"
     depends_on:
       - db
     environment:
@@ -39,6 +41,7 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
 
   billing:
+    image: ${IMAGE:-vpn}
     build: .
     command: python scripts/billing_daemon.py
     env_file: .env

@@ -1,37 +1,25 @@
-name: CI/CD
+name: Deploy to Server
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
-  build-test-push:
-    runs-on: ubuntu-latest
-    outputs:
-      image: ${{ steps.build.outputs.image }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: pip install -r requirements.txt
-      - run: pytest -q
-      - name: Login to registry
-        run: echo '${{ secrets.REGISTRY_PASSWORD }}' | docker login -u ${{ secrets.REGISTRY_USERNAME }} --password-stdin
-      - name: Build image
-        id: build
-        run: |
-          IMAGE="${{ secrets.REGISTRY_USERNAME }}/vpn:${{ github.sha }}"
-          docker build -t "$IMAGE" .
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
-      - name: Push image
-        run: docker push ${{ steps.build.outputs.image }}
-
   deploy:
-    needs: build-test-push
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy over SSH
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Copy compose file
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: docker-compose.yml
+          target: /opt/vpn
+      - name: Execute remote commands
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -39,7 +27,7 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             cd /opt/vpn
-            sudo docker compose pull
-            sudo docker compose down
-            sudo docker compose up -d --build
-
+            export IMAGE=${{ secrets.REGISTRY_USERNAME }}/vpn:latest
+            docker compose pull
+            docker compose down
+            docker compose up -d
