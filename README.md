@@ -27,7 +27,7 @@ Located in [`admin/`](admin). It exposes a minimal HTML interface to manage serv
 python -m admin.app
 ```
 
-and open `http://localhost:5000`.
+and open `http://localhost:14081`.
 
 ### Billing daemon
 
@@ -91,4 +91,4 @@ docker compose up -d
 Copy `.env.example` to `.env` and adjust the values (such as `BOT_TOKEN`,
 `ENCRYPTION_KEY` and `ADMIN_PASSWORD`) for your production setup. Docker
 Compose will pick them up automatically. The admin panel will be available on
-port 5000.
+port 14081 (forwarded to 5000 in the container).
