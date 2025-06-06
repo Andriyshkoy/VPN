@@ -13,7 +13,7 @@ services:
       - db_data:/var/lib/postgresql/data
 
   bot:
-    image: ${IMAGE:-vpn}
+    image: andriyshkoy/vpn
     command: python -m bot.main
     env_file: .env
     depends_on:
@@ -26,7 +26,7 @@ services:
       BILLING_INTERVAL: ${BILLING_INTERVAL}
 
   admin:
-    image: ${IMAGE:-vpn}
+    image: andriyshkoy/vpn
     command: gunicorn -b 0.0.0.0:5000 admin.app:app
     env_file: .env
     depends_on:
@@ -37,7 +37,7 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
 
   billing:
-    image: ${IMAGE:-vpn}
+    image: andriyshkoy/vpn
     command: python scripts/billing_daemon.py
     env_file: .env
     depends_on:
@@ -49,7 +49,7 @@ services:
       BILLING_INTERVAL: ${BILLING_INTERVAL}
 
   nginx:
-    image: ${IMAGE:-vpn-nginx}
+    image: andriyshkoy/vpn-nginx
     depends_on:
       - bot
       - admin
