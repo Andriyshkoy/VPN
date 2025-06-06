@@ -1,25 +1,13 @@
 import asyncio
 from dataclasses import asdict
 
-from flask import (
-    Flask,
-    request,
-    jsonify,
-    abort,
-    send_file,
-    render_template,
-    redirect,
-    url_for,
-)
+from flask import (Flask, abort, jsonify, redirect, render_template, request,
+                   send_file, url_for, make_response)
 
 from core.config import settings
 from core.db.unit_of_work import uow
-from core.services import (
-    ServerService,
-    ConfigService,
-    UserService,
-    BillingService,
-)
+from core.services import (BillingService, ConfigService, ServerService,
+                           UserService)
 
 app = Flask(__name__, template_folder="templates")
 
@@ -40,7 +28,9 @@ def require_auth() -> None:
     if password:
         auth = request.authorization
         if not auth or auth.password != password:
-            abort(401)
+            resp = make_response("", 401)
+            resp.headers["WWW-Authenticate"] = 'Basic realm="Admin"'
+            abort(resp)
 
 
 @app.route("/servers", methods=["GET"])

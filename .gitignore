@@ -133,6 +133,8 @@ dmypy.json
 
 # Database files
 *.db
+*.sqlite3
+*.sqlite
 
 # VS Code settings
 .vscode
