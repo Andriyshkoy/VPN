@@ -35,3 +35,9 @@ class UserService:
         async with self._uow() as repos:
             user = await repos["users"].get(id=user_id)
             return User.from_orm(user) if user else None
+
+    async def list(self) -> list[User]:
+        """Return all users."""
+        async with self._uow() as repos:
+            users = await repos["users"].list()
+            return [User.from_orm(u) for u in users]
