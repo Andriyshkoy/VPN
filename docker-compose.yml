@@ -14,7 +14,6 @@ services:
 
   bot:
     image: ${IMAGE:-vpn}
-    build: .
     command: python -m bot.main
     env_file: .env
     depends_on:
@@ -28,8 +27,7 @@ services:
 
   admin:
     image: ${IMAGE:-vpn}
-    build: .
-    command: python -m admin.app
+    command: gunicorn -b 0.0.0.0:5000 admin.app:app
     env_file: .env
     depends_on:
       - db
@@ -40,7 +38,6 @@ services:
 
   billing:
     image: ${IMAGE:-vpn}
-    build: .
     command: python scripts/billing_daemon.py
     env_file: .env
     depends_on:
