@@ -1,4 +1,3 @@
-import asyncio
 from dataclasses import asdict
 
 from flask import (Flask, abort, jsonify, make_response, redirect,
@@ -34,28 +33,26 @@ def require_auth() -> None:
 
 
 @app.route("/servers", methods=["GET"])
-def list_servers():
+async def list_servers():
     require_auth()
-    servers = asyncio.run(server_service.list())
+    servers = await server_service.list()
     if request.accept_mimetypes.accept_json and not request.accept_mimetypes.accept_html:
         return jsonify([asdict(s) for s in servers])
     return render_template("servers.html", servers=servers)
 
 
 @app.route("/servers", methods=["POST"])
-def create_server():
+async def create_server():
     require_auth()
     data = request.json if request.is_json else request.form
-    server = asyncio.run(
-        server_service.create(
-            name=data["name"],
-            ip=data["ip"],
-            port=int(data.get("port", 22)),
-            host=data["host"],
-            location=data["location"],
-            api_key=data["api_key"],
-            cost=float(data.get("cost", 0)),
-        )
+    server = await server_service.create(
+        name=data["name"],
+        ip=data["ip"],
+        port=int(data.get("port", 22)),
+        host=data["host"],
+        location=data["location"],
+        api_key=data["api_key"],
+        cost=float(data.get("cost", 0)),
     )
     if request.is_json:
         return jsonify(asdict(server))
@@ -63,7 +60,7 @@ def create_server():
 
 
 @app.route("/servers/<int:server_id>", methods=["PUT"])
-def update_server(server_id: int):
+async def update_server(server_id: int):
     require_auth()
     data = request.json or {}
 
@@ -71,47 +68,45 @@ def update_server(server_id: int):
         async with uow() as repos:
             return await repos["servers"].update(server_id, **data)
 
-    srv = asyncio.run(_update())
+    srv = await _update()
     if not srv:
         abort(404)
     return jsonify(asdict(ServerService.from_orm(srv)))
 
 
 @app.route("/servers/<int:server_id>", methods=["DELETE"])
-def delete_server(server_id: int):
+async def delete_server(server_id: int):
     require_auth()
-    deleted = asyncio.run(server_service.delete(server_id))
+    deleted = await server_service.delete(server_id)
     return jsonify({"deleted": deleted})
 
 
 @app.route("/servers/<int:server_id>/delete", methods=["POST"])
-def delete_server_form(server_id: int):
+async def delete_server_form(server_id: int):
     require_auth()
-    asyncio.run(server_service.delete(server_id))
+    await server_service.delete(server_id)
     return redirect(url_for("list_servers"))
 
 
 @app.route("/configs", methods=["GET"])
-def list_configs():
+async def list_configs():
     require_auth()
-    configs = asyncio.run(config_service.list_active())
+    configs = await config_service.list_active()
     if request.accept_mimetypes.accept_json and not request.accept_mimetypes.accept_html:
         return jsonify([asdict(c) for c in configs])
     return render_template("configs.html", configs=configs)
 
 
 @app.route("/configs", methods=["POST"])
-def create_config():
+async def create_config():
     require_auth()
     data = request.json if request.is_json else request.form
-    cfg = asyncio.run(
-        config_service.create_config(
-            server_id=data["server_id"],
-            owner_id=data["owner_id"],
-            name=data["name"],
-            display_name=data.get("display_name", data["name"]),
-            use_password=bool(data.get("use_password", False)),
-        )
+    cfg = await config_service.create_config(
+        server_id=data["server_id"],
+        owner_id=data["owner_id"],
+        name=data["name"],
+        display_name=data.get("display_name", data["name"]),
+        use_password=bool(data.get("use_password", False)),
     )
     if request.is_json:
         return jsonify(asdict(cfg))
@@ -119,9 +114,9 @@ def create_config():
 
 
 @app.route("/configs/<int:config_id>/download", methods=["GET"])
-def download_config(config_id: int):
+async def download_config(config_id: int):
     require_auth()
-    content = asyncio.run(config_service.download_config(config_id))
+    content = await config_service.download_config(config_id)
     path = f"/tmp/config_{config_id}.ovpn"
     with open(path, "wb") as f:
         f.write(content)
@@ -129,30 +124,30 @@ def download_config(config_id: int):
 
 
 @app.route("/configs/<int:config_id>", methods=["DELETE"])
-def delete_config(config_id: int):
+async def delete_config(config_id: int):
     require_auth()
-    asyncio.run(config_service.revoke_config(config_id))
+    await config_service.revoke_config(config_id)
     return jsonify({"deleted": True})
 
 
 @app.route("/configs/<int:config_id>/delete", methods=["POST"])
-def delete_config_form(config_id: int):
+async def delete_config_form(config_id: int):
     require_auth()
-    asyncio.run(config_service.revoke_config(config_id))
+    await config_service.revoke_config(config_id)
     return redirect(url_for("list_configs"))
 
 
 @app.route("/users", methods=["GET"])
-def list_users():
+async def list_users():
     require_auth()
-    users = asyncio.run(user_service.list())
+    users = await user_service.list()
     if request.accept_mimetypes.accept_json and not request.accept_mimetypes.accept_html:
         return jsonify([asdict(u) for u in users])
     return render_template("users.html", users=users)
 
 
 @app.route("/users/<int:user_id>", methods=["GET"])
-def view_user(user_id: int):
+async def view_user(user_id: int):
     require_auth()
 
     async def _get():
@@ -163,7 +158,7 @@ def view_user(user_id: int):
             configs = await repos["configs"].list(owner_id=user_id)
             return user, configs
 
-    user_obj, configs = asyncio.run(_get())
+    user_obj, configs = await _get()
     if not user_obj:
         abort(404)
     user = User.from_orm(user_obj)
@@ -174,22 +169,22 @@ def view_user(user_id: int):
 
 
 @app.route("/users/<int:user_id>/topup", methods=["POST"])
-def top_up(user_id: int):
+async def top_up(user_id: int):
     require_auth()
     data = request.json if request.is_json else request.form
     amount = float(data.get("amount", 0))
-    user = asyncio.run(billing_service.top_up(user_id, amount))
+    user = await billing_service.top_up(user_id, amount)
     if request.is_json:
         return jsonify(asdict(user))
     return redirect(url_for("list_configs"))
 
 
 @app.route("/users/topup", methods=["POST"])
-def top_up_form():
+async def top_up_form():
     require_auth()
     user_id = int(request.form["user_id"])
     amount = float(request.form["amount"])
-    asyncio.run(billing_service.top_up(user_id, amount))
+    await billing_service.top_up(user_id, amount)
     return redirect(url_for("list_configs"))
 
 
