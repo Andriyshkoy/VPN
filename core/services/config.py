@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Callable, Sequence
 
+from core.exceptions import InsufficientBalanceError
+
 from .api_gateway import APIGateway
 from .models import Config
-from core.exceptions import InsufficientBalanceError
 
 
 class ConfigService:

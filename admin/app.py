@@ -1,19 +1,13 @@
 import asyncio
 from dataclasses import asdict
 
-from flask import (Flask, abort, jsonify, redirect, render_template, request,
-                   send_file, url_for, make_response)
+from flask import (Flask, abort, jsonify, make_response, redirect,
+                   render_template, request, send_file, url_for)
 
 from core.config import settings
 from core.db.unit_of_work import uow
-from core.services import (
-    BillingService,
-    ConfigService,
-    ServerService,
-    UserService,
-    User,
-    Config,
-)
+from core.services import (BillingService, Config, ConfigService,
+                           ServerService, User, UserService)
 
 app = Flask(__name__, template_folder="templates")
 
