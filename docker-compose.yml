@@ -31,8 +31,6 @@ services:
     build: .
     command: python -m admin.app
     env_file: .env
-    ports:
-      - "14081:5000"
     depends_on:
       - db
     environment:
@@ -52,6 +50,15 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       PER_CONFIG_COST: ${PER_CONFIG_COST}
       BILLING_INTERVAL: ${BILLING_INTERVAL}
+    
+  nginx:
+    depends_on:
+      - bot
+      - admin
+    build:
+      ./nginx/
+    ports:
+      - "14081:80"
 
 volumes:
   db_data:
