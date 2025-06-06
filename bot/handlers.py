@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import uuid
+import os
+import tempfile
 
 from aiogram import Bot, Router
 from aiogram.filters import Command
@@ -100,9 +102,18 @@ async def got_name(message: Message, state: FSMContext, bot: Bot):
         await state.clear()
         return
     content = await config_service.download_config(cfg.id)
-    path = f"/tmp/{message.text}.ovpn"
-    with open(path, "wb") as f:
-        f.write(content)
-    await bot.send_document(message.chat.id, FSInputFile(path, filename=f"{message.text}.ovpn"))
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    try:
+        await bot.send_document(
+            message.chat.id,
+            FSInputFile(tmp_path, filename=f"{message.text}.ovpn"),
+        )
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
     await message.answer("Config created")
     await state.clear()
