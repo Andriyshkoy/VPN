@@ -52,11 +52,10 @@ services:
       BILLING_INTERVAL: ${BILLING_INTERVAL}
 
   nginx:
+    image: ${IMAGE:-vpn-nginx}
     depends_on:
       - bot
       - admin
-    build:
-      ./nginx/
     ports:
       - "14081:80"
 
