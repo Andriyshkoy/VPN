@@ -1,0 +1,43 @@
+{% extends 'base.html' %}
+{% block body %}
+<h2>Configs</h2>
+<table class="table table-striped">
+<thead><tr><th>ID</th><th>Name</th><th>User</th><th>Server</th><th></th></tr></thead>
+<tbody>
+{% for c in configs %}
+<tr>
+  <td>{{ c.id }}</td>
+  <td>{{ c.name }}</td>
+  <td>{{ c.owner_id }}</td>
+  <td>{{ c.server_id }}</td>
+  <td>
+    <a class="btn btn-sm btn-secondary" href="{{ url_for('download_config', config_id=c.id) }}">Download</a>
+    <form method="post" action="{{ url_for('delete_config_form', config_id=c.id) }}" style="display:inline">
+      <button class="btn btn-sm btn-danger">Delete</button>
+    </form>
+  </td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+
+<h3>Create config</h3>
+<form method="post" action="{{ url_for('create_config') }}">
+  <div class="mb-2"><input class="form-control" type="number" name="server_id" placeholder="Server ID" required></div>
+  <div class="mb-2"><input class="form-control" type="number" name="owner_id" placeholder="User ID" required></div>
+  <div class="mb-2"><input class="form-control" type="text" name="name" placeholder="Name" required></div>
+  <div class="mb-2"><input class="form-control" type="text" name="display_name" placeholder="Display Name"></div>
+  <div class="form-check mb-2">
+    <input class="form-check-input" type="checkbox" id="use_password" name="use_password">
+    <label class="form-check-label" for="use_password">Use password</label>
+  </div>
+  <button class="btn btn-primary" type="submit">Create</button>
+</form>
+
+<h3>Top up user balance</h3>
+<form method="post" action="{{ url_for('top_up_form') }}">
+  <div class="mb-2"><input class="form-control" type="number" name="user_id" placeholder="User ID" required></div>
+  <div class="mb-2"><input class="form-control" type="number" step="0.01" name="amount" placeholder="Amount" required></div>
+  <button class="btn btn-primary" type="submit">Top up</button>
+</form>
+{% endblock %}
