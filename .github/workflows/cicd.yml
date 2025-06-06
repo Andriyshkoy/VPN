@@ -1,0 +1,65 @@
+# .github/workflows/ci-cd.yml
+name: Build-Push-Deploy
+
+on:
+  push:
+    branches: [ main ]   # единственная ветка
+
+jobs:
+  # ---------- 1. Сборка, тесты, пуш образа ----------
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install -r requirements.txt
+      - run: pytest -q
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ secrets.REGISTRY_USERNAME }}/vpn:latest
+
+  # ---------- 2. Деплой на сервер ----------
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push   # гарантирует, что билд завершился удачно
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Copy compose file
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: docker-compose.yml
+          target: /opt/vpn
+
+      - name: Execute remote commands
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /opt/vpn
+            export IMAGE=${{ secrets.REGISTRY_USERNAME }}/vpn:latest
+            docker compose pull
+            docker compose down
+            docker compose up -d
