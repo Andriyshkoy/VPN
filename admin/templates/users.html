@@ -1,0 +1,26 @@
+{% extends 'base.html' %}
+{% block body %}
+<h2>Users</h2>
+<table class="table table-striped">
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Telegram ID</th>
+      <th>Username</th>
+      <th>Balance</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for u in users %}
+    <tr>
+      <td>{{ u.id }}</td>
+      <td>{{ u.tg_id }}</td>
+      <td>{{ u.username or '' }}</td>
+      <td>{{ '%.2f'|format(u.balance) }}</td>
+      <td><a class="btn btn-sm btn-primary" href="{{ url_for('view_user', user_id=u.id) }}">View</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

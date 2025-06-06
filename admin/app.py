@@ -6,8 +6,14 @@ from flask import (Flask, abort, jsonify, redirect, render_template, request,
 
 from core.config import settings
 from core.db.unit_of_work import uow
-from core.services import (BillingService, ConfigService, ServerService,
-                           UserService)
+from core.services import (
+    BillingService,
+    ConfigService,
+    ServerService,
+    UserService,
+    User,
+    Config,
+)
 
 app = Flask(__name__, template_folder="templates")
 
@@ -140,6 +146,37 @@ def delete_config_form(config_id: int):
     require_auth()
     asyncio.run(config_service.revoke_config(config_id))
     return redirect(url_for("list_configs"))
+
+
+@app.route("/users", methods=["GET"])
+def list_users():
+    require_auth()
+    users = asyncio.run(user_service.list())
+    if request.accept_mimetypes.accept_json and not request.accept_mimetypes.accept_html:
+        return jsonify([asdict(u) for u in users])
+    return render_template("users.html", users=users)
+
+
+@app.route("/users/<int:user_id>", methods=["GET"])
+def view_user(user_id: int):
+    require_auth()
+
+    async def _get():
+        async with uow() as repos:
+            user = await repos["users"].get(id=user_id)
+            if not user:
+                return None, []
+            configs = await repos["configs"].list(owner_id=user_id)
+            return user, configs
+
+    user_obj, configs = asyncio.run(_get())
+    if not user_obj:
+        abort(404)
+    user = User.from_orm(user_obj)
+    cfgs = [Config.from_orm(c) for c in configs]
+    if request.accept_mimetypes.accept_json and not request.accept_mimetypes.accept_html:
+        return jsonify({"user": asdict(user), "configs": [asdict(c) for c in cfgs]})
+    return render_template("user_detail.html", user=user, configs=cfgs)
 
 
 @app.route("/users/<int:user_id>/topup", methods=["POST"])
