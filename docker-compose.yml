@@ -50,7 +50,7 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       PER_CONFIG_COST: ${PER_CONFIG_COST}
       BILLING_INTERVAL: ${BILLING_INTERVAL}
-    
+
   nginx:
     depends_on:
       - bot
