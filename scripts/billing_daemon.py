@@ -10,6 +10,7 @@ from core.config import settings
 from core.services import BillingService
 from core.db.unit_of_work import uow
 
+
 async def run():
     billing = BillingService(uow, per_config_cost=settings.per_config_cost)
     while True:

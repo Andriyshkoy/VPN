@@ -9,6 +9,11 @@ class BillingService:
     """Service that handles manual top-ups and periodic charges."""
 
     def __init__(self, uow: Callable, *, per_config_cost: float) -> None:
+        """
+        Initialize the billing service.
+        :param uow: Unit of Work factory to manage database transactions.
+        :param per_config_cost: Cost charged for each active configuration.
+        """
         self._uow = uow
         self._cost = per_config_cost
 
