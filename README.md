@@ -44,9 +44,12 @@ python scripts/init_db.py
 ## Configuration
 
 All settings are read from environment variables (see `core/config.py`).
-Create a `.env` file (see `.env.example`) to provide them:
+Create a `.env` file (see `.env.example`) to provide them.
+When using Docker Compose the `DATABASE_URL` value is generated automatically
+from the PostgreSQL credentials, otherwise set it manually:
 
-- `DATABASE_URL` – database connection string
+- `DATABASE_URL` – database connection string (only required when running
+  without Docker Compose)
 - `ENCRYPTION_KEY` – Fernet key used to encrypt server API keys
 - `BOT_TOKEN` – Telegram bot token
 - `PER_CONFIG_COST` – how much to charge per active config (default `1.0`)
@@ -89,6 +92,7 @@ docker compose up -d
 ```
 
 Copy `.env.example` to `.env` and adjust the values (such as `BOT_TOKEN`,
-`ENCRYPTION_KEY` and `ADMIN_PASSWORD`) for your production setup. Docker
-Compose will pick them up automatically. The admin panel will be available on
+`ENCRYPTION_KEY`, `POSTGRES_USER` and `POSTGRES_PASSWORD`) for your production
+setup. Docker Compose will pick them up automatically and derive `DATABASE_URL`
+from them. The admin panel will be available on
 port 5000.
