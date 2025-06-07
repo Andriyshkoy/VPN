@@ -85,6 +85,12 @@ class ConfigService:
             cfg = await repos["configs"].unsuspend(config_id)
             return Config.from_orm(cfg)
 
+    async def get(self, config_id: int) -> Config | None:
+        """Return a single config by ID or ``None`` if missing."""
+        async with self._uow() as repos:
+            cfg = await repos["configs"].get(id=config_id)
+            return Config.from_orm(cfg) if cfg else None
+
     async def suspend_all(self, owner_id: int) -> int:
         """Suspend all active configs for a user and return count."""
         async with self._uow() as repos:

@@ -76,13 +76,22 @@ async def cmd_topup(message: Message):
 
 @router.message(Command("configs"))
 async def cmd_configs(message: Message):
+    """List all configs (active and suspended) with inline buttons."""
     user = await get_or_create_user(message.from_user.id, message.from_user.username)
-    configs = await config_service.list_active(owner_id=user.id)
+    active = await config_service.list_active(owner_id=user.id)
+    suspended = await config_service.list_suspended(owner_id=user.id)
+    configs = active + suspended
     if not configs:
-        await message.answer("You have no active configs")
+        await message.answer("You have no configs")
         return
-    text = "Your configs:\n" + "\n".join(f"- {c.display_name}" for c in configs)
-    await message.answer(text)
+    buttons = []
+    for cfg in configs:
+        title = cfg.display_name
+        if cfg.suspended:
+            title += " (suspended)"
+        buttons.append([InlineKeyboardButton(text=title, callback_data=f"cfg:{cfg.id}")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer("Your configs:", reply_markup=kb)
 
 
 @router.message(Command("create_config"))
@@ -155,3 +164,80 @@ async def got_name(message: Message, state: FSMContext, bot: Bot):
             pass
     await message.answer("Config created")
     await state.clear()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("cfg:"))
+async def show_config(callback: CallbackQuery):
+    config_id = int(callback.data.split(":", 1)[1])
+    user = await get_or_create_user(callback.from_user.id, callback.from_user.username)
+    cfg = await config_service.get(config_id)
+    if not cfg or cfg.owner_id != user.id:
+        await callback.answer("Config not found", show_alert=True)
+        return
+    server = await server_service.get(cfg.server_id)
+    text = (
+        f"<b>{cfg.display_name}</b>\n"
+        f"Server: {server.name} ({server.location})\n"
+        f"Status: {'suspended' if cfg.suspended else 'active'}"
+    )
+    buttons = []
+    if cfg.suspended:
+        buttons.append([InlineKeyboardButton(text="Unsuspend", callback_data=f"uns:{cfg.id}")])
+    else:
+        buttons.append([InlineKeyboardButton(text="Suspend", callback_data=f"sus:{cfg.id}")])
+    buttons.append([InlineKeyboardButton(text="Delete", callback_data=f"del:{cfg.id}")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await callback.message.answer(text, reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("sus:"))
+async def suspend_config_cb(callback: CallbackQuery):
+    config_id = int(callback.data.split(":", 1)[1])
+    user = await get_or_create_user(callback.from_user.id, callback.from_user.username)
+    cfg = await config_service.get(config_id)
+    if not cfg or cfg.owner_id != user.id:
+        await callback.answer("Config not found", show_alert=True)
+        return
+    try:
+        await config_service.suspend_config(config_id)
+        await callback.message.answer("Config suspended")
+    except ServiceError:
+        await callback.message.answer("Произошла ошибка. Попробуйте позже")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("uns:"))
+async def unsuspend_config_cb(callback: CallbackQuery):
+    config_id = int(callback.data.split(":", 1)[1])
+    user = await get_or_create_user(callback.from_user.id, callback.from_user.username)
+    if user.balance <= 0:
+        await callback.message.answer("Недостаточно средств. Пополните баланс")
+        await callback.answer()
+        return
+    cfg = await config_service.get(config_id)
+    if not cfg or cfg.owner_id != user.id:
+        await callback.answer("Config not found", show_alert=True)
+        return
+    try:
+        await config_service.unsuspend_config(config_id)
+        await callback.message.answer("Config unsuspended")
+    except ServiceError:
+        await callback.message.answer("Произошла ошибка. Попробуйте позже")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("del:"))
+async def delete_config_cb(callback: CallbackQuery):
+    config_id = int(callback.data.split(":", 1)[1])
+    user = await get_or_create_user(callback.from_user.id, callback.from_user.username)
+    cfg = await config_service.get(config_id)
+    if not cfg or cfg.owner_id != user.id:
+        await callback.answer("Config not found", show_alert=True)
+        return
+    try:
+        await config_service.revoke_config(config_id)
+        await callback.message.answer("Config deleted")
+    except ServiceError:
+        await callback.message.answer("Произошла ошибка. Попробуйте позже")
+    await callback.answer()
