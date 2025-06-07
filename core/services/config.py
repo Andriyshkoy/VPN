@@ -85,6 +85,14 @@ class ConfigService:
             cfg = await repos["configs"].unsuspend(config_id)
             return Config.from_orm(cfg)
 
+    async def rename_config(self, config_id: int, new_name: str) -> Config:
+        async with self._uow() as repos:
+            cfg = await repos["configs"].get(id=config_id)
+            if not cfg:
+                raise ConfigNotFoundError(f"Config with ID {config_id} not found")
+            cfg = await repos["configs"].update_display_name(config_id, new_name)
+            return Config.from_orm(cfg)
+
     async def get(self, config_id: int) -> Config | None:
         """Return a single config by ID or ``None`` if missing."""
         async with self._uow() as repos:

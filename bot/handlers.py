@@ -14,7 +14,7 @@ from core.db.unit_of_work import uow
 from core.services import ConfigService, ServerService, UserService
 from core.exceptions import InsufficientBalanceError, ServiceError
 
-from .states import CreateConfig
+from .states import CreateConfig, RenameConfig
 
 router = Router()
 
@@ -186,6 +186,8 @@ async def show_config(callback: CallbackQuery):
     else:
         buttons.append([InlineKeyboardButton(text="Suspend", callback_data=f"sus:{cfg.id}")])
     buttons.append([InlineKeyboardButton(text="Delete", callback_data=f"del:{cfg.id}")])
+    buttons.append([InlineKeyboardButton(text="Download", callback_data=f"dl:{cfg.id}")])
+    buttons.append([InlineKeyboardButton(text="Rename", callback_data=f"rn:{cfg.id}")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback.message.answer(text, reply_markup=kb)
     await callback.answer()
@@ -241,3 +243,64 @@ async def delete_config_cb(callback: CallbackQuery):
     except ServiceError:
         await callback.message.answer("Произошла ошибка. Попробуйте позже")
     await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("dl:"))
+async def download_config_cb(callback: CallbackQuery, bot: Bot):
+    config_id = int(callback.data.split(":", 1)[1])
+    user = await get_or_create_user(callback.from_user.id, callback.from_user.username)
+    cfg = await config_service.get(config_id)
+    if not cfg or cfg.owner_id != user.id:
+        await callback.answer("Config not found", show_alert=True)
+        return
+    try:
+        content = await config_service.download_config(config_id)
+    except ServiceError:
+        await callback.message.answer("Произошла ошибка. Попробуйте позже")
+        await callback.answer()
+        return
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    try:
+        await bot.send_document(
+            callback.message.chat.id,
+            FSInputFile(tmp_path, filename=f"{cfg.display_name}.ovpn"),
+        )
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("rn:"))
+async def rename_config_cb(callback: CallbackQuery, state: FSMContext):
+    config_id = int(callback.data.split(":", 1)[1])
+    await state.update_data(config_id=config_id)
+    await callback.message.answer("Send new display name")
+    await state.set_state(RenameConfig.entering_name)
+    await callback.answer()
+
+
+@router.message(RenameConfig.entering_name)
+async def got_new_name(message: Message, state: FSMContext):
+    data = await state.get_data()
+    config_id = data.get("config_id")
+    if not config_id:
+        await message.answer("Config not chosen")
+        await state.clear()
+        return
+    user = await get_or_create_user(message.from_user.id, message.from_user.username)
+    cfg = await config_service.get(config_id)
+    if not cfg or cfg.owner_id != user.id:
+        await message.answer("Config not found")
+        await state.clear()
+        return
+    try:
+        await config_service.rename_config(config_id, message.text)
+        await message.answer("Config renamed")
+    except ServiceError:
+        await message.answer("Произошла ошибка. Попробуйте позже")
+    await state.clear()
