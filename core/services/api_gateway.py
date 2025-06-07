@@ -5,6 +5,8 @@ from typing import Sequence
 
 import httpx
 
+from core.exceptions import APIConnectionError
+
 
 class APIGateway:
     """Thin async wrapper around the remote VPN‑management REST API."""
@@ -70,7 +72,7 @@ class APIGateway:
             except (httpx.RequestError, httpx.HTTPStatusError) as exc:  # noqa: F841
                 attempts += 1
                 if attempts > self._retries:
-                    raise
+                    raise APIConnectionError(f"Failed to connect to API after {self._retries} attempts") from exc
                 await self._create_client()
                 await asyncio.sleep(self._backoff * attempts)
 

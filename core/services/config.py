@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Callable, Sequence
 
-from core.exceptions import InsufficientBalanceError
+from core.exceptions import (ConfigNotFoundError, InsufficientBalanceError,
+                             ServerNotFoundError, UserNotFoundError)
 
 from .api_gateway import APIGateway
 from .models import Config
@@ -28,11 +29,11 @@ class ConfigService:
         async with self._uow() as repos:
             server = await repos["servers"].get(id=server_id)
             if not server:
-                raise ValueError(f"Server {server_id} not found")
+                raise ServerNotFoundError(f"Server {server_id} not found")
 
             user = await repos["users"].get(id=owner_id)
             if not user:
-                raise ValueError(f"User {owner_id} not found")
+                raise UserNotFoundError(f"User {owner_id} not found")
             if user.balance <= 0:
                 raise InsufficientBalanceError("Insufficient balance")
 
@@ -51,7 +52,7 @@ class ConfigService:
         async with self._uow() as repos:
             cfg = await repos["configs"].get(id=config_id, joined_load=["server"])
             if not cfg:
-                raise ValueError("Config not found")
+                raise ConfigNotFoundError(f"Config with ID {config_id} not found")
             async with APIGateway(cfg.server.ip, cfg.server.port, cfg.server.api_key) as api:
                 return await api.download_config(cfg.name)
 
@@ -59,7 +60,7 @@ class ConfigService:
         async with self._uow() as repos:
             cfg = await repos["configs"].get(id=config_id, joined_load=["server"])
             if not cfg:
-                raise ValueError("Config not found")
+                raise ConfigNotFoundError(f"Config with ID {config_id} not found")
             async with APIGateway(cfg.server.ip, cfg.server.port, cfg.server.api_key) as api:
                 await api.revoke_client(cfg.name)
             await repos["configs"].delete(id=config_id)
@@ -68,7 +69,7 @@ class ConfigService:
         async with self._uow() as repos:
             cfg = await repos["configs"].get(id=config_id, joined_load=["server"])
             if not cfg:
-                raise ValueError("Config not found")
+                raise ConfigNotFoundError(f"Config with ID {config_id} not found")
             async with APIGateway(cfg.server.ip, cfg.server.port, cfg.server.api_key) as api:
                 await api.suspend_client(cfg.name)
             cfg = await repos["configs"].suspend(config_id)
@@ -78,7 +79,7 @@ class ConfigService:
         async with self._uow() as repos:
             cfg = await repos["configs"].get(id=config_id, joined_load=["server"])
             if not cfg:
-                raise ValueError("Config not found")
+                raise ConfigNotFoundError(f"Config with ID {config_id} not found")
             async with APIGateway(cfg.server.ip, cfg.server.port, cfg.server.api_key) as api:
                 await api.unsuspend_client(cfg.name)
             cfg = await repos["configs"].unsuspend(config_id)
@@ -100,6 +101,6 @@ class ConfigService:
         async with self._uow() as repos:
             server = await repos["servers"].get(id=server_id)
             if not server:
-                raise ValueError(f"Server {server_id} not found")
+                raise ServerNotFoundError(f"Server {server_id} not found")
             async with APIGateway(server.ip, server.port, server.api_key) as api:
                 return await api.list_blocked()

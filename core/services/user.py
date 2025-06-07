@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Callable
 
-from .models import User, Config
+from core.exceptions import UserNotFoundError
+
+from .models import Config, User
 
 
 class UserService:
@@ -21,7 +23,7 @@ class UserService:
         async with self._uow() as repos:
             user = await repos["users"].get(id=user_id)
             if not user:
-                return False
+                raise UserNotFoundError(f"User with ID {user_id} not found")
 
             configs = await repos["configs"].list(owner_id=user_id)
             for cfg in configs:
@@ -34,7 +36,9 @@ class UserService:
     async def get(self, user_id: int) -> User | None:
         async with self._uow() as repos:
             user = await repos["users"].get(id=user_id)
-            return User.from_orm(user) if user else None
+            if not user:
+                return None
+            return User.from_orm(user)
 
     async def list(self) -> list[User]:
         """Return all users."""

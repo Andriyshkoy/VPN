@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Callable, Sequence
 
+from core.exceptions import UserNotFoundError
+
 from .models import User
 
 
@@ -22,7 +24,7 @@ class BillingService:
         async with self._uow() as repos:
             user = await repos["users"].get(id=user_id)
             if not user:
-                raise ValueError("User not found")
+                raise UserNotFoundError(f"User with ID {user_id} not found")
             new_balance = user.balance + amount
             user = await repos["users"].update(user_id, balance=new_balance)
             if new_balance > 0:
