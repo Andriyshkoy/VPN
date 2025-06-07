@@ -1,4 +1,5 @@
 from dataclasses import asdict
+from functools import wraps
 
 from sanic import Sanic
 from sanic.request import Request
@@ -11,10 +12,8 @@ from core.config import settings
 from core.db.unit_of_work import uow
 from core.services import (
     BillingService,
-    Config,
     ConfigService,
     ServerService,
-    User,
     UserService,
 )
 
@@ -36,6 +35,7 @@ def require_auth(request: Request) -> None:
 
 
 def auth_required(handler):
+    @wraps(handler)
     async def wrapper(request: Request, *args, **kwargs):
         require_auth(request)
         return await handler(request, *args, **kwargs)
