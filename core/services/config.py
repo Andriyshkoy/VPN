@@ -85,6 +85,26 @@ class ConfigService:
             cfg = await repos["configs"].unsuspend(config_id)
             return Config.from_orm(cfg)
 
+    async def suspend_all(self, owner_id: int) -> int:
+        """Suspend all active configs for a user and return count."""
+        async with self._uow() as repos:
+            configs = await repos["configs"].get_active(owner_id=owner_id)
+        count = 0
+        for cfg in configs:
+            await self.suspend_config(cfg.id)
+            count += 1
+        return count
+
+    async def unsuspend_all(self, owner_id: int) -> int:
+        """Unsuspend all configs for a user and return count."""
+        async with self._uow() as repos:
+            configs = await repos["configs"].get_suspended(owner_id=owner_id)
+        count = 0
+        for cfg in configs:
+            await self.unsuspend_config(cfg.id)
+            count += 1
+        return count
+
     async def list_active(self, *, owner_id: int | None = None) -> Sequence[Config]:
         async with self._uow() as repos:
             configs = await repos["configs"].get_active(owner_id=owner_id)

@@ -4,6 +4,7 @@ from typing import Callable, Sequence
 
 from core.exceptions import UserNotFoundError
 
+from .config import ConfigService
 from .models import User
 
 
@@ -18,6 +19,7 @@ class BillingService:
         """
         self._uow = uow
         self._cost = per_config_cost
+        self._config_service = ConfigService(uow)
 
     async def top_up(self, user_id: int, amount: float) -> User:
         """Increase user's balance by ``amount`` and return the updated user."""
@@ -27,19 +29,27 @@ class BillingService:
                 raise UserNotFoundError(f"User with ID {user_id} not found")
             new_balance = user.balance + amount
             user = await repos["users"].update(user_id, balance=new_balance)
-            if new_balance > 0:
-                await repos["configs"].unsuspend_all(user_id)
-            return User.from_orm(user)
+
+        if new_balance > 0:
+            await self._config_service.unsuspend_all(user_id)
+
+        return User.from_orm(user)
 
     async def charge_all(self) -> None:
         """Charge all users for their active configurations."""
         async with self._uow() as repos:
             users: Sequence[User] = await repos["users"].list()
-            for user in users:
+
+        for user in users:
+            async with self._uow() as repos:
                 configs = await repos["configs"].get_active(owner_id=user.id)
                 charge = len(configs) * self._cost
                 if charge:
                     new_balance = user.balance - charge
                     await repos["users"].update(user.id, balance=new_balance)
-                    if new_balance <= 0:
-                        await repos["configs"].suspend_all(user.id)
+                else:
+                    continue
+
+            if new_balance <= 0 and charge:
+                await self._config_service.suspend_all(user.id)
+
