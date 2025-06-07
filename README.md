@@ -1,14 +1,14 @@
 # VPN Service
 
-This project implements a small VPN management system consisting of a Telegram bot, a web based admin panel and a billing daemon. It can manage multiple VPN servers via a REST API, generate client configuration files and handle basic billing based on the number of active configs.
+This project implements a small VPN management system consisting of a Telegram bot, a simple admin API and a billing daemon. It can manage multiple VPN servers via a REST API, generate client configuration files and handle basic billing based on the number of active configs.
 
 ## Technology stack
 
 - **Python 3** with `asyncio`
 - [**Aiogram**](https://github.com/aiogram/aiogram) for the Telegram bot
-- [**Flask**](https://flask.palletsprojects.com/) for the admin web panel
+- [**Sanic**](https://sanic.dev/) for the admin API
 - [**SQLAlchemy**](https://www.sqlalchemy.org/) (async) as ORM
-- [**Pydantic**](https://docs.pydantic.dev/) for settings and service models
+- [**Pydantic**](https://docs.pydantic.dev/) for settings, service models and API schemas
 - [**Cryptography**](https://cryptography.io/) (Fernet) to store server API keys encrypted
 - [**httpx**](https://www.python-httpx.org/) for talking to remote VPN servers
 - `pytest` with `pytest-asyncio` for the tests
@@ -19,15 +19,16 @@ This project implements a small VPN management system consisting of a Telegram b
 
 Located in [`bot/`](bot). It allows users to register, view balance and create VPN configs. A simple FSM guides the user through choosing a server and entering a display name. Config files are sent as temporary files and removed afterwards.
 
-### Admin panel
+### Admin API
 
-Located in [`admin/`](admin). It exposes a minimal HTML interface to manage servers, users and configs. Authentication is provided via HTTP basic auth if `ADMIN_PASSWORD` is set. Start it with:
+Located in [`admin/`](admin). It exposes a small JSON API to manage servers, users and configs. Authentication is provided via an `X-API-Key` header if `ADMIN_API_KEY` is set. Start it with:
 
 ```bash
 python -m admin.app
 ```
 
-and open `http://localhost:5000`.
+The API listens on `http://localhost:5000`.
+Request bodies are validated with Pydantic models.
 
 ### Billing daemon
 
@@ -54,7 +55,7 @@ from the PostgreSQL credentials, otherwise set it manually:
 - `BOT_TOKEN` – Telegram bot token
 - `PER_CONFIG_COST` – how much to charge per active config (default `1.0`)
 - `BILLING_INTERVAL` – seconds between periodic charges
-- `ADMIN_PASSWORD` – password for the admin panel (leave empty to disable auth)
+- `ADMIN_API_KEY` – API key required in the `X-API-Key` header (leave empty to disable auth)
 
 A helper script `scripts/fernet_key_generator.py` can generate a new encryption key.
 
@@ -70,7 +71,7 @@ pytest
 ## Security notes
 
 - API keys are stored encrypted in the database using Fernet.
-- The admin panel should be protected with a strong `ADMIN_PASSWORD` and ideally served over HTTPS.
+- The admin API should be protected with a strong `ADMIN_API_KEY` and ideally served over HTTPS.
 - Temporary configuration files created by the bot are placed in the system temp directory and removed immediately after sending.
 - Communication with VPN servers is performed over plain HTTP; ensure your environment is trusted or switch to HTTPS.
 
@@ -94,5 +95,5 @@ docker compose up -d
 Copy `.env.example` to `.env` and adjust the values (such as `BOT_TOKEN`,
 `ENCRYPTION_KEY`, `POSTGRES_USER` and `POSTGRES_PASSWORD`) for your production
 setup. Docker Compose will pick them up automatically and derive `DATABASE_URL`
-from them. The admin panel will be available on
+from them. The admin API will be available on
 port 5000.

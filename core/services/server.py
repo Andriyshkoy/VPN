@@ -47,3 +47,9 @@ class ServerService:
         async with self._uow() as repos:
             deleted = await repos["servers"].delete(id=server_id)
             return bool(deleted)
+
+    async def update(self, server_id: int, **fields) -> Server | None:
+        """Update a server and return the updated object, or ``None`` if missing."""
+        async with self._uow() as repos:
+            srv = await repos["servers"].update(server_id, **fields)
+            return Server.from_orm(srv) if srv else None

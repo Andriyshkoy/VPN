@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from .models import User
+from .models import User, Config
 
 
 class UserService:
@@ -41,3 +41,12 @@ class UserService:
         async with self._uow() as repos:
             users = await repos["users"].list()
             return [User.from_orm(u) for u in users]
+
+    async def get_with_configs(self, user_id: int) -> tuple[User | None, list[Config]]:
+        """Return a user and all their configs."""
+        async with self._uow() as repos:
+            user = await repos["users"].get(id=user_id)
+            if not user:
+                return None, []
+            configs = await repos["configs"].list(owner_id=user_id)
+            return User.from_orm(user), [Config.from_orm(c) for c in configs]

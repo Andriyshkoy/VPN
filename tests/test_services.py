@@ -182,3 +182,34 @@ async def test_billing_suspend_unsuspend(monkeypatch, sessionmaker):
 
     active = await config_svc.list_active(owner_id=user.id)
     assert len(active) == 1 and active[0].id == cfg.id
+
+
+@pytest.mark.asyncio
+async def test_server_update_and_user_with_configs(monkeypatch, sessionmaker):
+    monkeypatch.setattr("core.services.config.APIGateway", lambda *a, **kw: DummyGateway())
+
+    server_svc = ServerService(uow)
+    user_svc = UserService(uow)
+    config_svc = ConfigService(uow)
+    billing = BillingService(uow, per_config_cost=1)
+
+    user = await user_svc.register(200)
+    server = await server_svc.create(
+        name="srv4", ip="1.1.1.1", port=22, host="host", location="US", api_key="k", cost=1
+    )
+
+    await billing.top_up(user.id, 2)
+
+    await server_svc.update(server.id, name="newname")
+
+    cfg = await config_svc.create_config(
+        server_id=server.id,
+        owner_id=user.id,
+        name="cfg4",
+        display_name="d4",
+    )
+
+    user_data, configs = await user_svc.get_with_configs(user.id)
+
+    assert user_data.id == user.id
+    assert configs and configs[0].id == cfg.id
