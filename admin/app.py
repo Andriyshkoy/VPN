@@ -1,4 +1,4 @@
-from dataclasses import asdict
+from .utils import serialize_dataclass
 from functools import wraps
 
 from sanic import Sanic
@@ -61,7 +61,7 @@ async def index(request: Request):
 @auth_required
 async def list_servers(request: Request):
     servers = await server_service.list()
-    return json([asdict(s) for s in servers])
+    return json([serialize_dataclass(s) for s in servers])
 
 
 @app.post("/servers")
@@ -77,7 +77,7 @@ async def create_server(request: Request):
         api_key=data.api_key,
         cost=data.cost,
     )
-    return json(asdict(server))
+    return json(serialize_dataclass(server))
 
 
 @app.put("/servers/<server_id:int>")
@@ -87,7 +87,7 @@ async def update_server(request: Request, server_id: int):
     srv = await server_service.update(server_id, **data.model_dump(exclude_none=True))
     if not srv:
         raise NotFound()
-    return json(asdict(srv))
+    return json(serialize_dataclass(srv))
 
 
 @app.delete("/servers/<server_id:int>")
@@ -101,7 +101,7 @@ async def delete_server(request: Request, server_id: int):
 @auth_required
 async def list_configs(request: Request):
     configs = await config_service.list_active()
-    return json([asdict(c) for c in configs])
+    return json([serialize_dataclass(c) for c in configs])
 
 
 @app.post("/configs")
@@ -115,7 +115,7 @@ async def create_config(request: Request):
         display_name=data.display_name or data.name,
         use_password=data.use_password,
     )
-    return json(asdict(cfg))
+    return json(serialize_dataclass(cfg))
 
 
 @app.get("/configs/<config_id:int>/download")
@@ -139,7 +139,7 @@ async def delete_config(request: Request, config_id: int):
 @auth_required
 async def list_users(request: Request):
     users = await user_service.list()
-    return json([asdict(u) for u in users])
+    return json([serialize_dataclass(u) for u in users])
 
 
 @app.get("/users/<user_id:int>")
@@ -148,7 +148,7 @@ async def view_user(request: Request, user_id: int):
     user, configs = await user_service.get_with_configs(user_id)
     if not user:
         raise NotFound()
-    return json({"user": asdict(user), "configs": [asdict(c) for c in configs]})
+    return json({"user": serialize_dataclass(user), "configs": [serialize_dataclass(c) for c in configs]})
 
 
 @app.post("/users/<user_id:int>/topup")
@@ -156,7 +156,7 @@ async def view_user(request: Request, user_id: int):
 async def top_up(request: Request, user_id: int):
     data = parse(TopUp, request)
     user = await billing_service.top_up(user_id, data.amount)
-    return json(asdict(user))
+    return json(serialize_dataclass(user))
 
 
 if __name__ == "__main__":
