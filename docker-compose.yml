@@ -8,8 +8,8 @@ services:
   db:
     image: postgres:16
     environment:
-      POSTGRES_DB: vpn
-      POSTGRES_USER: vpn
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - db_data:/var/lib/postgresql/data
@@ -48,6 +48,17 @@ services:
     build:
       context: .
       dockerfile: ./bot/Dockerfile
+    depends_on: [db, base]
+    env_file:
+      - .env
+    restart: on-failure
+    volumes:
+      - core_code:/app/core
+    
+  billing_daemon:
+    build:
+      context: .
+      dockerfile: ./scripts/Dockerfile
     depends_on: [db, base]
     env_file:
       - .env
