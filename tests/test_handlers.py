@@ -61,3 +61,24 @@ async def test_tempfile_used(monkeypatch):
     assert not os.path.exists(sent_path)
     assert state.cleared
     assert msg.answers[-1] == "Config created"
+
+
+@pytest.mark.asyncio
+async def test_service_error(monkeypatch):
+    msg = DummyMessage("name")
+    state = DummyState()
+    bot = DummyBot()
+
+    async def fake_get_user(tg_id, username=None):
+        return types.SimpleNamespace(id=1)
+
+    async def fake_create_config(*a, **kw):
+        raise handlers.ServiceError("boom")
+
+    monkeypatch.setattr(handlers, "get_or_create_user", fake_get_user)
+    monkeypatch.setattr(handlers.config_service, "create_config", fake_create_config)
+
+    await handlers.got_name(msg, state, bot)
+
+    assert state.cleared
+    assert msg.answers[-1] == "Произошла ошибка. Попробуйте позже"
