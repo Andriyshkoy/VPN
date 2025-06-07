@@ -12,7 +12,7 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
 
 from core.db.unit_of_work import uow
 from core.services import ConfigService, ServerService, UserService
-from core.exceptions import InsufficientBalanceError
+from core.exceptions import InsufficientBalanceError, ServiceError
 
 from .states import CreateConfig
 
@@ -130,7 +130,16 @@ async def got_name(message: Message, state: FSMContext, bot: Bot):
         await message.answer("Недостаточно средств. Пополните баланс")
         await state.clear()
         return
-    content = await config_service.download_config(cfg.id)
+    except ServiceError:
+        await message.answer("Произошла ошибка. Попробуйте позже")
+        await state.clear()
+        return
+    try:
+        content = await config_service.download_config(cfg.id)
+    except ServiceError:
+        await message.answer("Произошла ошибка. Попробуйте позже")
+        await state.clear()
+        return
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
