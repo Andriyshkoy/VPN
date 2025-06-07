@@ -1,0 +1,160 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Create production docker-compose
+      run: |
+        cat > docker-compose.prod.yml << 'EOF'
+        services:
+          db:
+            image: postgres:16
+            environment:
+              POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+              POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+              POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+            volumes:
+              - db_data:/var/lib/postgresql/data
+            healthcheck:
+              test: ["CMD-SHELL", "pg_isready -U ${{ secrets.POSTGRES_USER }} -d ${{ secrets.POSTGRES_DB }}"]
+              interval: 5s
+              timeout: 5s
+              retries: 10
+            restart: unless-stopped
+
+          migrations:
+            image: ${{ secrets.REGISTRY_USERNAME }}/vpn-alembic:latest
+            depends_on:
+              db:
+                condition: service_healthy
+            environment:
+              DATABASE_URL: ${{ secrets.DATABASE_URL }}
+              ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+            volumes:
+              - core_code:/app/core
+
+          admin:
+            image: ${{ secrets.REGISTRY_USERNAME }}/vpn-admin:latest
+            depends_on: [db, migrations]
+            environment:
+              DATABASE_URL: ${{ secrets.DATABASE_URL }}
+              ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+              ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+              PER_CONFIG_COST: ${{ vars.PER_CONFIG_COST }}
+            restart: unless-stopped
+            volumes:
+              - core_code:/app/core
+
+          bot:
+            image: ${{ secrets.REGISTRY_USERNAME }}/vpn-bot:latest
+            depends_on: [db, migrations]
+            environment:
+              DATABASE_URL: ${{ secrets.DATABASE_URL }}
+              ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+              BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+              PER_CONFIG_COST: ${{ vars.PER_CONFIG_COST }}
+            restart: unless-stopped
+            volumes:
+              - core_code:/app/core
+            
+          billing_daemon:
+            image: ${{ secrets.REGISTRY_USERNAME }}/vpn-scripts:latest
+            depends_on: [db, migrations]
+            environment:
+              DATABASE_URL: ${{ secrets.DATABASE_URL }}
+              ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+              BILLING_INTERVAL: ${{ vars.BILLING_INTERVAL }}
+              PER_CONFIG_COST: ${{ vars.PER_CONFIG_COST }}
+            restart: unless-stopped
+            volumes:
+              - core_code:/app/core
+
+          nginx:
+            image: ${{ secrets.REGISTRY_USERNAME }}/vpn-nginx:latest
+            depends_on: [admin, bot]
+            ports:
+              - "80:80"
+              - "443:443"
+            restart: unless-stopped
+          
+        volumes:
+          db_data:
+          core_code:
+            driver: local
+            driver_opts:
+              type: none
+              o: bind
+              device: ./core
+        EOF
+
+    - name: Create deployment script
+      run: |
+        cat > deploy.sh << 'EOF'
+        #!/bin/bash
+        set -e
+
+        echo "🚀 Starting deployment..."
+
+        # Pull latest images
+        echo "📥 Pulling latest Docker images..."
+        docker-compose -f docker-compose.prod.yml pull
+
+        # Stop existing services
+        echo "⏹️ Stopping existing services..."
+        docker-compose -f docker-compose.prod.yml down
+
+        # Start services
+        echo "▶️ Starting services..."
+        docker-compose -f docker-compose.prod.yml up -d
+
+        # Wait for services to be healthy
+        echo "⏳ Waiting for services to be ready..."
+        sleep 30
+
+        # Check service status
+        echo "✅ Checking service status..."
+        docker-compose -f docker-compose.prod.yml ps
+
+        echo "🎉 Deployment completed successfully!"
+        EOF
+        
+        chmod +x deploy.sh
+
+    - name: Save deployment artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: deployment-files
+        path: |
+          docker-compose.prod.yml
+          deploy.sh
+
+    - name: Deployment summary
+      run: |
+        echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Deployed services:**" >> $GITHUB_STEP_SUMMARY
+        echo "- 🐘 PostgreSQL Database" >> $GITHUB_STEP_SUMMARY
+        echo "- 🔄 Database Migrations" >> $GITHUB_STEP_SUMMARY
+        echo "- 👨‍💼 Admin Service" >> $GITHUB_STEP_SUMMARY
+        echo "- 🤖 Telegram Bot" >> $GITHUB_STEP_SUMMARY
+        echo "- 💰 Billing Daemon" >> $GITHUB_STEP_SUMMARY
+        echo "- 🌐 Nginx Proxy" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Docker Images:**" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ secrets.REGISTRY_USERNAME }}/vpn-admin:latest\`" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ secrets.REGISTRY_USERNAME }}/vpn-bot:latest\`" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ secrets.REGISTRY_USERNAME }}/vpn-alembic:latest\`" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ secrets.REGISTRY_USERNAME }}/vpn-scripts:latest\`" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ secrets.REGISTRY_USERNAME }}/vpn-nginx:latest\`" >> $GITHUB_STEP_SUMMARY
