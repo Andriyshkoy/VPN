@@ -126,3 +126,17 @@ class ConfigRepo(BaseRepo[VPN_Config]):
             display_name=display_name,
         )
         return await self.add(cfg)
+
+    async def update_display_name(
+        self, config_id: int, new_name: str
+    ) -> VPN_Config | None:
+        """Update display name and return updated row."""
+        stmt = (
+            update(self.model)
+            .where(self.model.id == config_id)
+            .values(display_name=new_name)
+            .returning(self.model)
+        )
+        result = await self.session.execute(stmt)
+        await self.session.flush()
+        return result.scalar_one_or_none()
