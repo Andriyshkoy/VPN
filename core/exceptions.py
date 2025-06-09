@@ -1,6 +1,7 @@
 class ServiceError(Exception):
     """Base class for all service-related exceptions."""
 
+
 class InsufficientBalanceError(ServiceError):
     """Raised when user's balance is insufficient for an operation."""
 
@@ -23,4 +24,3 @@ class APIConnectionError(ServiceError):
 
 class InvalidOperationError(ServiceError):
     """Raised when an operation is invalid in the current context."""
-

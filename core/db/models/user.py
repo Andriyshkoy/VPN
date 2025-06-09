@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, String, func
+from sqlalchemy import BigInteger, DateTime, Float, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.db import Base
@@ -10,7 +10,7 @@ from core.db import Base
 
 class User(Base):
 
-    tg_id: Mapped[int] = mapped_column(unique=True, index=True)
+    tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     username: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     created: Mapped[datetime] = mapped_column(

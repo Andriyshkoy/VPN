@@ -194,10 +194,10 @@ async def show_config(callback: CallbackQuery):
         f"Статус: {'приостановлена' if cfg.suspended else 'активна'}"
     )
     buttons = []
-    if cfg.suspended:
-        buttons.append([InlineKeyboardButton(text="Возобновить", callback_data=f"uns:{cfg.id}")])
-    else:
-        buttons.append([InlineKeyboardButton(text="Приостановить", callback_data=f"sus:{cfg.id}")])
+    # if cfg.suspended:
+    #     buttons.append([InlineKeyboardButton(text="Возобновить", callback_data=f"uns:{cfg.id}")])
+    # else:
+    #     buttons.append([InlineKeyboardButton(text="Приостановить", callback_data=f"sus:{cfg.id}")])
     buttons.append([InlineKeyboardButton(text="Удалить", callback_data=f"del:{cfg.id}")])
     buttons.append([InlineKeyboardButton(text="Скачать", callback_data=f"dl:{cfg.id}")])
     buttons.append([InlineKeyboardButton(text="Переименовать", callback_data=f"rn:{cfg.id}")])

@@ -5,7 +5,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from core.config import settings
 
-from .handlers import router
+from .handlers import router, setup_bot_commands
 
 
 def setup_bot() -> Dispatcher:
@@ -21,6 +21,8 @@ async def main():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = setup_bot()
+
+    await setup_bot_commands(bot)
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 

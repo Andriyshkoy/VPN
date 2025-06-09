@@ -45,11 +45,11 @@ class BillingService:
                 configs = await repos["configs"].get_active(owner_id=user.id)
                 charge = len(configs) * self._cost
                 if charge:
-                    new_balance = user.balance - charge
+                    new_balance = user.balance*100 - charge*100  # To avoid float precision issues
+                    new_balance = new_balance / 100
                     await repos["users"].update(user.id, balance=new_balance)
                 else:
                     continue
 
             if new_balance <= 0 and charge:
                 await self._config_service.suspend_all(user.id)
-

@@ -1,8 +1,6 @@
 services:
   base:
-    build:
-      context: .
-      dockerfile: ./Dockerfile
+    image: andriyshkoy/vpn-base:latest
 
   db:
     image: postgres:16
@@ -19,9 +17,7 @@ services:
       retries: 10
 
   migrations:
-    build:
-      context: .
-      dockerfile: ./alembic/Dockerfile
+    image: andriyshkoy/vpn-migrations:latest
     depends_on:
       db:
         condition: service_healthy
@@ -33,9 +29,7 @@ services:
       - core_code:/app/core
 
   admin:
-    build:
-      context: .
-      dockerfile: ./admin/Dockerfile
+    image: andriyshkoy/vpn-admin:latest
     depends_on: [db, base, migrations]
     env_file:
       - .env
@@ -44,9 +38,7 @@ services:
       - core_code:/app/core
 
   bot:
-    build:
-      context: .
-      dockerfile: ./bot/Dockerfile
+    image: andriyshkoy/vpn-bot:latest
     depends_on: [db, base, migrations]
     env_file:
       - .env
@@ -55,9 +47,7 @@ services:
       - core_code:/app/core
     
   billing_daemon:
-    build:
-      context: .
-      dockerfile: ./scripts/Dockerfile
+    image: andriyshkoy/vpn-billing:latest
     depends_on: [db, base, migrations]
     env_file:
       - .env
@@ -66,10 +56,10 @@ services:
       - core_code:/app/core
 
   nginx:
-    build: ./nginx
-    depends_on: [db, base, migrations]
+    image: andriyshkoy/vpn-nginx:latest
+    depends_on: [admin, bot]
     ports:
-      - "14081:80"
+      - "80:80"
   
 volumes:
   db_data:

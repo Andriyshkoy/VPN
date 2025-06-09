@@ -1,4 +1,4 @@
-FROM vpn-base:latest
+FROM andriyshkoy/vpn-base:latest
 
 COPY scripts ./scripts
 
