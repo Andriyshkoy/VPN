@@ -63,13 +63,13 @@ async def test_tempfile_used(monkeypatch):
 
     async def fake_get_user(tg_id, username=None):
         return types.SimpleNamespace(id=1)
-    async def fake_create_config(server_id, owner_id, name, display_name):
+    async def fake_create_config(server_id, owner_id, name, display_name, creation_cost):
         return types.SimpleNamespace(id=5)
     async def fake_download_config(cfg_id):
         return b"data"
 
     monkeypatch.setattr(handlers, "get_or_create_user", fake_get_user)
-    monkeypatch.setattr(handlers.config_service, "create_config", fake_create_config)
+    monkeypatch.setattr(handlers.billing_service, "create_paid_config", fake_create_config)
     monkeypatch.setattr(handlers.config_service, "download_config", fake_download_config)
     monkeypatch.setattr(handlers, "FSInputFile", DummyFSInputFile)
 
@@ -80,7 +80,7 @@ async def test_tempfile_used(monkeypatch):
     assert os.path.commonpath([sent_path, tmp_dir]) == tmp_dir
     assert not os.path.exists(sent_path)
     assert state.cleared
-    assert msg.answers[-1] == "Config created"
+    assert msg.answers[-1] == "Конфигурация создана"
 
 
 @pytest.mark.asyncio
@@ -96,7 +96,7 @@ async def test_service_error(monkeypatch):
         raise handlers.ServiceError("boom")
 
     monkeypatch.setattr(handlers, "get_or_create_user", fake_get_user)
-    monkeypatch.setattr(handlers.config_service, "create_config", fake_create_config)
+    monkeypatch.setattr(handlers.billing_service, "create_paid_config", fake_create_config)
 
     await handlers.got_name(msg, state, bot)
 
@@ -109,7 +109,7 @@ class DummyMessageReply:
         self.chat = types.SimpleNamespace(id=123)
         self.answers = []
 
-    async def answer(self, text, reply_markup=None):
+    async def answer(self, text, reply_markup=None, **_):
         self.answers.append((text, reply_markup))
 
 
@@ -154,8 +154,8 @@ async def test_show_config_contains_download(monkeypatch):
 
     markup = cb.message.answers[0][1]
     button_texts = [b.text for row in markup.inline_keyboard for b in row]
-    assert "Download" in button_texts
-    assert "Rename" in button_texts
+    assert "Скачать" in button_texts
+    assert "Переименовать" in button_texts
 
 
 class DummyCallbackDownload:
@@ -207,7 +207,7 @@ async def test_rename_callback_sets_state(monkeypatch):
 
     assert state.data["config_id"] == 3
     assert state.state == handlers.RenameConfig.entering_name
-    assert cb.message.answers[-1][0] == "Send new display name"
+    assert cb.message.answers[-1][0] == "Введите новое название"
 
 
 @pytest.mark.asyncio
@@ -237,4 +237,4 @@ async def test_got_new_name(monkeypatch):
 
     assert called["args"] == (5, "new")
     assert state.cleared
-    assert msg.answers[-1] == "Config renamed"
+    assert msg.answers[-1] == "Конфигурация переименована"

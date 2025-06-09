@@ -54,6 +54,7 @@ from the PostgreSQL credentials, otherwise set it manually:
 - `ENCRYPTION_KEY` – Fernet key used to encrypt server API keys
 - `BOT_TOKEN` – Telegram bot token
 - `PER_CONFIG_COST` – how much to charge per active config (default `1.0`)
+- `CONFIG_CREATION_COST` – cost charged when a config is created (default `10.0`)
 - `BILLING_INTERVAL` – seconds between periodic charges
 - `ADMIN_API_KEY` – API key required in the `X-API-Key` header (leave empty to disable auth)
 
