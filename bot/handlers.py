@@ -13,7 +13,8 @@ from aiogram.types import (BotCommand, BotCommandScopeDefault, CallbackQuery,
 
 from core.db.unit_of_work import uow
 from core.exceptions import InsufficientBalanceError, ServiceError
-from core.services import ConfigService, ServerService, UserService
+from core.services import ConfigService, ServerService, UserService, BillingService
+from core.config import settings
 
 from .states import CreateConfig, RenameConfig
 
@@ -22,6 +23,7 @@ router = Router()
 user_service = UserService(uow)
 server_service = ServerService(uow)
 config_service = ConfigService(uow)
+billing_service = BillingService(uow, per_config_cost=settings.per_config_cost)
 
 
 async def get_or_create_user(tg_id: int, username: str | None):
@@ -142,11 +144,12 @@ async def got_name(message: Message, state: FSMContext, bot: Bot):
     user = await get_or_create_user(message.from_user.id, message.from_user.username)
     unique_name = uuid.uuid4().hex
     try:
-        cfg = await config_service.create_config(
+        cfg = await billing_service.create_paid_config(
             server_id=server_id,
             owner_id=user.id,
             name=unique_name,
             display_name=message.text,
+            creation_cost=settings.config_creation_cost,
         )
     except InsufficientBalanceError:
         await message.answer("Недостаточно средств. Пополните баланс")

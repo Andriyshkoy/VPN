@@ -108,12 +108,13 @@ async def list_configs(request: Request):
 @auth_required
 async def create_config(request: Request):
     data = parse(ConfigCreate, request)
-    cfg = await config_service.create_config(
+    cfg = await billing_service.create_paid_config(
         server_id=data.server_id,
         owner_id=data.owner_id,
         name=data.name,
         display_name=data.display_name or data.name,
         use_password=data.use_password,
+        creation_cost=settings.config_creation_cost,
     )
     return json(serialize_dataclass(cfg))
 

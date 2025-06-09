@@ -44,11 +44,12 @@ async def test_create_requires_balance(monkeypatch, sessionmaker):
     )
 
     with pytest.raises(InsufficientBalanceError):
-        await config_svc.create_config(
+        await billing.create_paid_config(
             server_id=server.id,
             owner_id=user.id,
             name="bal",
             display_name="disp",
+            creation_cost=10,
         )
 
 
@@ -73,14 +74,15 @@ async def test_services_workflow(monkeypatch, sessionmaker):
         cost=1,
     )
 
-    await billing.top_up(user.id, 1)
+    await billing.top_up(user.id, 20)
 
     # create config
-    cfg = await config_svc.create_config(
+    cfg = await billing.create_paid_config(
         server_id=server.id,
         owner_id=user.id,
         name="cfg1",
         display_name="disp",
+        creation_cost=10,
     )
 
     # suspend/unsuspend
@@ -123,19 +125,21 @@ async def test_billing(monkeypatch, sessionmaker):
         cost=1,
     )
 
-    await billing.top_up(user.id, 10)
+    await billing.top_up(user.id, 30)
 
-    await config_svc.create_config(
+    await billing.create_paid_config(
         server_id=server.id,
         owner_id=user.id,
         name="c1",
         display_name="d1",
+        creation_cost=10,
     )
-    await config_svc.create_config(
+    await billing.create_paid_config(
         server_id=server.id,
         owner_id=user.id,
         name="c2",
         display_name="d2",
+        creation_cost=10,
     )
 
     await billing.charge_all()
@@ -164,13 +168,14 @@ async def test_billing_suspend_unsuspend(monkeypatch, sessionmaker):
         cost=1,
     )
 
-    await billing.top_up(user.id, 3)
+    await billing.top_up(user.id, 13)
 
-    cfg = await config_svc.create_config(
+    cfg = await billing.create_paid_config(
         server_id=server.id,
         owner_id=user.id,
         name="c3",
         display_name="d3",
+        creation_cost=10,
     )
 
     await billing.charge_all()
@@ -198,15 +203,16 @@ async def test_server_update_and_user_with_configs(monkeypatch, sessionmaker):
         name="srv4", ip="1.1.1.1", port=22, host="host", location="US", api_key="k", cost=1
     )
 
-    await billing.top_up(user.id, 2)
+    await billing.top_up(user.id, 20)
 
     await server_svc.update(server.id, name="newname")
 
-    cfg = await config_svc.create_config(
+    cfg = await billing.create_paid_config(
         server_id=server.id,
         owner_id=user.id,
         name="cfg4",
         display_name="d4",
+        creation_cost=10,
     )
 
     user_data, configs = await user_svc.get_with_configs(user.id)
