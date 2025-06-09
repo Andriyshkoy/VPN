@@ -1,5 +1,5 @@
-import sys
 import os
+import sys
 
 # Ensure project root is on path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -7,8 +7,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import asyncio
 
 from core.config import settings
-from core.services import BillingService
 from core.db.unit_of_work import uow
+from core.services import BillingService
 
 
 async def run():

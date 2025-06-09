@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 
+
 class ServerCreate(BaseModel):
     name: str
     ip: str
@@ -8,6 +9,7 @@ class ServerCreate(BaseModel):
     location: str
     api_key: str
     cost: float = Field(default=0)
+
 
 class ServerUpdate(BaseModel):
     name: str | None = None
@@ -18,12 +20,14 @@ class ServerUpdate(BaseModel):
     api_key: str | None = None
     cost: float | None = None
 
+
 class ConfigCreate(BaseModel):
     server_id: int
     owner_id: int
     name: str
     display_name: str | None = None
     use_password: bool = False
+
 
 class TopUp(BaseModel):
     amount: float

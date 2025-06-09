@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Callable, Sequence
 
-from core.exceptions import UserNotFoundError, InsufficientBalanceError
+from core.exceptions import InsufficientBalanceError, UserNotFoundError
 
 from .config import ConfigService
 from .models import User
@@ -79,13 +79,13 @@ class BillingService:
         display_name: str,
         creation_cost: float,
         use_password: bool = False,
-    ) -> "Config":
+    ) -> "Config":  # type: ignore[valid-type] # noqa
         """Create config and charge ``creation_cost`` on success."""
         async with self._uow() as repos:
             user = await repos["users"].get(id=owner_id)
             if not user:
                 raise UserNotFoundError(f"User with ID {owner_id} not found")
-            if user.balance < creation_cost:
+            if user.balance <= creation_cost:
                 raise InsufficientBalanceError("Insufficient balance")
 
         cfg = await self._config_service.create_config(

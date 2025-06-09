@@ -1,18 +1,19 @@
 import os
 import sys
+
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from cryptography.fernet import Fernet
 import pytest
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 import pytest_asyncio
+from cryptography.fernet import Fernet
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 # Ensure environment variables required by settings are present
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("ENCRYPTION_KEY", Fernet.generate_key().decode())
 
-from core.db import Base
 import core.db as db
+from core.db import Base
 
 
 @pytest.fixture(scope="session")

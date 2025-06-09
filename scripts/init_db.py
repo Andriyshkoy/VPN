@@ -1,12 +1,14 @@
-import sys
 import os
+import sys
 
 # Add the root directory to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import asyncio
-from core.db import engine, Base
+
 import core.db.models  # noqa
+from core.db import Base, engine
+
 
 async def run():
     async with engine.begin() as conn:

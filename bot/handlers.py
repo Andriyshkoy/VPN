@@ -7,14 +7,20 @@ import uuid
 from aiogram import Bot, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import (BotCommand, BotCommandScopeDefault, CallbackQuery,
-                           FSInputFile, InlineKeyboardButton,
-                           InlineKeyboardMarkup, Message)
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeDefault,
+    CallbackQuery,
+    FSInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
+from core.config import settings
 from core.db.unit_of_work import uow
 from core.exceptions import InsufficientBalanceError, ServiceError
-from core.services import ConfigService, ServerService, UserService, BillingService
-from core.config import settings
+from core.services import BillingService, ConfigService, ServerService, UserService
 
 from .states import CreateConfig, RenameConfig
 
@@ -48,6 +54,8 @@ async def cmd_start(message: Message):
     welcome_text = (
         "👋 Добро пожаловать в VPN бот!\n\n"
         "Этот бот поможет вам создать и управлять вашими VPN конфигурациями.\n\n"
+        "Стоимость создания конфигурации \u2014 10 рублей (списывается сразу). "
+        "Далее ежемесячно списывается 50 рублей постепенно.\n\n"
         "Основные команды:\n"
         "• /create_config - создать новую VPN конфигурацию\n"
         "• /configs - просмотр ваших активных конфигураций\n"
@@ -67,6 +75,9 @@ async def cmd_help(message: Message):
         "• /topup - информация о пополнении баланса\n"
         "• /configs - список ваших активных VPN конфигураций\n"
         "• /create_config - создать новую VPN конфигурацию\n\n"
+        "<b>Стоимость услуг:</b>\n"
+        "• создание конфигурации \u2014 10 рублей (списывается сразу)\n"
+        "• использование конфигурации \u2014 50 рублей в месяц, списывается постепенно\n\n"
         "<b>Как пользоваться ботом:</b>\n"
         "1. Проверьте баланс с помощью /balance\n"
         "2. При необходимости пополните баланс через /topup\n"
@@ -120,7 +131,12 @@ async def cmd_create_config(message: Message, state: FSMContext):
         [InlineKeyboardButton(text=s.name, callback_data=f"server:{s.id}")] for s in servers
     ]
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.answer("Выберите сервер", reply_markup=kb)
+    await message.answer(
+        "Выберите сервер для новой конфигурации.\n\n"
+        "Стоимость создания конфигурации \u2014 10 рублей (списывается сразу). "
+        "Ежемесячная плата за использование составляет 50 рублей и списывается постепенно.",
+        reply_markup=kb,
+    )
     await state.set_state(CreateConfig.choosing_server)
 
 

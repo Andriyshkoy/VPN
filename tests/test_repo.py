@@ -1,6 +1,7 @@
 import pytest
-from core.db.models import User, Server
-from core.db.repo import UserRepo, ServerRepo, ConfigRepo
+
+from core.db.models import Server, User
+from core.db.repo import ConfigRepo, ServerRepo, UserRepo
 from core.db.unit_of_work import uow
 
 
@@ -88,6 +89,7 @@ async def test_config_repo(session):
 @pytest.mark.asyncio
 async def test_uow(monkeypatch, engine):
     from sqlalchemy.ext.asyncio import async_sessionmaker
+
     import core.db as db
 
     maker = async_sessionmaker(engine, expire_on_commit=False)

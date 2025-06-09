@@ -1,9 +1,11 @@
 import os
-import types
 import tempfile
+import types
+
 import pytest
 
 import bot.handlers as handlers
+
 
 class DummyMessage:
     def __init__(self, text):

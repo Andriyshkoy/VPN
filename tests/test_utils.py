@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from admin.utils import serialize_dataclass
-from core.services.models import User, Server
+from core.services.models import Server, User
 
 
 def test_serialize_dataclass_handles_datetime_and_decimal():

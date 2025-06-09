@@ -1,9 +1,9 @@
 import pytest
-
 from sanic.exceptions import InvalidUsage
 
 from admin.app import parse
 from admin.schemas import ServerCreate, TopUp
+
 
 class DummyRequest:
     def __init__(self, data):

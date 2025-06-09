@@ -1,8 +1,9 @@
 import pytest
 
-from core.services import UserService, ServerService, ConfigService, BillingService
-from core.exceptions import InsufficientBalanceError
 from core.db.unit_of_work import uow
+from core.exceptions import InsufficientBalanceError
+from core.services import BillingService, ConfigService, ServerService, UserService
+
 
 class DummyGateway:
     async def __aenter__(self):
