@@ -6,7 +6,7 @@ This project implements a small VPN management system consisting of a Telegram b
 
 - **Python 3** with `asyncio`
 - [**Aiogram**](https://github.com/aiogram/aiogram) for the Telegram bot
-- [**Sanic**](https://sanic.dev/) for the admin API
+- [**FastAPI**](https://fastapi.tiangolo.com/) for the admin API
 - [**SQLAlchemy**](https://www.sqlalchemy.org/) (async) as ORM
 - [**Pydantic**](https://docs.pydantic.dev/) for settings, service models and API schemas
 - [**Cryptography**](https://cryptography.io/) (Fernet) to store server API keys encrypted
@@ -24,10 +24,10 @@ Located in [`bot/`](bot). It allows users to register, view balance and create V
 Located in [`admin/`](admin). It exposes a small JSON API to manage servers, users and configs. Authentication is provided via an `X-API-Key` header if `ADMIN_API_KEY` is set. Start it with:
 
 ```bash
-python -m admin.app
+uvicorn admin.app:app --host 0.0.0.0 --port 8000
 ```
 
-The API listens on `http://localhost:5000`.
+The API listens on `http://localhost:8000`.
 Request bodies are validated with Pydantic models.
 
 ### Billing daemon

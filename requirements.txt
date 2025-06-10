@@ -41,6 +41,7 @@ SQLAlchemy==2.0.41
 typing-inspection==0.4.1
 typing_extensions==4.14.0
 yarl==1.20.0
-sanic==23.12.2
+fastapi==0.111.0
+uvicorn==0.29.0
 setuptools>=65.5
 asyncpg==0.29.0

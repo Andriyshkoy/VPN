@@ -31,3 +31,15 @@ class ConfigCreate(BaseModel):
 
 class TopUp(BaseModel):
     amount: float
+
+
+class UserCreate(BaseModel):
+    tg_id: int
+    username: str | None = None
+    balance: float = 0.0
+
+
+class UserUpdate(BaseModel):
+    tg_id: int | None = None
+    username: str | None = None
+    balance: float | None = None
