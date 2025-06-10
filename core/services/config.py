@@ -135,6 +135,30 @@ class ConfigService:
             configs = await repos["configs"].get_suspended(owner_id=owner_id)
             return [Config.from_orm(c) for c in configs]
 
+    async def list(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        server_id: int | None = None,
+        owner_id: int | None = None,
+        suspended: bool | None = None,
+    ) -> Sequence[Config]:
+        """Return configs filtered by the provided parameters."""
+        filters: dict[str, object] = {}
+        if server_id is not None:
+            filters["server_id"] = server_id
+        if owner_id is not None:
+            filters["owner_id"] = owner_id
+        if suspended is not None:
+            filters["suspended"] = suspended
+
+        async with self._uow() as repos:
+            configs = await repos["configs"].list(
+                limit=limit, offset=offset, **filters
+            )
+            return [Config.from_orm(c) for c in configs]
+
     async def list_blocked(self, server_id: int) -> Sequence[str]:
         async with self._uow() as repos:
             server = await repos["servers"].get(id=server_id)

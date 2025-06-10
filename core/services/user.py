@@ -40,11 +40,32 @@ class UserService:
                 return None
             return User.from_orm(user)
 
-    async def list(self) -> list[User]:
-        """Return all users."""
+    async def list(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        username: str | None = None,
+        tg_id: int | None = None,
+    ) -> list[User]:
+        """Return users filtered by the provided parameters."""
+        filters: dict[str, object] = {}
+        if username is not None:
+            filters["username"] = username
+        if tg_id is not None:
+            filters["tg_id"] = tg_id
+
         async with self._uow() as repos:
-            users = await repos["users"].list()
+            users = await repos["users"].list(
+                limit=limit, offset=offset, **filters
+            )
             return [User.from_orm(u) for u in users]
+
+    async def update(self, user_id: int, **fields) -> User | None:
+        """Update a user and return the updated instance or ``None``."""
+        async with self._uow() as repos:
+            user = await repos["users"].update(user_id, **fields)
+            return User.from_orm(user) if user else None
 
     async def get_with_configs(self, user_id: int) -> tuple[User | None, list[Config]]:
         """Return a user and all their configs."""
