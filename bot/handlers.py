@@ -128,7 +128,7 @@ async def cmd_create_config(message: Message, state: FSMContext):
         await message.answer("Нет доступных серверов")
         return
     buttons = [
-        [InlineKeyboardButton(text=s.name, callback_data=f"server:{s.id}")] for s in servers
+        [InlineKeyboardButton(text=' '.join([s.location, s.name]), callback_data=f"server:{s.id}")] for s in servers
     ]
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer(
