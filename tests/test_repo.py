@@ -27,6 +27,9 @@ async def test_user_repo_search(session):
     usernames = {u.username for u in results}
     assert usernames == {"alice", "alex"}
 
+    none_results = await repo.search_by_username(None)
+    assert none_results == []
+
 
 @pytest.mark.asyncio
 async def test_server_repo_crud(session):

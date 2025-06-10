@@ -127,11 +127,10 @@ async def list_users(
     username: str | None = None,
     tg_id: int | None = None,
 ):
-    async with uow() as repos:
-        users = await repos["users"].list(
-            limit=limit, offset=offset, username=username, tg_id=tg_id
-        )
-    return [serialize_dataclass(User.from_orm(u)) for u in users]
+    users = await user_service.list(
+        limit=limit, offset=offset, username=username, tg_id=tg_id
+    )
+    return [serialize_dataclass(u) for u in users]
 
 
 @app.post("/api/users", dependencies=[Depends(auth_required)])
@@ -152,13 +151,12 @@ async def get_user(user_id: int):
 
 @app.patch("/api/users/{user_id}", dependencies=[Depends(auth_required)])
 async def update_user(user_id: int, data: UserUpdate):
-    async with uow() as repos:
-        user = await repos["users"].update(
-            user_id, **data.model_dump(exclude_none=True)
-        )
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-        return serialize_dataclass(User.from_orm(user))
+    user = await user_service.update(
+        user_id, **data.model_dump(exclude_none=True)
+    )
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return serialize_dataclass(user)
 
 
 @app.delete("/api/users/{user_id}", dependencies=[Depends(auth_required)])
@@ -192,15 +190,14 @@ async def list_configs(
     owner_id: int | None = None,
     suspended: bool | None = None,
 ):
-    async with uow() as repos:
-        configs = await repos["configs"].list(
-            limit=limit,
-            offset=offset,
-            server_id=server_id,
-            owner_id=owner_id,
-            suspended=suspended,
-        )
-    return [serialize_dataclass(Config.from_orm(c)) for c in configs]
+    configs = await config_service.list(
+        limit=limit,
+        offset=offset,
+        server_id=server_id,
+        owner_id=owner_id,
+        suspended=suspended,
+    )
+    return [serialize_dataclass(c) for c in configs]
 
 
 @app.get("/api/configs/{config_id}", dependencies=[Depends(auth_required)])
