@@ -1,4 +1,4 @@
-FROM python:3.12-slim AS base
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -8,7 +8,6 @@ ENV PIP_NO_CACHE_DIR=1 \
     PYTHONPATH=/app
 
 COPY requirements.txt .
-COPY core ./core
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential gcc \

@@ -3,6 +3,16 @@ services:
     build:
       context: .
       dockerfile: ./Dockerfile
+  
+  core:
+    build:
+      context: .
+      dockerfile: ./core/Dockerfile
+    depends_on: [base]
+    env_file:
+      - .env
+    volumes:
+      - core_code:/app/core
 
   db:
     image: postgres:16
@@ -36,7 +46,7 @@ services:
     build:
       context: .
       dockerfile: ./admin/Dockerfile
-    depends_on: [db, base, migrations]
+    depends_on: [db, core, migrations]
     env_file:
       - .env
     restart: on-failure
@@ -47,7 +57,7 @@ services:
     build:
       context: .
       dockerfile: ./bot/Dockerfile
-    depends_on: [db, base, migrations]
+    depends_on: [db, core, migrations]
     env_file:
       - .env
     restart: on-failure
@@ -58,7 +68,7 @@ services:
     build:
       context: .
       dockerfile: ./scripts/Dockerfile
-    depends_on: [db, base, migrations]
+    depends_on: [db, core, migrations]
     env_file:
       - .env
     restart: on-failure
@@ -67,7 +77,7 @@ services:
 
   nginx:
     build: ./nginx
-    depends_on: [db, base, migrations]
+    depends_on: [admin]
     ports:
       - "14081:80"
   
