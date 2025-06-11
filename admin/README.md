@@ -12,10 +12,17 @@ X-API-Key: your_admin_api_key
 
 ## API Endpoints
 
+All list endpoints support `limit` and `offset` query parameters for pagination.
+
 ### Server Management
 
 #### List all servers
 - **GET** `/servers`
+- **Query Parameters**:
+  - `limit` (int, optional): Maximum objects per request.
+  - `offset` (int, optional): Objects to skip from the beginning.
+  - `host` (string, optional): Filter by host.
+  - `location` (string, optional): Filter by location.
 - **Response**: Array of server objects
 
 #### Create a server
@@ -33,6 +40,10 @@ X-API-Key: your_admin_api_key
   }
   ```
 - **Response**: Created server object
+
+#### Get server details
+- **GET** `/servers/{server_id}`
+- **Response**: Server object
 
 #### Update a server
 - **PUT** `/servers/{server_id}`
@@ -53,6 +64,12 @@ X-API-Key: your_admin_api_key
 
 #### List all configs
 - **GET** `/configs`
+- **Query Parameters**:
+  - `limit` (int, optional): Maximum objects per request.
+  - `offset` (int, optional): Objects to skip from the beginning.
+  - `server_id` (int, optional): Filter by server ID.
+  - `owner_id` (int, optional): Filter by owner ID.
+  - `suspended` (bool, optional): Filter by suspension status.
 - **Response**: Array of config objects
 
 #### Create a config
@@ -75,13 +92,30 @@ X-API-Key: your_admin_api_key
 
 #### Delete a config
 - **DELETE** `/configs/{config_id}`
-- **Response**: `{"deleted": true}`
+- **Response**: `{"deleted": true}` or `{"deleted": false}`
 
 ### User Management
 
 #### List all users
 - **GET** `/users`
+- **Query Parameters**:
+  - `limit` (int, optional): Maximum objects per request.
+  - `offset` (int, optional): Objects to skip from the beginning.
+  - `username` (string, optional): Filter by username.
+  - `tg_id` (int, optional): Filter by Telegram ID.
 - **Response**: Array of user objects
+
+#### Create a user
+- **POST** `/users`
+- **Body**:
+  ```json
+  {
+    "tg_id": 123456789,
+    "username": "newuser",
+    "balance": 0.0
+  }
+  ```
+- **Response**: Created user object
 
 #### View user details with configs
 - **GET** `/users/{user_id}`
@@ -102,6 +136,21 @@ X-API-Key: your_admin_api_key
   }
   ```
 - **Response**: Updated user object
+
+#### Update a user
+- **PUT** `/users/{user_id}`
+- **Body**: Any of the user fields that need updating
+  ```json
+  {
+    "username": "updated_username",
+    "balance": 150.0
+  }
+  ```
+- **Response**: Updated user object
+
+#### Delete a user
+- **DELETE** `/users/{user_id}`
+- **Response**: `{"deleted": true}` or `{"deleted": false}`
 
 ## Examples
 

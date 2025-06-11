@@ -1,15 +1,25 @@
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 
 from core.config import settings
 from core.db.unit_of_work import uow
+from core.exceptions import (
+    ConfigNotFoundError,
+    InsufficientBalanceError,
+    ServerNotFoundError,
+    UserNotFoundError,
+)
 from core.services import BillingService, ConfigService, ServerService, UserService
 
 from .schemas import (
+    ConfigListParams,
     ServerCreate,
+    ServerListParams,
     ServerUpdate,
     TopUp,
     UserCreate,
+    UserListParams,
     UserUpdate,
 )
 from .utils import serialize_dataclass
@@ -25,6 +35,38 @@ billing_service = BillingService(uow, per_config_cost=settings.per_config_cost)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+@app.exception_handler(InsufficientBalanceError)
+async def insufficient_balance_handler(request: Request, exc: InsufficientBalanceError):
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={"detail": "Insufficient balance"},
+    )
+
+
+@app.exception_handler(ConfigNotFoundError)
+async def config_not_found_handler(request: Request, exc: ConfigNotFoundError):
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND,
+        content={"detail": "Config not found"},
+    )
+
+
+@app.exception_handler(ServerNotFoundError)
+async def server_not_found_handler(request: Request, exc: ServerNotFoundError):
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND,
+        content={"detail": "Server not found"},
+    )
+
+
+@app.exception_handler(UserNotFoundError)
+async def user_not_found_handler(request: Request, exc: UserNotFoundError):
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND,
+        content={"detail": "User not found"},
+    )
 
 
 def require_auth(request: Request) -> None:
@@ -61,14 +103,12 @@ def parse(model: type[BaseModel], request: Request):
 
 
 @app.get("/api/servers", dependencies=[Depends(auth_required)])
-async def list_servers(
-    limit: int | None = None,
-    offset: int = 0,
-    host: str | None = None,
-    location: str | None = None,
-):
+async def list_servers(params: ServerListParams = Depends()):
     servers = await server_service.list(
-        limit=limit, offset=offset, host=host, location=location
+        limit=params.limit,
+        offset=params.offset,
+        host=params.host,
+        location=params.location,
     )
     return [serialize_dataclass(s) for s in servers]
 
@@ -117,14 +157,12 @@ async def delete_server(server_id: int):
 
 
 @app.get("/api/users", dependencies=[Depends(auth_required)])
-async def list_users(
-    limit: int | None = None,
-    offset: int = 0,
-    username: str | None = None,
-    tg_id: int | None = None,
-):
+async def list_users(params: UserListParams = Depends()):
     users = await user_service.list(
-        limit=limit, offset=offset, username=username, tg_id=tg_id
+        limit=params.limit,
+        offset=params.offset,
+        username=params.username,
+        tg_id=params.tg_id,
     )
     return [serialize_dataclass(u) for u in users]
 
@@ -179,19 +217,13 @@ async def withdraw_user(user_id: int, data: TopUp):
 
 
 @app.get("/api/configs", dependencies=[Depends(auth_required)])
-async def list_configs(
-    limit: int | None = None,
-    offset: int = 0,
-    server_id: int | None = None,
-    owner_id: int | None = None,
-    suspended: bool | None = None,
-):
+async def list_configs(params: ConfigListParams = Depends()):
     configs = await config_service.list(
-        limit=limit,
-        offset=offset,
-        server_id=server_id,
-        owner_id=owner_id,
-        suspended=suspended,
+        limit=params.limit,
+        offset=params.offset,
+        server_id=params.server_id,
+        owner_id=params.owner_id,
+        suspended=params.suspended,
     )
     return [serialize_dataclass(c) for c in configs]
 
