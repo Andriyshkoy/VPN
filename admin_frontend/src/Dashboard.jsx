@@ -1,50 +1,28 @@
-import { useEffect, useState } from 'react'
-
-const apiUrl = import.meta.env.VITE_ADMIN_API_URL
-const apiKey = import.meta.env.VITE_ADMIN_API_KEY
+import { useState } from 'react'
+import Servers from './Servers'
+import Users from './Users'
+import Configs from './Configs'
 
 export default function Dashboard({ onLogout }) {
-  const [servers, setServers] = useState([])
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    async function fetchServers() {
-      try {
-        const res = await fetch(`${apiUrl}/api/servers`, {
-          headers: { 'X-API-Key': apiKey },
-        })
-        if (!res.ok) {
-          throw new Error('Failed to fetch servers')
-        }
-        const data = await res.json()
-        setServers(data)
-      } catch (err) {
-        setError(err.message)
-      }
-    }
-    fetchServers()
-  }, [])
-
-  const handleLogout = () => {
-    localStorage.removeItem('loggedIn')
-    onLogout()
-  }
+  const [page, setPage] = useState('servers')
 
   return (
-    <div className="dashboard">
-      <h2>Admin Panel</h2>
-      <button onClick={handleLogout}>Logout</button>
-      {error && <div className="error">{error}</div>}
-      <div className="server-list">
-        <h3>Servers</h3>
-        <ul>
-          {servers.map((srv) => (
-            <li key={srv.id}>
-              {srv.name} ({srv.location})
-            </li>
-          ))}
-        </ul>
-      </div>
+    <div>
+      <nav className="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div className="container-fluid">
+          <span className="navbar-brand">Admin</span>
+          <div className="navbar-nav">
+            <button className="nav-link btn btn-link" onClick={() => setPage('servers')}>Servers</button>
+            <button className="nav-link btn btn-link" onClick={() => setPage('users')}>Users</button>
+            <button className="nav-link btn btn-link" onClick={() => setPage('configs')}>Configs</button>
+            <button className="nav-link btn btn-link" onClick={() => { localStorage.removeItem('loggedIn'); onLogout() }}>Logout</button>
+          </div>
+        </div>
+      </nav>
+      {page === 'servers' && <Servers />}
+      {page === 'users' && <Users />}
+      {page === 'configs' && <Configs />}
     </div>
   )
 }
+
