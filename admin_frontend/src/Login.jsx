@@ -1,19 +1,26 @@
 import { useState } from 'react'
 
-const envUser = import.meta.env.VITE_ADMIN_USERNAME
-const envPass = import.meta.env.VITE_ADMIN_PASSWORD
+const apiUrl = import.meta.env.VITE_ADMIN_API_URL
 
 export default function Login({ onLogin }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
-    if (username === envUser && password === envPass) {
+    try {
+      const res = await fetch(`${apiUrl}/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      })
+      if (!res.ok) throw new Error('Invalid credentials')
+      const data = await res.json()
+      localStorage.setItem('authToken', data.token)
       localStorage.setItem('loggedIn', 'true')
       onLogin()
-    } else {
+    } catch (err) {
       setError('Invalid credentials')
     }
   }

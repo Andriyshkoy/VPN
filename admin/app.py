@@ -24,6 +24,7 @@ from .schemas import (
     UserUpdate,
 )
 from .utils import serialize_dataclass
+from . import auth
 
 app = FastAPI()
 
@@ -86,6 +87,12 @@ async def user_not_found_handler(request: Request, exc: UserNotFoundError):
 
 
 def require_auth(request: Request) -> None:
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        token = auth_header.split()[1]
+        if auth.token_valid(token):
+            return
+
     api_key = settings.admin_api_key
     if not api_key:
         return
@@ -111,6 +118,21 @@ def parse(model: type[BaseModel], request: Request):
         return model.model_validate(data or {})
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=exc.errors())
+
+
+class Login(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/login")
+async def login(data: Login):
+    if not (settings.admin_username and settings.admin_password_hash):
+        raise HTTPException(status_code=503, detail="Login disabled")
+    if data.username != settings.admin_username or not auth.verify_password(data.password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = auth.generate_token()
+    return {"token": token}
 
 
 # ---------------------------------------------------------------------------

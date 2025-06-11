@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     config_creation_cost: float = 10.0
     billing_interval: int = 3600
     admin_api_key: str = ""
+    admin_username: str = ""
+    admin_password_hash: str = ""
 
     class Config:
         env_file = '.env'
