@@ -3,7 +3,6 @@ from typing import Optional, Annotated
 from pydantic import (
     BaseModel,
     Field,
-    IPvAnyAddress,
     PositiveFloat,
     PositiveInt,
     NonNegativeInt,
@@ -19,7 +18,7 @@ Money = Annotated[float, Field(ge=0)]
 
 class ServerBase(BaseModel):
     name: Optional[str] = None
-    ip: Optional[IPvAnyAddress] = None
+    ip: Optional[str] = None
     port: Optional[Port] = Field(22, description="SSH-порт")
     host: Optional[str] = None
     location: Optional[str] = None
@@ -30,7 +29,7 @@ class ServerBase(BaseModel):
 class ServerCreate(ServerBase):
     # обязательные при создании
     name: str
-    ip: IPvAnyAddress
+    ip: str
     host: str
     location: str
     api_key: str

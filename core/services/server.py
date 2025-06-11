@@ -16,9 +16,25 @@ class ServerService:
             server = await repos["servers"].get(id=server_id)
             return Server.from_orm(server) if server else None
 
-    async def list(self, **filters) -> Sequence[Server]:
+    async def list(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        location: str | None = None,
+        host: str | None = None,
+    ) -> Sequence[Server]:
+        """Return servers filtered by the provided parameters."""
+        filters: dict[str, object] = {}
+        if location is not None:
+            filters["location"] = location
+        if host is not None:
+            filters["host"] = host
+
         async with self._uow() as repos:
-            servers = await repos["servers"].list(**filters)
+            servers = await repos["servers"].list(
+                limit=limit, offset=offset, **filters
+            )
             return [Server.from_orm(s) for s in servers]
 
     async def create(
