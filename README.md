@@ -21,7 +21,7 @@ Located in [`bot/`](bot). It allows users to register, view balance and create V
 
 ### Admin API
 
-Located in [`admin/`](admin). It exposes a small JSON API to manage servers, users and configs. Authentication is provided via an `X-API-Key` header if `ADMIN_API_KEY` is set. Start it with:
+Located in [`admin/`](admin). It exposes a small JSON API to manage servers, users and configs. Endpoints are protected either by an `X-API-Key` or by a login token obtained from `/login`. Start it with:
 
 ```bash
 uvicorn admin.app:app --host 0.0.0.0 --port 8000
@@ -57,6 +57,8 @@ from the PostgreSQL credentials, otherwise set it manually:
 - `CONFIG_CREATION_COST` – cost charged when a config is created (default `10.0`)
 - `BILLING_INTERVAL` – seconds between periodic charges
 - `ADMIN_API_KEY` – API key required in the `X-API-Key` header (leave empty to disable auth)
+- `ADMIN_USERNAME` – username for `/login`
+- `ADMIN_PASSWORD_HASH` – bcrypt hash of the login password
 
 A helper script `scripts/fernet_key_generator.py` can generate a new encryption key.
 

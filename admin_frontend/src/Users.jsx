@@ -3,6 +3,13 @@ import { useEffect, useState } from 'react'
 const apiUrl = import.meta.env.VITE_ADMIN_API_URL
 const apiKey = import.meta.env.VITE_ADMIN_API_KEY
 
+function authHeaders() {
+  const token = localStorage.getItem('authToken')
+  if (token) return { Authorization: `Bearer ${token}` }
+  if (apiKey) return { 'X-API-Key': apiKey }
+  return {}
+}
+
 export default function Users() {
   const [users, setUsers] = useState([])
   const [error, setError] = useState('')
@@ -10,7 +17,7 @@ export default function Users() {
   const fetchUsers = async () => {
     try {
       const res = await fetch(`${apiUrl}/api/users`, {
-        headers: { 'X-API-Key': apiKey },
+        headers: authHeaders(),
       })
       if (!res.ok) throw new Error('Failed to fetch users')
       setUsers(await res.json())
@@ -30,7 +37,7 @@ export default function Users() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-API-Key': apiKey,
+        ...authHeaders(),
       },
       body: JSON.stringify({ amount: Number(amount) }),
     })
@@ -44,7 +51,7 @@ export default function Users() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-API-Key': apiKey,
+        ...authHeaders(),
       },
       body: JSON.stringify({ amount: Number(amount) }),
     })

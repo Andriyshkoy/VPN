@@ -3,6 +3,13 @@ import { useEffect, useState } from 'react'
 const apiUrl = import.meta.env.VITE_ADMIN_API_URL
 const apiKey = import.meta.env.VITE_ADMIN_API_KEY
 
+function authHeaders() {
+  const token = localStorage.getItem('authToken')
+  if (token) return { Authorization: `Bearer ${token}` }
+  if (apiKey) return { 'X-API-Key': apiKey }
+  return {}
+}
+
 export default function Configs() {
   const [configs, setConfigs] = useState([])
   const [filters, setFilters] = useState({ server_id: '', owner_id: '', suspended: '' })
@@ -12,7 +19,7 @@ export default function Configs() {
     const qs = new URLSearchParams(params).toString()
     try {
       const res = await fetch(`${apiUrl}/api/configs?${qs}`, {
-        headers: { 'X-API-Key': apiKey },
+        headers: authHeaders(),
       })
       if (!res.ok) throw new Error('Failed to fetch configs')
       setConfigs(await res.json())
