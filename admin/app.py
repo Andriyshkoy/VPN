@@ -1,4 +1,5 @@
 from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 
@@ -31,6 +32,21 @@ config_service = ConfigService(uow)
 user_service = UserService(uow)
 billing_service = BillingService(uow, per_config_cost=settings.per_config_cost)
 
+origins = [
+    "http://localhost",
+    "http://localhost:5173",
+    "https://andriyshkoy.ru",
+    "https://vpn.andriyshkoy.ru",
+    "https://admin.vpn.andriyshkoy.ru",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
