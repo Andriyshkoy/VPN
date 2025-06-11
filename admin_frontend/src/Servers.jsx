@@ -4,7 +4,7 @@ const apiUrl = import.meta.env.VITE_ADMIN_API_URL
 const apiKey = import.meta.env.VITE_ADMIN_API_KEY
 
 export default function Servers() {
-  const empty = { name: '', ip: '', port: 22, host: '', location: '', api_key: '', cost: 0 }
+  const empty = { name: '', ip: '', port: 22, host: '', location: '', api_key: '', monthly_cost: 0 }
   const [servers, setServers] = useState([])
   const [form, setForm] = useState(empty)
   const [error, setError] = useState('')
@@ -41,7 +41,7 @@ export default function Servers() {
         body: JSON.stringify({
           ...form,
           port: Number(form.port),
-          cost: Number(form.cost),
+          monthly_cost: Number(form.monthly_cost),
         }),
       })
       if (!res.ok) throw new Error('Failed to create server')
@@ -72,15 +72,15 @@ export default function Servers() {
     if (ip === null) return
     const port = prompt('Port', srv.port)
     if (port === null) return
-    const cost = prompt('Cost', srv.cost)
-    if (cost === null) return
+    const monthly_cost = prompt('monthly_cost', srv.monthly_cost)
+    if (monthly_cost === null) return
     await fetch(`${apiUrl}/api/servers/${srv.id}`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
         'X-API-Key': apiKey,
       },
-      body: JSON.stringify({ name, location, host, ip, port: Number(port), cost: Number(cost) }),
+      body: JSON.stringify({ name, location, host, ip, port: Number(port), monthly_cost: Number(monthly_cost) }),
     })
     fetchServers()
   }
@@ -109,7 +109,7 @@ export default function Servers() {
           <input name="api_key" value={form.api_key} onChange={handleChange} className="form-control" placeholder="API key" required />
         </div>
         <div className="col-md-1">
-          <input name="cost" value={form.cost} onChange={handleChange} className="form-control" placeholder="Cost" />
+          <input name="monthly_cost" value={form.monthly_cost} onChange={handleChange} className="form-control" placeholder="monthly_cost" />
         </div>
         <div className="col-md-12">
           <button className="btn btn-primary" type="submit">Add server</button>
@@ -124,7 +124,7 @@ export default function Servers() {
               <p className="card-text">
                 Host: {srv.host}<br />
                 IP: {srv.ip}:{srv.port}<br />
-                Cost: {srv.cost}
+                monthly_cost: {srv.monthly_cost}
               </p>
               <button className="btn btn-sm btn-secondary me-2" onClick={() => editServer(srv)}>
                 Edit

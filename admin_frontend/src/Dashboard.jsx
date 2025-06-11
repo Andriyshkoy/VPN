@@ -7,7 +7,7 @@ export default function Dashboard({ onLogout }) {
   const [page, setPage] = useState('servers')
 
   return (
-    <div>
+    <div className='container_root'>
       <nav className="navbar navbar-expand-lg navbar-dark bg-dark">
         <div className="container-fluid">
           <span className="navbar-brand">Admin</span>
