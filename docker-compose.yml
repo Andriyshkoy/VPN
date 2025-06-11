@@ -75,9 +75,17 @@ services:
     volumes:
       - core_code:/app/core
 
+  admin_frontend:
+    build:
+      context: ./admin_frontend
+      dockerfile: Dockerfile
+    depends_on: [admin]
+    env_file:
+      - ./admin_frontend/.env
+
   nginx:
     build: ./nginx
-    depends_on: [admin]
+    depends_on: [admin_frontend, admin]
     ports:
       - "14081:80"
   
