@@ -19,24 +19,24 @@ Money = Annotated[float, Field(ge=0)]
 class ServerBase(BaseModel):
     name: Optional[str] = None
     ip: Optional[str] = None
-    port: Optional[Port] = Field(22, description="SSH-порт")
+    port: Optional[Port] = None
     host: Optional[str] = None
     location: Optional[str] = None
     api_key: Optional[str] = None
-    cost: Optional[Money] = 0
+    monthly_cost: Optional[Money] = None
 
 
 class ServerCreate(ServerBase):
-    # обязательные при создании
     name: str
     ip: str
+    port: Optional[Port] = Field(22, description="SSH-порт")
     host: str
     location: str
     api_key: str
+    monthly_cost: Money = 0.0
 
 
 class ServerUpdate(ServerBase):
-    """Все поля опциональны, можно патчить что угодно."""
     pass
 
 
