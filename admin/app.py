@@ -1,15 +1,11 @@
-from typing import Optional
-
 from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, ValidationError
 
 from core.config import settings
 from core.db.unit_of_work import uow
 from core.services import BillingService, ConfigService, ServerService, UserService
-from core.services.models import Config, User
 
 from .schemas import (
-    ConfigCreate,
     ServerCreate,
     ServerUpdate,
     TopUp,
