@@ -104,3 +104,12 @@ class ConfigListParams(Pagination):
     server_id: Optional[PositiveInt] = None
     owner_id: Optional[PositiveInt] = None
     suspended: Optional[bool] = None
+
+
+# --------------------------------------------------------------------------- #
+# Login
+# --------------------------------------------------------------------------- #
+
+class Login(BaseModel):
+    username: str
+    password: str

@@ -1,7 +1,7 @@
 from bcrypt import gensalt, hashpw
 
 
-def generate_password_hash(password: str) ->str:
+def generate_password_hash(password: str) -> str:
     """
     Generate a hashed password using bcrypt.
 
