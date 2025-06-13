@@ -15,7 +15,7 @@ export default function Dashboard({ onLogout }) {
             <button className="nav-link btn btn-link" onClick={() => setPage('servers')}>Servers</button>
             <button className="nav-link btn btn-link" onClick={() => setPage('users')}>Users</button>
             <button className="nav-link btn btn-link" onClick={() => setPage('configs')}>Configs</button>
-            <button className="nav-link btn btn-link" onClick={() => { localStorage.removeItem('loggedIn'); onLogout() }}>Logout</button>
+            <button className="nav-link btn btn-link" onClick={() => { localStorage.removeItem('loggedIn'); localStorage.removeItem('authToken'); onLogout() }}>Logout</button>
           </div>
         </div>
       </nav>

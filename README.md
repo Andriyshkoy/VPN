@@ -21,7 +21,7 @@ Located in [`bot/`](bot). It allows users to register, view balance and create V
 
 ### Admin API
 
-Located in [`admin/`](admin). It exposes a small JSON API to manage servers, users and configs. Authentication is provided via an `X-API-Key` header if `ADMIN_API_KEY` is set. Start it with:
+Located in [`admin/`](admin). It exposes a small JSON API to manage servers, users and configs. Endpoints require a login token obtained from `/login`. Start it with:
 
 ```bash
 uvicorn admin.app:app --host 0.0.0.0 --port 8000
@@ -56,7 +56,8 @@ from the PostgreSQL credentials, otherwise set it manually:
 - `PER_CONFIG_COST` – how much to charge per active config (default `1.0`)
 - `CONFIG_CREATION_COST` – cost charged when a config is created (default `10.0`)
 - `BILLING_INTERVAL` – seconds between periodic charges
-- `ADMIN_API_KEY` – API key required in the `X-API-Key` header (leave empty to disable auth)
+- `ADMIN_USERNAME` – username for `/login`
+- `ADMIN_PASSWORD_HASH` – bcrypt hash of the login password
 
 A helper script `scripts/fernet_key_generator.py` can generate a new encryption key.
 
@@ -71,8 +72,8 @@ pytest
 
 ## Security notes
 
-- API keys are stored encrypted in the database using Fernet.
-- The admin API should be protected with a strong `ADMIN_API_KEY` and ideally served over HTTPS.
+- API keys of VPN servers are stored encrypted in the database using Fernet.
+- The admin API requires a login token obtained from the `/login` endpoint and should ideally be served over HTTPS.
 - Temporary configuration files created by the bot are placed in the system temp directory and removed immediately after sending.
 - Communication with VPN servers is performed over plain HTTP; ensure your environment is trusted or switch to HTTPS.
 

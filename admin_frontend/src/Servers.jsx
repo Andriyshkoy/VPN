@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react'
 
 const apiUrl = import.meta.env.VITE_ADMIN_API_URL
-const apiKey = import.meta.env.VITE_ADMIN_API_KEY
+
+function authHeaders() {
+  const token = localStorage.getItem('authToken')
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
 
 export default function Servers() {
   const empty = { name: '', ip: '', port: 22, host: '', location: '', api_key: '', monthly_cost: 0 }
@@ -12,7 +16,7 @@ export default function Servers() {
   const fetchServers = async () => {
     try {
       const res = await fetch(`${apiUrl}/api/servers`, {
-        headers: { 'X-API-Key': apiKey },
+        headers: authHeaders(),
       })
       if (!res.ok) throw new Error('Failed to fetch servers')
       setServers(await res.json())
@@ -36,7 +40,7 @@ export default function Servers() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-API-Key': apiKey,
+          ...authHeaders(),
         },
         body: JSON.stringify({
           ...form,
@@ -56,7 +60,7 @@ export default function Servers() {
     if (!confirm('Delete server?')) return
     await fetch(`${apiUrl}/api/servers/${id}`, {
       method: 'DELETE',
-      headers: { 'X-API-Key': apiKey },
+      headers: authHeaders(),
     })
     fetchServers()
   }
@@ -78,7 +82,7 @@ export default function Servers() {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
-        'X-API-Key': apiKey,
+        ...authHeaders(),
       },
       body: JSON.stringify({ name, location, host, ip, port: Number(port), monthly_cost: Number(monthly_cost) }),
     })

@@ -45,3 +45,4 @@ fastapi==0.111.0
 uvicorn==0.29.0
 setuptools>=65.5
 asyncpg==0.29.0
+bcrypt==4.1.2
