@@ -2,6 +2,14 @@ services:
   base:
     image: andriyshkoy/vpn-base:latest
 
+  core:
+    image: andriyshkoy/vpn-core:latest
+    depends_on: [base]
+    env_file:
+      - .env
+    volumes:
+      - core_code:/app/core
+
   db:
     image: postgres:16
     environment:
@@ -30,7 +38,7 @@ services:
 
   admin:
     image: andriyshkoy/vpn-admin:latest
-    depends_on: [db, base, migrations]
+    depends_on: [db, core, migrations]
     env_file:
       - .env
     restart: on-failure
@@ -39,28 +47,34 @@ services:
 
   bot:
     image: andriyshkoy/vpn-bot:latest
-    depends_on: [db, base, migrations]
-    env_file:
-      - .env
-    restart: on-failure
-    volumes:
-      - core_code:/app/core
-    
-  billing_daemon:
-    image: andriyshkoy/vpn-billing:latest
-    depends_on: [db, base, migrations]
+    depends_on: [db, core, migrations]
     env_file:
       - .env
     restart: on-failure
     volumes:
       - core_code:/app/core
 
+  billing_daemon:
+    image: andriyshkoy/vpn-billing:latest
+    depends_on: [db, core, migrations]
+    env_file:
+      - .env
+    restart: on-failure
+    volumes:
+      - core_code:/app/core
+
+  admin_frontend:
+    image: andriyshkoy/vpn-admin-frontend:latest
+    depends_on: [admin]
+    env_file:
+      - ./admin_frontend/.env
+
   nginx:
     image: andriyshkoy/vpn-nginx:latest
-    depends_on: [admin, bot]
+    depends_on: [admin_frontend]
     ports:
-      - "80:80"
-  
+      - "14081:80"
+
 volumes:
   db_data:
   core_code:
