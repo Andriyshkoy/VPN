@@ -1,11 +1,7 @@
 import { useEffect, useState } from 'react'
 
-const apiUrl = import.meta.env.VITE_ADMIN_API_URL
+import { apiUrl, authHeaders, handleUnauthorized } from './api'
 
-function authHeaders() {
-  const token = localStorage.getItem('authToken')
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
 
 export default function Servers() {
   const empty = { name: '', ip: '', port: 22, host: '', location: '', api_key: '', monthly_cost: 0 }
@@ -18,6 +14,7 @@ export default function Servers() {
       const res = await fetch(`${apiUrl}/api/servers`, {
         headers: authHeaders(),
       })
+      if (handleUnauthorized(res.status)) return
       if (!res.ok) throw new Error('Failed to fetch servers')
       setServers(await res.json())
     } catch (err) {
@@ -48,6 +45,7 @@ export default function Servers() {
           monthly_cost: Number(form.monthly_cost),
         }),
       })
+      if (handleUnauthorized(res.status)) return
       if (!res.ok) throw new Error('Failed to create server')
       setForm(empty)
       fetchServers()
@@ -58,10 +56,11 @@ export default function Servers() {
 
   const deleteServer = async (id) => {
     if (!confirm('Delete server?')) return
-    await fetch(`${apiUrl}/api/servers/${id}`, {
+    const res = await fetch(`${apiUrl}/api/servers/${id}`, {
       method: 'DELETE',
       headers: authHeaders(),
     })
+    if (handleUnauthorized(res.status)) return
     fetchServers()
   }
 
@@ -78,7 +77,7 @@ export default function Servers() {
     if (port === null) return
     const monthly_cost = prompt('monthly_cost', srv.monthly_cost)
     if (monthly_cost === null) return
-    await fetch(`${apiUrl}/api/servers/${srv.id}`, {
+    const res = await fetch(`${apiUrl}/api/servers/${srv.id}`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
@@ -86,6 +85,7 @@ export default function Servers() {
       },
       body: JSON.stringify({ name, location, host, ip, port: Number(port), monthly_cost: Number(monthly_cost) }),
     })
+    if (handleUnauthorized(res.status)) return
     fetchServers()
   }
 

@@ -1,11 +1,5 @@
 import { useEffect, useState } from 'react'
-
-const apiUrl = import.meta.env.VITE_ADMIN_API_URL
-
-function authHeaders() {
-  const token = localStorage.getItem('authToken')
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
+import { apiUrl, authHeaders, handleUnauthorized } from './api'
 
 export default function Configs() {
   const [configs, setConfigs] = useState([])
@@ -18,6 +12,7 @@ export default function Configs() {
       const res = await fetch(`${apiUrl}/api/configs?${qs}`, {
         headers: authHeaders(),
       })
+      if (handleUnauthorized(res.status)) return
       if (!res.ok) throw new Error('Failed to fetch configs')
       setConfigs(await res.json())
     } catch (err) {
