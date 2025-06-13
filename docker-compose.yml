@@ -85,7 +85,7 @@ services:
 
   nginx:
     build: ./nginx
-    depends_on: [admin_frontend, admin]
+    depends_on: [admin_frontend]
     ports:
       - "14081:80"
   
