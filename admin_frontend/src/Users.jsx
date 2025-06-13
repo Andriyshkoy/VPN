@@ -7,13 +7,6 @@ function authHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-function authHeaders() {
-  const token = localStorage.getItem('authToken')
-  if (token) return { Authorization: `Bearer ${token}` }
-  if (apiKey) return { 'X-API-Key': apiKey }
-  return {}
-}
-
 export default function Users() {
   const [users, setUsers] = useState([])
   const [error, setError] = useState('')
