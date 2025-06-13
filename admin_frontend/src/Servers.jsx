@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react'
 
 const apiUrl = import.meta.env.VITE_ADMIN_API_URL
-const apiKey = import.meta.env.VITE_ADMIN_API_KEY
+
+function authHeaders() {
+  const token = localStorage.getItem('authToken')
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
 
 function authHeaders() {
   const token = localStorage.getItem('authToken')

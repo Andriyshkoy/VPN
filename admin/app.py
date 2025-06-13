@@ -92,13 +92,7 @@ def require_auth(request: Request) -> None:
         token = auth_header.split()[1]
         if auth.token_valid(token):
             return
-
-    api_key = settings.admin_api_key
-    if not api_key:
-        return
-    key = request.headers.get("X-API-Key")
-    if key != api_key:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 def auth_required(request: Request):

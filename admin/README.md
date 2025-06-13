@@ -4,10 +4,11 @@ This is an administrative API for managing VPN servers, configurations, users, a
 
 ## Authentication
 
-All endpoints require authentication using an API key. Include the API key in the request headers:
+Authenticate by obtaining a token from `/login` and sending it in the
+`Authorization` header:
 
 ```
-X-API-Key: your_admin_api_key
+Authorization: Bearer your_token
 ```
 
 ## API Endpoints
@@ -158,7 +159,7 @@ All list endpoints support `limit` and `offset` query parameters for pagination.
 
 ```bash
 curl -X POST http://your-api-domain/servers \
-  -H "X-API-Key: your_admin_api_key" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name": "us-east", "ip": "10.0.0.1", "host": "host1.example.com", "location": "US East", "api_key": "server_key123"}'
 ```
@@ -167,7 +168,7 @@ curl -X POST http://your-api-domain/servers \
 
 ```bash
 curl -X POST http://your-api-domain/configs \
-  -H "X-API-Key: your_admin_api_key" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"server_id": 1, "owner_id": 5, "name": "mobile-config", "display_name": "Mobile Device"}'
 ```
@@ -176,7 +177,7 @@ curl -X POST http://your-api-domain/configs \
 
 ```bash
 curl -X POST http://your-api-domain/users/5/topup \
-  -H "X-API-Key: your_admin_api_key" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"amount": 50.00}'
 ```

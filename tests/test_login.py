@@ -11,7 +11,6 @@ async def test_login(monkeypatch, sessionmaker):
     hashed = bcrypt.hashpw(password, bcrypt.gensalt()).decode()
     monkeypatch.setenv("ADMIN_USERNAME", "admin")
     monkeypatch.setenv("ADMIN_PASSWORD_HASH", hashed)
-    monkeypatch.setenv("ADMIN_API_KEY", "x")
 
     import core.config as core_config
     core_config = importlib.reload(core_config)

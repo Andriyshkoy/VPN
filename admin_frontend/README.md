@@ -14,13 +14,12 @@ Create a `.env` file based on `.env.example`:
 
 ```bash
 cp .env.example .env
-# edit .env and specify the API URL (and API key if not using login)
+# edit .env and specify the API URL
 ```
 
 Environment variables used by the app:
 
 - `VITE_ADMIN_API_URL` – base URL of the Admin API
-- `VITE_ADMIN_API_KEY` – optional API key sent in `X-API-Key` header if login tokens are not used
 
 ## Development
 
