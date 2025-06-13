@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
+
 import { apiUrl, authHeaders, handleUnauthorized } from './api'
+
 
 export default function Servers() {
   const empty = { name: '', ip: '', port: 22, host: '', location: '', api_key: '', monthly_cost: 0 }
