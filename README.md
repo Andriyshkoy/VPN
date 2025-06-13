@@ -21,7 +21,7 @@ Located in [`bot/`](bot). It allows users to register, view balance and create V
 
 ### Admin API
 
-Located in [`admin/`](admin). It exposes a small JSON API to manage servers, users and configs. Endpoints require a login token obtained from `/login`. Start it with:
+Located in [`admin/`](admin). It exposes a small JSON API to manage servers, users and configs. Endpoints are protected either by an `X-API-Key` or by a login token obtained from `/login`. Start it with:
 
 ```bash
 uvicorn admin.app:app --host 0.0.0.0 --port 8000
