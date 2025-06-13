@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from core.db.unit_of_work import uow
 from core.services import ServerService
@@ -30,7 +30,7 @@ async def list_servers(params: ServerListParams = Depends()):
 async def get_server(server_id: int):
     server = await server_service.get(server_id)
     if not server:
-        raise HTTPException(status_code=404, detail="Server not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Server not found")
     return serialize_dataclass(server)
 
 
@@ -54,7 +54,7 @@ async def update_server(server_id: int, data: ServerUpdate):
         server_id, **data.model_dump(exclude_none=True)
     )
     if not server:
-        raise HTTPException(status_code=404, detail="Server not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Server not found")
     return serialize_dataclass(server)
 
 

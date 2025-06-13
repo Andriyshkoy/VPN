@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from core.db.unit_of_work import uow
 from core.services import ConfigService
@@ -31,5 +31,5 @@ async def list_configs(params: ConfigListParams = Depends()):
 async def get_config(config_id: int):
     cfg = await config_service.get(config_id)
     if not cfg:
-        raise HTTPException(status_code=404, detail="Config not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Config not found")
     return serialize_dataclass(cfg)

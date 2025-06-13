@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from core.config import settings
 from core.db.unit_of_work import uow
@@ -40,7 +40,7 @@ async def create_user(data: UserCreate):
 async def get_user(user_id: int):
     user = await user_service.get(user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return serialize_dataclass(user)
 
 
@@ -50,7 +50,7 @@ async def update_user(user_id: int, data: UserUpdate):
         user_id, **data.model_dump(exclude_none=True)
     )
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return serialize_dataclass(user)
 
 
