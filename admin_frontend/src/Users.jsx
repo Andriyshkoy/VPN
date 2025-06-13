@@ -1,18 +1,5 @@
 import { useEffect, useState } from 'react'
-
-const apiUrl = import.meta.env.VITE_ADMIN_API_URL
-
-function authHeaders() {
-  const token = localStorage.getItem('authToken')
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
-
-function authHeaders() {
-  const token = localStorage.getItem('authToken')
-  if (token) return { Authorization: `Bearer ${token}` }
-  if (apiKey) return { 'X-API-Key': apiKey }
-  return {}
-}
+import { apiUrl, authHeaders, handleUnauthorized } from './api'
 
 export default function Users() {
   const [users, setUsers] = useState([])
@@ -23,6 +10,7 @@ export default function Users() {
       const res = await fetch(`${apiUrl}/api/users`, {
         headers: authHeaders(),
       })
+      if (handleUnauthorized(res.status)) return
       if (!res.ok) throw new Error('Failed to fetch users')
       setUsers(await res.json())
     } catch (err) {
@@ -37,7 +25,7 @@ export default function Users() {
   const topup = async (id) => {
     const amount = prompt('Amount to top up')
     if (!amount) return
-    await fetch(`${apiUrl}/api/users/${id}/topup`, {
+    const res = await fetch(`${apiUrl}/api/users/${id}/topup`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -45,13 +33,14 @@ export default function Users() {
       },
       body: JSON.stringify({ amount: Number(amount) }),
     })
+    if (handleUnauthorized(res.status)) return
     fetchUsers()
   }
 
   const withdraw = async (id) => {
     const amount = prompt('Amount to withdraw')
     if (!amount) return
-    await fetch(`${apiUrl}/api/users/${id}/withdraw`, {
+    const res = await fetch(`${apiUrl}/api/users/${id}/withdraw`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -59,6 +48,7 @@ export default function Users() {
       },
       body: JSON.stringify({ amount: Number(amount) }),
     })
+    if (handleUnauthorized(res.status)) return
     fetchUsers()
   }
 

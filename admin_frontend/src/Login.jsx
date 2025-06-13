@@ -1,6 +1,5 @@
 import { useState } from 'react'
-
-const apiUrl = import.meta.env.VITE_ADMIN_API_URL
+import { apiUrl } from './api'
 
 export default function Login({ onLogin }) {
   const [username, setUsername] = useState('')
