@@ -7,13 +7,6 @@ function authHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-function authHeaders() {
-  const token = localStorage.getItem('authToken')
-  if (token) return { Authorization: `Bearer ${token}` }
-  if (apiKey) return { 'X-API-Key': apiKey }
-  return {}
-}
-
 export default function Configs() {
   const [configs, setConfigs] = useState([])
   const [filters, setFilters] = useState({ server_id: '', owner_id: '', suspended: '' })
