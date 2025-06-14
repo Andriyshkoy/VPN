@@ -10,9 +10,10 @@ class Settings(BaseSettings):
     billing_interval: int = 3600
     admin_username: str = ""
     admin_password_hash: str = ""
+    telegram_pay_token: str = ""
 
     class Config:
-        env_file = '.env'
+        env_file = ".env"
         extra = "ignore"
 
 

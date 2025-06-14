@@ -8,3 +8,7 @@ class CreateConfig(StatesGroup):
 
 class RenameConfig(StatesGroup):
     entering_name = State()
+
+
+class TopUpTelegram(StatesGroup):
+    waiting_amount = State()
