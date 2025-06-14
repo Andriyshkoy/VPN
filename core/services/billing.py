@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Callable, Sequence
 
 from core.exceptions import InsufficientBalanceError, UserNotFoundError
@@ -18,7 +19,7 @@ class BillingService:
         :param per_config_cost: Cost charged for each active configuration.
         """
         self._uow = uow
-        self._cost = per_config_cost
+        self._cost = Decimal(per_config_cost)
         self._config_service = ConfigService(uow)
 
     async def top_up(self, user_id: int, amount: float) -> User:
@@ -27,7 +28,7 @@ class BillingService:
             user = await repos["users"].get(id=user_id)
             if not user:
                 raise UserNotFoundError(f"User with ID {user_id} not found")
-            new_balance = user.balance + amount
+            new_balance = user.balance + Decimal(amount)
             user = await repos["users"].update(user_id, balance=new_balance)
 
         if new_balance > 0:
@@ -43,10 +44,9 @@ class BillingService:
         for user in users:
             async with self._uow() as repos:
                 configs = await repos["configs"].get_active(owner_id=user.id)
-                charge = len(configs) * self._cost
+                charge = Decimal(len(configs)) * self._cost
                 if charge:
-                    new_balance = user.balance*100 - charge*100  # To avoid float precision issues
-                    new_balance = new_balance / 100
+                    new_balance = user.balance - charge
                     await repos["users"].update(user.id, balance=new_balance)
                 else:
                     continue
@@ -60,9 +60,9 @@ class BillingService:
             user = await repos["users"].get(id=user_id)
             if not user:
                 raise UserNotFoundError(f"User with ID {user_id} not found")
-            if user.balance < amount:
+            if user.balance < Decimal(amount):
                 raise InsufficientBalanceError("Insufficient balance")
-            new_balance = user.balance - amount
+            new_balance = user.balance - Decimal(amount)
             user = await repos["users"].update(user_id, balance=new_balance)
 
         if new_balance <= 0:
@@ -85,7 +85,7 @@ class BillingService:
             user = await repos["users"].get(id=owner_id)
             if not user:
                 raise UserNotFoundError(f"User with ID {owner_id} not found")
-            if user.balance <= creation_cost:
+            if user.balance <= Decimal(creation_cost):
                 raise InsufficientBalanceError("Insufficient balance")
 
         cfg = await self._config_service.create_config(
