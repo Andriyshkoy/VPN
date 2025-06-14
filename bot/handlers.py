@@ -20,9 +20,15 @@ from aiogram.types import (
 from core.config import settings
 from core.db.unit_of_work import uow
 from core.exceptions import InsufficientBalanceError, ServiceError
-from core.services import BillingService, ConfigService, ServerService, UserService
+from core.services import (
+    BillingService,
+    ConfigService,
+    ServerService,
+    TelegramPayService,
+    UserService,
+)
 
-from .states import CreateConfig, RenameConfig
+from .states import CreateConfig, RenameConfig, TopUpTelegram
 
 router = Router()
 
@@ -97,7 +103,50 @@ async def cmd_balance(message: Message):
 @router.message(Command("topup"))
 async def cmd_topup(message: Message):
     await get_or_create_user(message.from_user.id, message.from_user.username)
-    await message.answer("Для пополнения баланса свяжитесь с администратором сервиса")
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="\ud83d\udcb0 Оплатить криптой", callback_data="pay:crypto"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Telegram Pay (\u043aарта)",
+                    callback_data="pay:telegram",
+                )
+            ],
+        ]
+    )
+    await message.answer("Выберите способ пополнения баланса:", reply_markup=kb)
+
+
+@router.callback_query(lambda c: c.data == "pay:crypto")
+async def pay_crypto(callback: CallbackQuery):
+    await callback.message.answer(
+        "Оплата криптовалютой временно недоступна. Свяжитесь с администратором."
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "pay:telegram")
+async def pay_telegram(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    await callback.message.answer("Введите сумму пополнения в рублях:")
+    await state.set_state(TopUpTelegram.waiting_amount)
+    await callback.answer()
+
+
+@router.message(TopUpTelegram.waiting_amount)
+async def got_topup_amount(message: Message, state: FSMContext, bot: Bot):
+    try:
+        amount = float(message.text)
+    except ValueError:
+        await message.answer("Введите числовое значение суммы.")
+        return
+
+    service = TelegramPayService(bot, settings.telegram_pay_token)
+    await service.send_invoice(message.chat.id, amount)
+    await state.clear()
 
 
 @router.message(Command("configs"))
@@ -115,7 +164,9 @@ async def cmd_configs(message: Message):
         title = cfg.display_name
         if cfg.suspended:
             title += " (приостановлена)"
-        buttons.append([InlineKeyboardButton(text=title, callback_data=f"cfg:{cfg.id}")])
+        buttons.append(
+            [InlineKeyboardButton(text=title, callback_data=f"cfg:{cfg.id}")]
+        )
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer("Ваши конфигурации:", reply_markup=kb)
 
@@ -128,7 +179,12 @@ async def cmd_create_config(message: Message, state: FSMContext):
         await message.answer("Нет доступных серверов")
         return
     buttons = [
-        [InlineKeyboardButton(text=' '.join([s.location, s.name]), callback_data=f"server:{s.id}")] for s in servers
+        [
+            InlineKeyboardButton(
+                text=" ".join([s.location, s.name]), callback_data=f"server:{s.id}"
+            )
+        ]
+        for s in servers
     ]
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer(
@@ -217,9 +273,13 @@ async def show_config(callback: CallbackQuery):
     #     buttons.append([InlineKeyboardButton(text="Возобновить", callback_data=f"uns:{cfg.id}")])
     # else:
     #     buttons.append([InlineKeyboardButton(text="Приостановить", callback_data=f"sus:{cfg.id}")])
-    buttons.append([InlineKeyboardButton(text="Удалить", callback_data=f"del:{cfg.id}")])
+    buttons.append(
+        [InlineKeyboardButton(text="Удалить", callback_data=f"del:{cfg.id}")]
+    )
     buttons.append([InlineKeyboardButton(text="Скачать", callback_data=f"dl:{cfg.id}")])
-    buttons.append([InlineKeyboardButton(text="Переименовать", callback_data=f"rn:{cfg.id}")])
+    buttons.append(
+        [InlineKeyboardButton(text="Переименовать", callback_data=f"rn:{cfg.id}")]
+    )
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
