@@ -34,7 +34,7 @@ class User:
     tg_id: int
     username: str | None
     created: datetime
-    balance: float
+    balance: Decimal
 
     @classmethod
     def from_orm(cls, obj):
