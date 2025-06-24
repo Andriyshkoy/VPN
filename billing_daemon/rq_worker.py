@@ -6,7 +6,7 @@ from core.config import settings
 
 def run_worker() -> None:
     redis_conn = Redis.from_url(settings.redis_url)
-    queue = Queue("billing", connection=redis_conn, default_timeout=3600)
+    queue = Queue("billing", connection=redis_conn)
     worker = Worker([queue], connection=redis_conn)
     worker.work(logging_level="INFO")
 
