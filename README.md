@@ -58,6 +58,7 @@ from the PostgreSQL credentials, otherwise set it manually:
 - `BILLING_INTERVAL` – seconds between periodic charges
 - `ADMIN_USERNAME` – username for `/login`
 - `ADMIN_PASSWORD_HASH` – bcrypt hash of the login password
+- `REDIS_URL` – Redis connection string for token storage (default `redis://redis:6379/0`)
 
 A helper script `scripts/fernet_key_generator.py` can generate a new encryption key.
 
@@ -74,6 +75,7 @@ pytest
 
 - API keys of VPN servers are stored encrypted in the database using Fernet.
 - The admin API requires a login token obtained from the `/login` endpoint and should ideally be served over HTTPS.
+- Login tokens are stored in Redis with a 1 hour TTL.
 - Temporary configuration files created by the bot are placed in the system temp directory and removed immediately after sending.
 - Communication with VPN servers is performed over plain HTTP; ensure your environment is trusted or switch to HTTPS.
 

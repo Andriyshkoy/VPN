@@ -24,6 +24,10 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7
+    restart: unless-stopped
+
   migrations:
     image: andriyshkoy/vpn-migrations:latest
     depends_on:

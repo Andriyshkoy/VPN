@@ -2,6 +2,7 @@ import importlib
 
 import bcrypt
 import pytest
+import fakeredis.aioredis
 from httpx import AsyncClient, ASGITransport
 
 from core.db.unit_of_work import uow
@@ -45,6 +46,8 @@ async def test_user_endpoints(monkeypatch, sessionmaker):
     core_config = importlib.reload(core_config)
     import admin.auth as admin_auth
     admin_auth = importlib.reload(admin_auth)
+    redis_client = fakeredis.aioredis.FakeRedis()
+    monkeypatch.setattr(admin_auth, "_get_redis", lambda: redis_client)
     import admin.app as admin_app
     admin_app = importlib.reload(admin_app)
 
@@ -91,6 +94,8 @@ async def test_config_list(monkeypatch, sessionmaker):
     core_config = importlib.reload(core_config)
     import admin.auth as admin_auth
     admin_auth = importlib.reload(admin_auth)
+    redis_client = fakeredis.aioredis.FakeRedis()
+    monkeypatch.setattr(admin_auth, "_get_redis", lambda: redis_client)
     import admin.app as admin_app
 
     admin_app = importlib.reload(admin_app)

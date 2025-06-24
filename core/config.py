@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     admin_username: str = ""
     admin_password_hash: str = ""
     telegram_pay_token: str = ""
+    redis_url: str = "redis://localhost:6379/0"
 
     class Config:
         env_file = ".env"
