@@ -71,7 +71,7 @@ services:
   billing_daemon:
     build:
       context: .
-      dockerfile: ./scripts/Dockerfile
+      dockerfile: ./billing_daemon/Dockerfile
     depends_on: [db, core, migrations]
     env_file:
       - .env
