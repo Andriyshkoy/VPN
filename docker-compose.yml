@@ -68,14 +68,27 @@ services:
     volumes:
       - core_code:/app/core
     
-  billing_daemon:
+  rq_worker:
     build:
       context: .
       dockerfile: ./billing_daemon/Dockerfile
-    depends_on: [db, core, migrations, redis]
+    command: ./billing_daemon/entrypoint_worker.sh
+    depends_on: [redis, core, db, migrations]
     env_file:
       - .env
-    restart: on-failure
+    restart: always
+    volumes:
+      - core_code:/app/core
+
+  rq_scheduler:
+    build:
+      context: .
+      dockerfile: ./billing_daemon/Dockerfile
+    command: ./billing_daemon/entrypoint_scheduler.sh
+    depends_on: [redis, core, db, migrations]
+    env_file:
+      - .env
+    restart: always
     volumes:
       - core_code:/app/core
 
