@@ -1,9 +1,6 @@
-from multiprocessing import Process
+"""Deprecated entrypoint for the billing daemon.
 
-from .rq_worker import run_worker
-from .scheduler import bootstrap_schedule
-
-if __name__ == "__main__":
-    worker = Process(target=run_worker, daemon=True)
-    worker.start()
-    bootstrap_schedule()
+The previous version spawned worker and scheduler processes via
+``multiprocessing`` which caused issues inside Docker. Use the dedicated
+``rq_worker`` and ``rq_scheduler`` entrypoints instead.
+"""
