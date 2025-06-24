@@ -20,5 +20,5 @@ async def login(data: Login):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Invalid credentials"
         )
-    token = auth_utils.generate_token()
+    token = await auth_utils.generate_token()
     return {"token": token}

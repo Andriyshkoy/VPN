@@ -1,36 +1,30 @@
 import secrets
-import time
-from typing import Dict
+from typing import Optional
+
+import redis.asyncio as redis
 
 import bcrypt
 
 from core.config import settings
 
 TOKEN_TTL = 3600  # seconds
-_tokens: Dict[str, float] = {}
+_redis: Optional[redis.Redis] = None
+
+def _get_redis() -> redis.Redis:
+    global _redis
+    if _redis is None:
+        _redis = redis.from_url(settings.redis_url, decode_responses=True)
+    return _redis
 
 
-def _prune() -> None:
-    now = time.time()
-    expired = [t for t, exp in _tokens.items() if exp < now]
-    for t in expired:
-        del _tokens[t]
-
-
-def generate_token() -> str:
-    _prune()
+async def generate_token() -> str:
     token = secrets.token_urlsafe(32)
-    _tokens[token] = time.time() + TOKEN_TTL
+    await _get_redis().setex(token, TOKEN_TTL, "1")
     return token
 
 
-def token_valid(token: str) -> bool:
-    _prune()
-    exp = _tokens.get(token)
-    if not exp or exp < time.time():
-        _tokens.pop(token, None)
-        return False
-    return True
+async def token_valid(token: str) -> bool:
+    return await _get_redis().exists(token) == 1
 
 
 def verify_password(password: str) -> bool:

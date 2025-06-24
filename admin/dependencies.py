@@ -4,17 +4,17 @@ from pydantic import BaseModel, ValidationError
 from . import auth
 
 
-def require_auth(request: Request) -> None:
+async def require_auth(request: Request) -> None:
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.lower().startswith("bearer "):
         token = auth_header.split()[1]
-        if auth.token_valid(token):
+        if await auth.token_valid(token):
             return
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
 
-def auth_required(request: Request):
-    require_auth(request)
+async def auth_required(request: Request):
+    await require_auth(request)
 
 
 def parse(model: type[BaseModel], request: Request):
