@@ -32,7 +32,7 @@ Request bodies are validated with Pydantic models.
 
 ### Billing daemon
 
-`scripts/billing_daemon.py` periodically charges users for their active configs and suspends them when the balance goes negative. Run it as a standalone process.
+`billing_daemon/main.py` uses Redis and RQ to periodically charge users for their active configs. It also sends Telegram notifications when a user's balance falls below 10 and suspends configs when the balance becomes negative. Run it as a standalone process.
 
 ### Database
 

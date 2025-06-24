@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Callable, Sequence
+from typing import Callable
 
 from core.exceptions import InsufficientBalanceError, UserNotFoundError
 
@@ -36,23 +36,29 @@ class BillingService:
 
         return User.from_orm(user)
 
-    async def charge_all(self) -> None:
-        """Charge all users for their active configurations."""
+    async def charge_all(self) -> list[User]:
+        """Charge all users for their active configurations.
+
+        Returns a list of users whose balance was updated."""
         async with self._uow() as repos:
-            users: Sequence[User] = await repos["users"].list()
+            db_users = await repos["users"].list()
 
-        for user in users:
+        charged: list[User] = []
+        for db_user in db_users:
             async with self._uow() as repos:
-                configs = await repos["configs"].get_active(owner_id=user.id)
+                configs = await repos["configs"].get_active(owner_id=db_user.id)
                 charge = Decimal(len(configs)) * self._cost
-                if charge:
-                    new_balance = user.balance - charge
-                    await repos["users"].update(user.id, balance=new_balance)
-                else:
+                if not charge:
                     continue
+                new_balance = db_user.balance - charge
+                updated = await repos["users"].update(db_user.id, balance=new_balance)
 
-            if new_balance <= 0 and charge:
-                await self._config_service.suspend_all(user.id)
+            if new_balance <= 0:
+                await self._config_service.suspend_all(db_user.id)
+
+            charged.append(User.from_orm(updated))
+
+        return charged
 
     async def withdraw(self, user_id: int, amount: float) -> User:
         """Deduct ``amount`` from user's balance and return updated user."""
