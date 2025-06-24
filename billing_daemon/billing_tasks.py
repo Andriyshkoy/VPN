@@ -1,36 +1,42 @@
 import asyncio
-from functools import lru_cache
-
-from aiohttp import ClientSession
-from aiogram import Bot
 
 from core.config import settings
 from core.db.unit_of_work import uow
 from core.services import BillingService
-
-
-LOW_BALANCE_THRESHOLD = 10
-
-
-@lru_cache()
-def _get_bot() -> Bot:
-    """Return a singleton Bot instance with shared HTTP session."""
-    session = ClientSession()
-    return Bot(token=settings.bot_token, session=session)
+from core.services.notifications import NotificationService
 
 
 async def _charge_all_and_notify_async() -> None:
     billing = BillingService(uow, per_config_cost=settings.per_config_cost)
-    users = await billing.charge_all()
+    charges = await billing.charge_all()
 
-    bot = _get_bot()
-    for user in users:
-        if user.balance < LOW_BALANCE_THRESHOLD:
+    notifications = NotificationService()
+    for user, charge in charges.items():
+        balance = user.balance
+        if balance <= 0:
             text = (
-                f"\u26a0\ufe0f Ваш баланс {user.balance} "
-                f"меньше {LOW_BALANCE_THRESHOLD}. Пополните счёт."
+                "\u26a0\ufe0f Ваши сервисы приостановлены, "
+                "пополните счёт."
             )
-            await bot.send_message(user.tg_id, text)
+        else:
+            week_high = charge * 24 * 7
+            week_low = charge * (24 * 7 - 1)
+            day_high = charge * 24
+            day_low = charge * 23
+
+            if week_low < balance <= week_high:
+                text = (
+                    "\u26a0\ufe0f Текущего баланса хватит на неделю, "
+                    "советую пополнить счёт."
+                )
+            elif day_low < balance <= day_high:
+                text = (
+                    "\u26a0\ufe0f Текущего баланса хватит на сутки, "
+                    "советую срочно пополнить счёт."
+                )
+            else:
+                continue
+        await notifications.enqueue(user.tg_id, text)
 
 
 def charge_all_and_notify() -> None:

@@ -36,14 +36,14 @@ class BillingService:
 
         return User.from_orm(user)
 
-    async def charge_all(self) -> list[User]:
+    async def charge_all(self) -> dict[User, Decimal]:
         """Charge all users for their active configurations.
 
-        Returns a list of users whose balance was updated."""
+        Returns a mapping of updated users to the amount charged."""
         async with self._uow() as repos:
             db_users = await repos["users"].list()
 
-        charged: list[User] = []
+        charged: dict[User, Decimal] = {}
         for db_user in db_users:
             async with self._uow() as repos:
                 configs = await repos["configs"].get_active(owner_id=db_user.id)
@@ -56,8 +56,7 @@ class BillingService:
             if new_balance <= 0:
                 await self._config_service.suspend_all(db_user.id)
 
-            charged.append(User.from_orm(updated))
-
+            charged[User.from_orm(updated)] = charge
         return charged
 
     async def withdraw(self, user_id: int, amount: float) -> User:
