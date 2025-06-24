@@ -15,8 +15,8 @@ async def _charge_all_and_notify_async() -> None:
         balance = user.balance
         if balance <= 0:
             text = (
-                "\u26a0\ufe0f Ваши сервисы приостановлены, "
-                "пополните счёт."
+                "\u26a0\ufe0f Ваши конфигурации приостановлены, "
+                "пополните счёт для возобновления работы."
             )
         else:
             week_high = charge * 24 * 7
@@ -26,13 +26,13 @@ async def _charge_all_and_notify_async() -> None:
 
             if week_low < balance <= week_high:
                 text = (
-                    "\u26a0\ufe0f Текущего баланса хватит на неделю, "
-                    "советую пополнить счёт."
+                    f"\u26a0\ufe0f Текущего баланса хватит на неделю, "
+                    f"советую пополнить счёт.\n Текущий баланс: {user.balance:.2f} руб."
                 )
             elif day_low < balance <= day_high:
                 text = (
-                    "\u26a0\ufe0f Текущего баланса хватит на сутки, "
-                    "советую срочно пополнить счёт."
+                    f"\u26a0\ufe0f Текущего баланса хватит на сутки, "
+                    f"советую срочно пополнить счёт.\n Текущий баланс: {user.balance:.2f} руб."
                 )
             else:
                 continue
