@@ -48,22 +48,14 @@ async def test_charge_and_notify(monkeypatch, sessionmaker):
 
     sent = []
 
-    class DummyBot:
+    class DummyService:
         def __init__(self, *a, **kw):
             pass
 
-        async def send_message(self, chat_id, text):
+        async def enqueue(self, chat_id, text):
             sent.append((chat_id, text))
 
-        @property
-        def session(self):
-            class S:
-                async def close(self):
-                    pass
-
-            return S()
-
-    monkeypatch.setattr(billing_tasks, "Bot", DummyBot)
+    monkeypatch.setattr(billing_tasks, "NotificationService", DummyService)
 
     user_svc = UserService(uow)
     server_svc = ServerService(uow)
@@ -80,7 +72,7 @@ async def test_charge_and_notify(monkeypatch, sessionmaker):
         cost=1,
     )
 
-    await billing.top_up(user.id, 9)
+    await billing.top_up(user.id, 30)
     await billing.create_paid_config(
         server_id=server.id,
         owner_id=user.id,
@@ -91,4 +83,4 @@ async def test_charge_and_notify(monkeypatch, sessionmaker):
 
     await billing_tasks._charge_all_and_notify_async()
 
-    assert sent and str(user.tg_id) in str(sent[0][0])
+    assert sent and "сутки" in sent[0][1]

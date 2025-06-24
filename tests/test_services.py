@@ -1,4 +1,5 @@
 import pytest
+from decimal import Decimal
 
 from core.db.unit_of_work import uow
 from core.exceptions import InsufficientBalanceError
@@ -147,6 +148,40 @@ async def test_billing(monkeypatch, sessionmaker):
 
     updated = await user_svc.get(user.id)
     assert updated.balance == 4
+
+
+@pytest.mark.asyncio
+async def test_charge_all_returns_dict(monkeypatch, sessionmaker):
+    monkeypatch.setattr("core.services.config.APIGateway", lambda *a, **kw: DummyGateway())
+
+    server_svc = ServerService(uow)
+    user_svc = UserService(uow)
+    billing = BillingService(uow, per_config_cost=2)
+
+    user = await user_svc.register(99)
+    server = await server_svc.create(
+        name="srvret",
+        ip="1.1.1.1",
+        port=22,
+        host="host",
+        location="US",
+        api_key="k",
+        cost=1,
+    )
+
+    await billing.top_up(user.id, 10)
+    await billing.create_paid_config(
+        server_id=server.id,
+        owner_id=user.id,
+        name="cfg",
+        display_name="disp",
+        creation_cost=1,
+    )
+
+    charges = await billing.charge_all()
+    assert list(charges.values()) == [Decimal(2)]
+    charged_user = next(iter(charges))
+    assert charged_user.id == user.id
 
 
 @pytest.mark.asyncio

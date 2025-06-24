@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 
 
-@dataclass
+@dataclass(frozen=True)
 class Server:
     id: int
     name: str
@@ -28,7 +28,7 @@ class Server:
         )
 
 
-@dataclass
+@dataclass(frozen=True)
 class User:
     id: int
     tg_id: int
@@ -47,7 +47,7 @@ class User:
         )
 
 
-@dataclass
+@dataclass(frozen=True)
 class Config:
     id: int
     name: str
