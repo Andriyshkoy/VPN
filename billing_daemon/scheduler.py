@@ -14,7 +14,7 @@ def bootstrap_schedule() -> None:
     queue = Queue("billing", connection=redis_conn, default_timeout=3600)
     scheduler = Scheduler(queue=queue, connection=redis_conn)
 
-    if scheduler.get_job("charge_all_job") is None:
+    if "charge_all_job" not in scheduler:
         scheduler.schedule(
             scheduled_time=datetime.utcnow(),
             func=charge_all_and_notify,

@@ -43,7 +43,7 @@ async def create_server(data: ServerCreate):
         host=data.host,
         location=data.location,
         api_key=data.api_key,
-        cost=data.cost,
+        cost=data.monthly_cost,
     )
     return serialize_dataclass(server)
 

@@ -61,7 +61,7 @@ services:
     build:
       context: .
       dockerfile: ./bot/Dockerfile
-    depends_on: [db, core, migrations]
+    depends_on: [db, core, migrations, redis]
     env_file:
       - .env
     restart: on-failure
@@ -72,7 +72,7 @@ services:
     build:
       context: .
       dockerfile: ./billing_daemon/Dockerfile
-    depends_on: [db, core, migrations]
+    depends_on: [db, core, migrations, redis]
     env_file:
       - .env
     restart: on-failure
