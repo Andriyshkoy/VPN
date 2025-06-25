@@ -4,7 +4,7 @@ import os
 import tempfile
 import uuid
 
-from aiogram import Bot, Router
+from aiogram import Bot, Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
@@ -28,7 +28,7 @@ from core.services import (
     UserService,
 )
 
-from .states import CreateConfig, RenameConfig, TopUpTelegram
+from .states import CreateConfig, RenameConfig
 
 router = Router()
 
@@ -46,8 +46,9 @@ async def setup_bot_commands(bot: Bot):
     commands = [
         BotCommand(command="start", description="Начать работу с ботом"),
         BotCommand(command="help", description="Показать справку"),
-        BotCommand(command="balance", description="Проверить баланс"),
         BotCommand(command="topup", description="Пополнить баланс"),
+        BotCommand(command="how_to_use", description="Как установить VPN"),
+        BotCommand(command="balance", description="Проверить баланс"),
         BotCommand(command="configs", description="Список конфигураций"),
         BotCommand(command="create_config", description="Создать новую конфигурацию"),
     ]
@@ -94,6 +95,57 @@ async def cmd_help(message: Message):
     await message.answer(help_text, parse_mode="HTML")
 
 
+@router.message(Command("how_to_use"))
+async def cmd_how_to_use(message: Message):
+    message = (
+        "🔐 <b>Как подключиться к VPN</b>\n"
+        "\n"
+        "Чтобы начать пользоваться VPN, нужно:\n"
+        "1. Установить VPN-клиент\n"
+        "2. Импортировать OVPN-файл (Создай его, если еще не сделал)\n"
+        "3. Подключиться\n"
+        "\n"
+        "— — —\n"
+        "\n"
+        "🖥 <b>Windows</b>\n"
+        "1. Скачай и установи "
+        "<a href=\"https://openvpn.net/client-connect-vpn-for-windows/\">OpenVPN Connect</a>\n"
+        "2. Запусти приложение и нажми <b>«+ Import Profile»</b>\n"
+        "3. Найди присланный <code>.ovpn</code>-файл\n"
+        "4. В профиле нажми <b>Connect</b> — готово\n"
+        "\n"
+        "— — —\n"
+        "\n"
+        "🍏 <b>macOS</b>\n"
+        "1. Скачай <a href=\"https://tunnelblick.net/\">Tunnelblick</a>\n"
+        "2. Установи и открой его\n"
+        "3. Дважды кликни на <code>.ovpn</code>-файл → «Импорт»\n"
+        "4. Подключайся через иконку Tunnelblick в строке меню\n"
+        "\n"
+        "— — —\n"
+        "\n"
+        "📱 <b>Android</b>\n"
+        "1. Установи "
+        "<a href=\"https://play.google.com/store/apps/details?id=net.openvpn.openvpn\">OpenVPN Connect</a>\n"
+        "2. Открой приложение → <b>«File»</b> → выбери <code>.ovpn</code>\n"
+        "3. Нажми <b>Connect</b>\n"
+        "\n"
+        "— — —\n"
+        "\n"
+        "📱 <b>iPhone / iPad</b>\n"
+        "1. Установи "
+        "<a href=\"https://apps.apple.com/app/openvpn-connect/id590379981\">OpenVPN Connect</a>\n"
+        "2. В Telegram нажми на <code>.ovpn</code> → «…» → <b>Share → Copy to OpenVPN</b>\n"
+        "3. Нажми <b>Add</b> → <b>Connect</b>\n"
+        "\n"
+        "— — —\n"
+        "\n"
+        "💬 Проблемы? Пиши @andriyshkoy — разберёмся!"
+    )
+
+    await message.answer(message, parse_mode="HTML")
+
+
 @router.message(Command("balance"))
 async def cmd_balance(message: Message):
     user = await get_or_create_user(message.from_user.id, message.from_user.username)
@@ -124,29 +176,39 @@ async def cmd_topup(message: Message):
 @router.callback_query(lambda c: c.data == "pay:crypto")
 async def pay_crypto(callback: CallbackQuery):
     await callback.message.answer(
-        "Оплата криптовалютой временно недоступна. Свяжитесь с администратором."
+        "Оплата криптовалютой скоро появится!"
     )
     await callback.answer()
+
+AVAILABLE_AMOUNTS = [100, 200, 300, 500]
 
 
 @router.callback_query(lambda c: c.data == "pay:telegram")
 async def pay_telegram(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    await callback.message.answer("Введите сумму пополнения в рублях:")
-    await state.set_state(TopUpTelegram.waiting_amount)
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"{amt} ₽", callback_data=f"topup:{amt}")]
+            for amt in AVAILABLE_AMOUNTS
+        ]
+    )
+    await callback.message.answer(
+        "Выберите сумму пополнения:",
+        reply_markup=keyboard
+    )
     await callback.answer()
 
 
-@router.message(TopUpTelegram.waiting_amount)
-async def got_topup_amount(message: Message, state: FSMContext, bot: Bot):
+@router.callback_query(F.data.startswith("topup:"))
+async def got_topup_amount(callback: CallbackQuery, bot: Bot):
     try:
-        amount = float(message.text)
-    except ValueError:
-        await message.answer("Введите числовое значение суммы.")
+        amount = float(callback.data.split(":")[1])
+        assert amount in AVAILABLE_AMOUNTS
+    except (ValueError, AssertionError):
+        await callback.answer("Некорректная сумма.", show_alert=True)
         return
 
     service = TelegramPayService(bot, settings.telegram_pay_token)
-    await service.send_invoice(message.chat.id, amount)
-    await state.clear()
+    await service.send_invoice(callback.message.chat.id, amount)
 
 
 @router.message(Command("configs"))
