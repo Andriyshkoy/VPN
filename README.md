@@ -4,14 +4,29 @@ This project implements a small VPN management system consisting of a Telegram b
 
 ## Technology stack
 
-- **Python 3** with `asyncio`
-- [**Aiogram**](https://github.com/aiogram/aiogram) for the Telegram bot
+- **Python 3.12** with `asyncio`
 - [**FastAPI**](https://fastapi.tiangolo.com/) for the admin API
-- [**SQLAlchemy**](https://www.sqlalchemy.org/) (async) as ORM
-- [**Pydantic**](https://docs.pydantic.dev/) for settings, service models and API schemas
+- [**Aiogram**](https://github.com/aiogram/aiogram) for the Telegram bot
+- [**SQLAlchemy**](https://www.sqlalchemy.org/) (async) with [**Alembic**](https://alembic.sqlalchemy.org/) for migrations
+- [**Pydantic**](https://docs.pydantic.dev/) for settings and API schemas
+- [**PostgreSQL**](https://www.postgresql.org/) as the database
+- [**Redis**](https://redis.io/) with [**RQ**](https://python-rq.org/) for background tasks
+- [**httpx**](https://www.python-httpx.org/) for talking to VPN servers
+- [**React**](https://react.dev/) + [**Vite**](https://vitejs.dev/) for the admin UI
+- [**Nginx**](https://nginx.org/) as a reverse proxy
 - [**Cryptography**](https://cryptography.io/) (Fernet) to store server API keys encrypted
-- [**httpx**](https://www.python-httpx.org/) for talking to remote VPN servers
 - `pytest` with `pytest-asyncio` for the tests
+- Docker and Docker Compose for deployment
+
+## Features
+
+- Manage multiple VPN servers through a unified REST API
+- Telegram bot for users to register, pay via Telegram Pay and generate config files
+- Web-based admin panel with React for managing servers, users and configs
+- Billing daemon that charges users via Redis/RQ tasks, sends low-balance notifications and suspends unpaid configs
+- Config files are generated on demand and removed after sending
+- Server API keys are stored encrypted using Fernet
+- Nginx reverse proxy exposes the admin API and frontend on a single port
 
 ## Components
 
@@ -21,36 +36,31 @@ Located in [`bot/`](bot). It allows users to register, view balance and create V
 
 ### Admin API
 
-Located in [`admin/`](admin). It exposes a small JSON API to manage servers, users and configs. Endpoints are protected either by an `X-API-Key` or by a login token obtained from `/login`. Start it with:
+Located in [`admin/`](admin). It exposes a JSON REST API to manage servers, users and configs. Endpoints are protected either by an `X-API-Key` or by a login token obtained from `/login`. When running with Docker Compose the service listens on port 8000 and is proxied through Nginx at `http://localhost:14081/api`. Request bodies are validated with Pydantic models.
 
-```bash
-uvicorn admin.app:app --host 0.0.0.0 --port 8000
-```
+### Admin frontend
 
-The API listens on `http://localhost:8000`.
-Request bodies are validated with Pydantic models.
+The React + Vite application in [`admin_frontend/`](admin_frontend) provides a web interface for the admin API. It is served through the Nginx container together with the API endpoints.
 
 ### Billing daemon
 
-`billing_daemon/main.py` uses Redis and RQ to periodically charge users for their active configs. It also sends Telegram notifications when a user's balance falls below 10 and suspends configs when the balance becomes negative. Run it as a standalone process.
+`billing_daemon/main.py` uses Redis and RQ to periodically charge users for their active configs. It also sends Telegram notifications when a user's balance falls below 10 and suspends configs when the balance becomes negative. The worker and scheduler are provided as separate Docker services.
 
 ### Database
 
-Async SQLAlchemy models live under [`core/db`](core/db). Use `scripts/init_db.py` once to create the schema:
+Async SQLAlchemy models live under [`core/db`](core/db). Initialize the schema using the bot container:
 
 ```bash
-python scripts/init_db.py
+docker compose run --rm bot python scripts/init_db.py
 ```
 
 ## Configuration
 
 All settings are read from environment variables (see `core/config.py`).
-Create a `.env` file (see `.env.example`) to provide them.
-When using Docker Compose the `DATABASE_URL` value is generated automatically
-from the PostgreSQL credentials, otherwise set it manually:
+Create a `.env` file (see `.env.example`) to provide them. Docker Compose
+derives `DATABASE_URL` automatically from the PostgreSQL credentials:
 
-- `DATABASE_URL` – database connection string (only required when running
-  without Docker Compose)
+- `DATABASE_URL` – database connection string
 - `ENCRYPTION_KEY` – Fernet key used to encrypt server API keys
 - `BOT_TOKEN` – Telegram bot token
 - `PER_CONFIG_COST` – how much to charge per active config (default `1.0`)
@@ -99,5 +109,5 @@ docker compose up -d
 Copy `.env.example` to `.env` and adjust the values (such as `BOT_TOKEN`,
 `ENCRYPTION_KEY`, `POSTGRES_USER` and `POSTGRES_PASSWORD`) for your production
 setup. Docker Compose will pick them up automatically and derive `DATABASE_URL`
-from them. The admin API will be available on
-port 5000.
+from them. The Nginx container exposes the stack on
+`http://localhost:14081` with the admin API available under `/api`.
