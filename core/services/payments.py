@@ -1,11 +1,13 @@
 from __future__ import annotations
+import json
+from typing import Optional
 
 from aiogram import Bot
 from aiogram.types import LabeledPrice
 
 
 class TelegramPayService:
-    """Service to send invoices via Telegram Payments."""
+    """Service to send invoices via Telegram Payments with fiscalization"""
 
     def __init__(self, bot: Bot, provider_token: str) -> None:
         self._bot = bot
@@ -21,6 +23,24 @@ class TelegramPayService:
         payload: str = "topup",
         currency: str = "RUB",
     ) -> None:
+        receipt_data = {
+            "receipt": {
+                "items": [
+                    {
+                        "description": title[:128],
+                        "quantity": "1",
+                        "amount": {
+                            "value": f"{amount:.2f}",
+                            "currency": currency
+                        },
+                        "vat_code": 1,
+                    }
+                ]
+            }
+        }
+
+        provider_data = json.dumps(receipt_data, ensure_ascii=False)
+
         prices = [LabeledPrice(label=title, amount=int(amount * 100))]
         await self._bot.send_invoice(
             chat_id=chat_id,
@@ -30,6 +50,9 @@ class TelegramPayService:
             provider_token=self._token,
             currency=currency,
             prices=prices,
+            provider_data=provider_data,
+            send_email_to_provider=True,
+            need_email=True
         )
 
 
