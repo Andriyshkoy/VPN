@@ -15,6 +15,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    PreCheckoutQuery,
 )
 
 from core.config import settings
@@ -97,7 +98,7 @@ async def cmd_help(message: Message):
 
 @router.message(Command("how_to_use"))
 async def cmd_how_to_use(message: Message):
-    message = (
+    help_text = (
         "🔐 <b>Как подключиться к VPN</b>\n"
         "\n"
         "Чтобы начать пользоваться VPN, нужно:\n"
@@ -143,7 +144,7 @@ async def cmd_how_to_use(message: Message):
         "💬 Проблемы? Пиши @andriyshkoy — разберёмся!"
     )
 
-    await message.answer(message, parse_mode="HTML")
+    await message.answer(help_text, parse_mode="HTML")
 
 
 @router.message(Command("balance"))
@@ -231,6 +232,21 @@ async def cmd_configs(message: Message):
         )
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer("Ваши конфигурации:", reply_markup=kb)
+
+
+@router.pre_checkout_query()
+async def process_pre_checkout_query(pcq: PreCheckoutQuery, bot: Bot):
+    await bot.answer_pre_checkout_query(pcq.id, ok=True)
+
+
+@router.message(F.successful_payment)
+async def successful_payment_handler(message: Message) -> None:
+    qty = message.successful_payment.total_amount / 100
+    user = await get_or_create_user(message.from_user.id, message.from_user.username)
+    await billing_service.top_up(user.id, qty)
+    await message.answer(
+        f"✅ Платёж успешно завершён! Баланс пополнен на {qty} рублей."
+    )
 
 
 @router.message(Command("create_config"))

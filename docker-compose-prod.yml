@@ -1,15 +1,6 @@
+version: "3.9"
+
 services:
-  base:
-    image: andriyshkoy/vpn-base:latest
-
-  core:
-    image: andriyshkoy/vpn-core:latest
-    depends_on: [base]
-    env_file:
-      - .env
-    volumes:
-      - core_code:/app/core
-
   db:
     image: postgres:16
     environment:
@@ -28,6 +19,18 @@ services:
     image: redis:7
     restart: unless-stopped
 
+  base:
+    image: andriyshkoy/vpn-base:latest
+
+  core:
+    image: andriyshkoy/vpn-core:latest
+    depends_on:
+      - base
+    env_file:
+      - .env
+    volumes:
+      - core_code:/app/core
+
   migrations:
     image: andriyshkoy/vpn-migrations:latest
     depends_on:
@@ -42,7 +45,10 @@ services:
 
   admin:
     image: andriyshkoy/vpn-admin:latest
-    depends_on: [db, core, migrations]
+    depends_on:
+      - db
+      - core
+      - migrations
     env_file:
       - .env
     restart: on-failure
@@ -51,31 +57,56 @@ services:
 
   bot:
     image: andriyshkoy/vpn-bot:latest
-    depends_on: [db, core, migrations]
+    depends_on:
+      - db
+      - core
+      - migrations
+      - redis
     env_file:
       - .env
     restart: on-failure
     volumes:
       - core_code:/app/core
 
-  billing_daemon:
+  rq_worker:
     image: andriyshkoy/vpn-billing:latest
-    depends_on: [db, core, migrations]
+    command: ./billing_daemon/entrypoint_worker.sh
+    depends_on:
+      - redis
+      - core
+      - db
+      - migrations
     env_file:
       - .env
-    restart: on-failure
+    restart: always
+    volumes:
+      - core_code:/app/core
+
+  rq_scheduler:
+    image: andriyshkoy/vpn-billing:latest
+    command: ./billing_daemon/entrypoint_scheduler.sh
+    depends_on:
+      - redis
+      - core
+      - db
+      - migrations
+    env_file:
+      - .env
+    restart: always
     volumes:
       - core_code:/app/core
 
   admin_frontend:
     image: andriyshkoy/vpn-admin-frontend:latest
-    depends_on: [admin]
+    depends_on:
+      - admin
     env_file:
       - ./admin_frontend/.env
 
   nginx:
     image: andriyshkoy/vpn-nginx:latest
-    depends_on: [admin_frontend]
+    depends_on:
+      - admin_frontend
     ports:
       - "14081:80"
 

@@ -18,6 +18,8 @@ def main() -> None:
             scheduled_time=datetime.now(),
             func=charge_all_and_notify,
             id="charge_all_job",
+            interval=settings.billing_interval,
+            repeat=None,
         )
 
     scheduler.run()
