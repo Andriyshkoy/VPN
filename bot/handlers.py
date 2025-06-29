@@ -4,8 +4,8 @@ import os
 import tempfile
 import uuid
 
-from aiogram import Bot, Router, F
-from aiogram.filters import Command
+from aiogram import Bot, F, Router
+from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     BotCommand,
@@ -39,8 +39,9 @@ config_service = ConfigService(uow)
 billing_service = BillingService(uow, per_config_cost=settings.per_config_cost)
 
 
-async def get_or_create_user(tg_id: int, username: str | None):
-    return await user_service.register(tg_id, username=username)
+async def get_or_create_user(tg_id: int, username: str, ref_id: str | None = None):
+    ref_id = int(ref_id) if ref_id and ref_id.isdigit() else None
+    return await user_service.register(tg_id, username=username, ref_id=ref_id)
 
 
 async def setup_bot_commands(bot: Bot):
@@ -55,9 +56,11 @@ async def setup_bot_commands(bot: Bot):
     ]
     await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
 
+
 @router.message(Command("start"))
-async def cmd_start(message: Message):
-    await get_or_create_user(message.from_user.id, message.from_user.username)
+async def cmd_start(message: Message, command: CommandObject | None = None):
+    ref_id = command.args if command and command.args else None
+    await get_or_create_user(message.from_user.id, message.from_user.username, ref_id=ref_id)
     welcome_text = (
         "👋 <b>Добро пожаловать в VPN бот!</b>\n\n"
         "🔐 <b>Что такое OVPN?</b>\n"
@@ -78,6 +81,26 @@ async def cmd_start(message: Message):
         "ℹ️ Для подробной информации используйте команду /help"
     )
     await message.answer(welcome_text, parse_mode="HTML")
+
+
+@router.message(Command("refferals"))
+async def cmd_refferals(message: Message):
+    await message.answer(
+        f"📊 <b>Ваши рефералы</b>\n\n"
+        f"Вы можете пригласить друзей и получить бонусы за их использование сервиса. "
+        f"Ваши рефералы — это пользователи, которые зарегистрировались по вашей ссылке.\n\n"
+        f"Ваша реферальная ссылка: \n<code>https://t.me/andriyshkoy_devbot?start={message.from_user.id}</code>\n\n"
+    )
+    user = await get_or_create_user(message.from_user.id, message.from_user.username)
+    referrals = await user_service.get_referrals(user.id, limit=10, offset=0)
+    if not referrals:
+        await message.answer("У вас нет рефералов.")
+        return
+    await message.answer(f"На данный момент у вас {user_service.count_referrals(user.id)} рефералов.\n\n")
+    referral_text = "Ваши рефералы:\n\n"
+    for ref in referrals:
+        referral_text += f"• {ref.username} (ID: {ref.tg_id})\n"
+    await message.answer(referral_text)
 
 
 @router.message(Command("help"))
@@ -162,7 +185,7 @@ async def cmd_topup(message: Message):
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🪙 Пополнить криптовалютой", 
+                    text="🪙 Пополнить криптовалютой",
                     callback_data="pay:crypto"
                 )
             ],
@@ -288,10 +311,11 @@ async def choose_server(callback: CallbackQuery, state: FSMContext):
     server_id = int(callback.data.split(":", 1)[1])
     await state.update_data(server_id=server_id)
     await callback.message.answer(
-        "Введите название для конфигурации.\n "
-        "Оно будет использоваться для идентификации в вашем VPN-клиенте, "
-        "а также будет отображаться в списке конфигураций. "
-        "Название можно будет изменить позже.")
+        "📝 *Введите название для конфигурации*\n\n"
+        "Это имя будет использоваться для идентификации вашей конфигурации в VPN-клиенте, "
+        "а также будет отображаться в списке ваших конфигураций.\n\n"
+        "✏️ Вы всегда сможете изменить его позже."
+    )
     await state.set_state(CreateConfig.entering_name)
     await callback.answer()
 
@@ -342,6 +366,10 @@ async def got_name(message: Message, state: FSMContext, bot: Bot):
         except OSError:
             pass
     await message.answer("Конфигурация создана")
+    await message.answer(
+        "Вы можете управлять конфигурацией через команду /configs или "
+        "Ознакомиться с инструкцией по подключению к VPN с помощью команды /how_to_use."
+    )
     await state.clear()
 
 
