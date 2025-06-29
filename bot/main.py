@@ -6,11 +6,10 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from .notifications import notifications_listener
-
 from core.config import settings
 
 from .handlers import router, setup_bot_commands
+from .notifications import notifications_listener
 
 
 def setup_bot() -> Dispatcher:

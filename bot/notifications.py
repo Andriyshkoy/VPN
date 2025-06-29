@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+
 from aiogram import Bot
 
 from core.services.notifications import NotificationService

@@ -1,14 +1,14 @@
 import secrets
 from typing import Optional
 
-import redis.asyncio as redis
-
 import bcrypt
+import redis.asyncio as redis
 
 from core.config import settings
 
 TOKEN_TTL = 3600  # seconds
 _redis: Optional[redis.Redis] = None
+
 
 def _get_redis() -> redis.Redis:
     global _redis

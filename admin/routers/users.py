@@ -2,10 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from core.config import settings
 from core.db.unit_of_work import uow
-from core.services import UserService, BillingService
-from ..schemas import UserCreate, UserListParams, UserUpdate, TopUp
-from ..utils import serialize_dataclass
+from core.services import BillingService, UserService
+
 from ..dependencies import auth_required
+from ..schemas import TopUp, UserCreate, UserListParams, UserUpdate
+from ..utils import serialize_dataclass
 
 router = APIRouter(
     prefix="/api/users",

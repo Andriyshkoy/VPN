@@ -1,8 +1,9 @@
 from fastapi import APIRouter, HTTPException, status
 
 from core.config import Settings
-from ..schemas import Login
+
 from .. import auth as auth_utils
+from ..schemas import Login
 
 router = APIRouter()
 

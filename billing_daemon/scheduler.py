@@ -4,8 +4,9 @@ from redis import Redis
 from rq import Queue
 from rq_scheduler import Scheduler
 
-from .billing_tasks import charge_all_and_notify
 from core.config import settings
+
+from .billing_tasks import charge_all_and_notify
 
 
 def main() -> None:

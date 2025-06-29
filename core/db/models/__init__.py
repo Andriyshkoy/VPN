@@ -1,4 +1,3 @@
-# core/db/models/__init__.py
 from .config import VPN_Config
 from .server import Server
 from .user import User

@@ -1,11 +1,11 @@
-from typing import Optional, Annotated
+from typing import Annotated, Optional
 
 from pydantic import (
     BaseModel,
     Field,
+    NonNegativeInt,
     PositiveFloat,
     PositiveInt,
-    NonNegativeInt,
 )
 
 Port = Annotated[int, Field(ge=1, le=65_535)]

@@ -1,4 +1,3 @@
-# core/db/repo/base.py
 from typing import Generic, Sequence, TypeVar
 
 from sqlalchemy import delete, select

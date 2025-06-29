@@ -1,4 +1,3 @@
-# core/db/repo/config.py
 from datetime import datetime
 from typing import Sequence
 

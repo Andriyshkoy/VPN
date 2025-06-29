@@ -5,12 +5,11 @@ from core.config import settings
 from core.db.unit_of_work import uow
 from core.services import BillingService, ConfigService, ServerService, UserService
 
+from . import exception_handlers
 from .routers import auth as auth_router
+from .routers import configs as config_router
 from .routers import servers as server_router
 from .routers import users as user_router
-from .routers import configs as config_router
-from . import exception_handlers
-from .dependencies import parse
 
 app = FastAPI()
 

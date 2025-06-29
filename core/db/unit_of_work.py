@@ -1,5 +1,3 @@
-# core/db/unit_of_work.py
-
 from contextlib import asynccontextmanager
 
 from . import async_session
