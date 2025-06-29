@@ -5,6 +5,7 @@ import types
 import pytest
 
 import bot.handlers as handlers
+import bot.handlers.base as handlers_base
 
 
 class DummyMessage:
@@ -71,7 +72,9 @@ async def test_tempfile_used(monkeypatch):
         return b"data"
 
     monkeypatch.setattr(handlers, "get_or_create_user", fake_get_user)
+    monkeypatch.setattr(handlers_base, "get_or_create_user", fake_get_user)
     monkeypatch.setattr(handlers.billing_service, "create_paid_config", fake_create_config)
+    monkeypatch.setattr(handlers.configs, "get_or_create_user", fake_get_user)
     monkeypatch.setattr(handlers.config_service, "download_config", fake_download_config)
     monkeypatch.setattr(handlers, "FSInputFile", DummyFSInputFile)
 
@@ -82,7 +85,7 @@ async def test_tempfile_used(monkeypatch):
     assert os.path.commonpath([sent_path, tmp_dir]) == tmp_dir
     assert not os.path.exists(sent_path)
     assert state.cleared
-    assert msg.answers[-1] == "Конфигурация создана"
+    assert msg.answers[-2] == "Конфигурация создана"
 
 
 @pytest.mark.asyncio
@@ -98,8 +101,10 @@ async def test_service_error(monkeypatch):
         raise handlers.ServiceError("boom")
 
     monkeypatch.setattr(handlers, "get_or_create_user", fake_get_user)
+    monkeypatch.setattr(handlers_base, "get_or_create_user", fake_get_user)
     monkeypatch.setattr(handlers.billing_service, "create_paid_config", fake_create_config)
 
+    monkeypatch.setattr(handlers.configs, "get_or_create_user", fake_get_user)
     await handlers.got_name(msg, state, bot)
 
     assert state.cleared
@@ -143,6 +148,8 @@ async def test_show_config_contains_download(monkeypatch):
         return types.SimpleNamespace(id=1)
 
     monkeypatch.setattr(handlers, "get_or_create_user", fake_get_user)
+    monkeypatch.setattr(handlers_base, "get_or_create_user", fake_get_user)
+    monkeypatch.setattr(handlers.configs, "get_or_create_user", fake_get_user)
     async def fake_get(*a, **kw):
         return cfg
 
@@ -182,8 +189,10 @@ async def test_download_tempfile_used(monkeypatch):
         return types.SimpleNamespace(id=1)
 
     monkeypatch.setattr(handlers, "get_or_create_user", fake_get_user)
+    monkeypatch.setattr(handlers_base, "get_or_create_user", fake_get_user)
     async def fake_get_config(*a, **kw):
         return cfg
+    monkeypatch.setattr(handlers.configs, "get_or_create_user", fake_get_user)
 
     async def fake_download(*a, **kw):
         return b"data"
@@ -232,6 +241,8 @@ async def test_got_new_name(monkeypatch):
         return cfg
 
     monkeypatch.setattr(handlers, "get_or_create_user", fake_get_user)
+    monkeypatch.setattr(handlers_base, "get_or_create_user", fake_get_user)
+    monkeypatch.setattr(handlers.configs, "get_or_create_user", fake_get_user)
     monkeypatch.setattr(handlers.config_service, "get", fake_get)
     monkeypatch.setattr(handlers.config_service, "rename_config", fake_rename)
 
