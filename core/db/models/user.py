@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, DateTime, Numeric, String, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.db import Base
@@ -26,3 +25,10 @@ class User(Base):
         back_populates="owner",
         cascade="all, delete-orphan",
     )
+    # Кто пригласил этого пользователя
+    referred_by_id: Mapped[int | None] = mapped_column(ForeignKey("user.id"),
+                                                       nullable=True, default=None, index=True)
+    referred_by: Mapped["User"] = relationship(back_populates="referrals", remote_side="User.id")
+
+    # Кого пригласил этот пользователь
+    referrals: Mapped[list["User"]] = relationship(back_populates="referred_by")

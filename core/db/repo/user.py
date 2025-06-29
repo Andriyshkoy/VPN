@@ -1,5 +1,3 @@
-# core/db/repo/user.py
-
 from typing import Sequence
 
 from sqlalchemy import select, update
@@ -25,7 +23,20 @@ class UserRepo(BaseRepo[User]):
         """
         user = await self.get(tg_id=tg_id)
         if user:
+            # If user already exists and new username is provided, update it
+            if 'username' in kwargs and kwargs['username'] != user.username:
+                user.username = kwargs['username']
+                return await self.update(user.id, username=user.username)
             return user
+
+        # If user does not exist, create a new one
+        if "ref_id" in kwargs and kwargs["ref_id"] is not None:
+            # If ref_id is provided, set referred_by_id to the user with that ID
+            ref_user = await self.get(tg_id=kwargs["ref_id"])
+            if ref_user:
+                kwargs["referred_by_id"] = ref_user.id
+            del kwargs["ref_id"]
+
         return await self.add(self.model(tg_id=tg_id, **kwargs))
 
     async def search_by_username(self, query: str, limit: int = 20) -> Sequence[User]:
@@ -58,3 +69,51 @@ class UserRepo(BaseRepo[User]):
         result = await self.session.execute(stmt)
         await self.session.flush()
         return result.scalar_one_or_none()
+
+    async def get_referrals(self, user_id: int, limit: int = 10, offset: int = 0) -> Sequence[User]:
+        """
+        Get all users referred by a specific user.
+
+        Args:
+            user_id: ID of the user whose referrals are to be fetched
+
+        Returns:
+            Sequence of users referred by the specified user
+        """
+        stmt = (
+            select(self.model)
+            .where(self.model.referred_by_id == user_id)
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await self.session.scalars(stmt)
+        return result.all()
+
+    async def count_referrals(self, user_id: int) -> int:
+        """
+        Count the number of users referred by a specific user.
+
+        Args:
+            user_id: ID of the user whose referrals are to be counted
+
+        Returns:
+            Number of users referred by the specified user
+        """
+        stmt = select(self.model).where(self.model.referred_by_id == user_id)
+        result = await self.session.execute(stmt)
+        return result.rowcount
+
+    async def get_refferer(self, user_id: int) -> User | None:
+        """
+        Get the user who referred the specified user.
+
+        Args:
+            user_id: ID of the user to find the referrer for
+
+        Returns:
+            User object of the referrer or None if not found
+        """
+        user = await self.get(id=user_id)
+        if user and user.referred_by_id:
+            return await self.get(id=user.referred_by_id)
+        return None

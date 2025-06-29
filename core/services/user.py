@@ -75,3 +75,20 @@ class UserService:
                 return None, []
             configs = await repos["configs"].list(owner_id=user_id)
             return User.from_orm(user), [Config.from_orm(c) for c in configs]
+
+    async def get_referrals(self, user_id: int, limit: int = 10, offset: int = 0) -> list[User]:
+        """Get all users referred by a specific user."""
+        async with self._uow() as repos:
+            referrals = await repos["users"].get_referrals(user_id, limit, offset)
+            return [User.from_orm(u) for u in referrals]
+
+    async def count_referrals(self, user_id: int) -> int:
+        """Count the number of users referred by a specific user."""
+        async with self._uow() as repos:
+            return await repos["users"].count_referrals(user_id)
+
+    async def get_refferer(self, user_id: int) -> User | None:
+        """Get the user who referred the specified user."""
+        async with self._uow() as repos:
+            refferer = await repos["users"].get_refferer(user_id)
+            return User.from_orm(refferer) if refferer else None

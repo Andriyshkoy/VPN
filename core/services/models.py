@@ -41,7 +41,7 @@ class User:
         return cls(
             id=obj.id,
             tg_id=obj.tg_id,
-            username=obj.username,
+            username=obj.username or 'Unknown',
             created=obj.created,
             balance=obj.balance,
         )
