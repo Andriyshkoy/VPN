@@ -70,7 +70,7 @@ async def _send_referrals(target: Message | CallbackQuery, user_id: int, tg_id: 
     text = (
         "📊 <b>Ваши рефералы</b>\n\n"
         "Приглашайте друзей и получайте бонусы!\n"
-        f"Ваша реферальная ссылка:\n<code>https://t.me/andriyshkoy_devbot?start={tg_id}</code>\n\n"
+        f"Ваша реферальная ссылка:\n<code>https://t.me/andriyshkoy_vpn_bot?start={tg_id}</code>\n\n"
     )
 
     if not referrals:
