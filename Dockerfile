@@ -8,6 +8,7 @@ ENV PIP_NO_CACHE_DIR=1 \
     PYTHONPATH=/app
 
 COPY requirements.txt .
+COPY core ./core
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential gcc \

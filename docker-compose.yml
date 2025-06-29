@@ -1,19 +1,4 @@
 services:
-  base:
-    build:
-      context: .
-      dockerfile: ./Dockerfile
-  
-  core:
-    build:
-      context: .
-      dockerfile: ./core/Dockerfile
-    depends_on: [base]
-    env_file:
-      - .env
-    volumes:
-      - core_code:/app/core
-
   db:
     image: postgres:16
     environment:
@@ -39,58 +24,46 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      base:
-        condition: service_started
     env_file:
       - .env
-    volumes:
-      - core_code:/app/core
 
   admin:
     build:
       context: .
       dockerfile: ./admin/Dockerfile
-    depends_on: [db, core, migrations]
+    depends_on: [db, migrations]
     env_file:
       - .env
     restart: on-failure
-    volumes:
-      - core_code:/app/core
 
   bot:
     build:
       context: .
       dockerfile: ./bot/Dockerfile
-    depends_on: [db, core, migrations, redis]
+    depends_on: [db, migrations, redis]
     env_file:
       - .env
     restart: on-failure
-    volumes:
-      - core_code:/app/core
     
   rq_worker:
     build:
       context: .
       dockerfile: ./billing_daemon/Dockerfile
     command: ./billing_daemon/entrypoint_worker.sh
-    depends_on: [redis, core, db, migrations]
+    depends_on: [redis, db, migrations]
     env_file:
       - .env
     restart: always
-    volumes:
-      - core_code:/app/core
 
   rq_scheduler:
     build:
       context: .
       dockerfile: ./billing_daemon/Dockerfile
     command: ./billing_daemon/entrypoint_scheduler.sh
-    depends_on: [redis, core, db, migrations]
+    depends_on: [redis, db, migrations]
     env_file:
       - .env
     restart: always
-    volumes:
-      - core_code:/app/core
 
   admin_frontend:
     build:
@@ -108,4 +81,3 @@ services:
   
 volumes:
   db_data:
-  core_code:
