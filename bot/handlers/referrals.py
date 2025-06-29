@@ -9,7 +9,7 @@ from aiogram.types import (
 
 from .base import REFERRALS_PER_PAGE, get_or_create_user, router, user_service
 
-__all__ = ["cmd_refferals", "paginate_referrals"]
+__all__ = ["cmd_referrals", "paginate_referrals"]
 
 
 async def _send_referrals(target: Message | CallbackQuery, user_id: int, tg_id: int, page: int = 0) -> None:
@@ -20,7 +20,7 @@ async def _send_referrals(target: Message | CallbackQuery, user_id: int, tg_id: 
     text = (
         "📊 <b>Ваши рефералы</b>\n\n"
         "Приглашайте друзей и получайте бонусы!\n"
-        f"Ваша реферальная ссылка:\n<code>https://t.me/andriyshkoy_vpn_bot?start={tg_id}</code>\n\n"
+        f"Ваша реферальная ссылка (Нажмите чтобы скопировать):\n\n<code>https://t.me/andriyshkoy_vpn_bot?start={tg_id}</code>\n\n"
     )
 
     if not referrals:
@@ -45,8 +45,8 @@ async def _send_referrals(target: Message | CallbackQuery, user_id: int, tg_id: 
         await target.answer()
 
 
-@router.message(Command("refferals"))
-async def cmd_refferals(message: Message) -> None:
+@router.message(Command("referrals"))
+async def cmd_referrals(message: Message) -> None:
     user = await get_or_create_user(message.from_user.id, message.from_user.username)
     await _send_referrals(message, user.id, message.from_user.id, page=0)
 

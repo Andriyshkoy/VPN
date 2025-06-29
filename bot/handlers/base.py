@@ -32,6 +32,6 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="balance", description="Проверить баланс"),
         BotCommand(command="configs", description="Список конфигураций"),
         BotCommand(command="create_config", description="Создать новую конфигурацию"),
-        BotCommand(command="refferals", description="Реферальная программа"),
+        BotCommand(command="referrals", description="Реферальная программа"),
     ]
     await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
