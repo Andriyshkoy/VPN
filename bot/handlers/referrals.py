@@ -1,10 +1,16 @@
 from aiogram import F
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.filters import Command
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
-from .base import router, user_service, get_or_create_user, REFERRALS_PER_PAGE
+from .base import REFERRALS_PER_PAGE, get_or_create_user, router, user_service
 
 __all__ = ["cmd_refferals", "paginate_referrals"]
+
 
 async def _send_referrals(target: Message | CallbackQuery, user_id: int, tg_id: int, page: int = 0) -> None:
     total = await user_service.count_referrals(user_id)

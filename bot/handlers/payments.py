@@ -1,12 +1,18 @@
 from aiogram import F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, PreCheckoutQuery
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    PreCheckoutQuery,
+)
 
 from core.config import settings
 from core.services import TelegramPayService
 
-from .base import router, billing_service, AVAILABLE_AMOUNTS, get_or_create_user
+from .base import AVAILABLE_AMOUNTS, billing_service, get_or_create_user, router
 
 __all__ = [
     "cmd_topup",

@@ -1,10 +1,10 @@
-from aiogram import Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
-from .base import router, get_or_create_user
+from .base import get_or_create_user, router
 
 __all__ = ["cmd_start", "cmd_help", "cmd_how_to_use", "cmd_balance"]
+
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, command: CommandObject | None = None) -> None:

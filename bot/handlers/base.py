@@ -5,7 +5,7 @@ from aiogram.types import BotCommand, BotCommandScopeDefault
 
 from core.config import settings
 from core.db.unit_of_work import uow
-from core.services import BillingService, ConfigService, ServerService, TelegramPayService, UserService
+from core.services import BillingService, ConfigService, ServerService, UserService
 
 router = Router()
 
@@ -17,9 +17,11 @@ billing_service = BillingService(uow, per_config_cost=settings.per_config_cost)
 REFERRALS_PER_PAGE = 10
 AVAILABLE_AMOUNTS = [100, 200, 300, 500]
 
+
 async def get_or_create_user(tg_id: int, username: str, ref_id: str | None = None):
     ref_id = int(ref_id) if ref_id and ref_id.isdigit() else None
     return await user_service.register(tg_id, username=username, ref_id=ref_id)
+
 
 async def setup_bot_commands(bot: Bot) -> None:
     commands = [
