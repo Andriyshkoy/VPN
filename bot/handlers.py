@@ -38,6 +38,9 @@ server_service = ServerService(uow)
 config_service = ConfigService(uow)
 billing_service = BillingService(uow, per_config_cost=settings.per_config_cost)
 
+# How many referrals to show per page
+REFERRALS_PER_PAGE = 5
+
 
 async def get_or_create_user(tg_id: int, username: str, ref_id: str | None = None):
     ref_id = int(ref_id) if ref_id and ref_id.isdigit() else None
@@ -53,8 +56,43 @@ async def setup_bot_commands(bot: Bot):
         BotCommand(command="balance", description="Проверить баланс"),
         BotCommand(command="configs", description="Список конфигураций"),
         BotCommand(command="create_config", description="Создать новую конфигурацию"),
+        BotCommand(command="refferals", description="Реферальная программа"),
     ]
     await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+
+
+async def _send_referrals(target: Message | CallbackQuery, user_id: int, tg_id: int, page: int = 0) -> None:
+    """Send a paginated list of referrals to either a message or callback."""
+    total = await user_service.count_referrals(user_id)
+    offset = page * REFERRALS_PER_PAGE
+    referrals = await user_service.get_referrals(user_id, limit=REFERRALS_PER_PAGE, offset=offset)
+
+    text = (
+        "📊 <b>Ваши рефералы</b>\n\n"
+        "Приглашайте друзей и получайте бонусы!\n"
+        f"Ваша реферальная ссылка:\n<code>https://t.me/andriyshkoy_devbot?start={tg_id}</code>\n\n"
+    )
+
+    if not referrals:
+        text += "У вас нет рефералов."
+        markup = None
+    else:
+        text += f"Всего: {total}\n\n"
+        for ref in referrals:
+            name = f"@{ref.username}" if ref.username else f"ID: {ref.tg_id}"
+            text += f"• {name}\n"
+
+        buttons = []
+        if page > 0:
+            buttons.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"refs:{page-1}"))
+        if offset + REFERRALS_PER_PAGE < total:
+            buttons.append(InlineKeyboardButton(text="Вперёд ➡️", callback_data=f"refs:{page+1}"))
+        markup = InlineKeyboardMarkup(inline_keyboard=[buttons]) if buttons else None
+
+    send_method = target.answer if isinstance(target, Message) else target.message.edit_text
+    await send_method(text, reply_markup=markup, parse_mode="HTML")
+    if isinstance(target, CallbackQuery):
+        await target.answer()
 
 
 @router.message(Command("start"))
@@ -77,7 +115,9 @@ async def cmd_start(message: Message, command: CommandObject | None = None):
         "• /configs — список ваших конфигураций\n"
         "• /balance — проверить баланс\n"
         "• /topup — пополнить баланс\n"
-        "• /how_to_use — инструкция по подключению к VPN\n\n"
+        "• /how_to_use — инструкция по подключению к VPN\n"
+        "• /refferals — реферальная программа\n\n"
+        "👥 Приглашайте друзей и получайте бонусы — используйте /refferals для ссылки\n"
         "ℹ️ Для подробной информации используйте команду /help"
     )
     await message.answer(welcome_text, parse_mode="HTML")
@@ -85,22 +125,19 @@ async def cmd_start(message: Message, command: CommandObject | None = None):
 
 @router.message(Command("refferals"))
 async def cmd_refferals(message: Message):
-    await message.answer(
-        f"📊 <b>Ваши рефералы</b>\n\n"
-        f"Вы можете пригласить друзей и получить бонусы за их использование сервиса. "
-        f"Ваши рефералы — это пользователи, которые зарегистрировались по вашей ссылке.\n\n"
-        f"Ваша реферальная ссылка: \n<code>https://t.me/andriyshkoy_devbot?start={message.from_user.id}</code>\n\n"
-    )
     user = await get_or_create_user(message.from_user.id, message.from_user.username)
-    referrals = await user_service.get_referrals(user.id, limit=10, offset=0)
-    if not referrals:
-        await message.answer("У вас нет рефералов.")
+    await _send_referrals(message, user.id, message.from_user.id, page=0)
+
+
+@router.callback_query(F.data.startswith("refs:"))
+async def paginate_referrals(callback: CallbackQuery):
+    try:
+        page = int(callback.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        await callback.answer("Некорректные данные", show_alert=True)
         return
-    await message.answer(f"На данный момент у вас {user_service.count_referrals(user.id)} рефералов.\n\n")
-    referral_text = "Ваши рефералы:\n\n"
-    for ref in referrals:
-        referral_text += f"• {ref.username} (ID: {ref.tg_id})\n"
-    await message.answer(referral_text)
+    user = await get_or_create_user(callback.from_user.id, callback.from_user.username)
+    await _send_referrals(callback, user.id, callback.from_user.id, page=page)
 
 
 @router.message(Command("help"))
@@ -113,7 +150,8 @@ async def cmd_help(message: Message):
         "• /balance - проверить ваш текущий баланс\n"
         "• /topup - информация о пополнении баланса\n"
         "• /configs - список ваших активных VPN конфигураций\n"
-        "• /create_config - создать новую VPN конфигурацию\n\n"
+        "• /create_config - создать новую VPN конфигурацию\n"
+        "• /refferals - реферальная программа\n\n"
         "<b>Стоимость услуг:</b>\n"
         "• создание конфигурации \u2014 10 рублей (списывается сразу)\n"
         "• использование конфигурации \u2014 50 рублей в месяц, списывается постепенно\n\n"
