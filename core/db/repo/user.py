@@ -1,6 +1,6 @@
 from typing import Sequence
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from core.db.models import User
 
@@ -99,9 +99,12 @@ class UserRepo(BaseRepo[User]):
         Returns:
             Number of users referred by the specified user
         """
-        stmt = select(self.model).where(self.model.referred_by_id == user_id)
-        result = await self.session.execute(stmt)
-        return result.rowcount
+        stmt = (
+            select(func.count())
+            .select_from(self.model)
+            .where(self.model.referred_by_id == user_id)
+        )
+        return await self.session.scalar(stmt)
 
     async def get_refferer(self, user_id: int) -> User | None:
         """

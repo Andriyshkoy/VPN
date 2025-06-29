@@ -39,7 +39,7 @@ config_service = ConfigService(uow)
 billing_service = BillingService(uow, per_config_cost=settings.per_config_cost)
 
 # How many referrals to show per page
-REFERRALS_PER_PAGE = 5
+REFERRALS_PER_PAGE = 10
 
 
 async def get_or_create_user(tg_id: int, username: str, ref_id: str | None = None):
