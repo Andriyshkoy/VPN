@@ -7,19 +7,24 @@ from aiogram.types import (
     Message,
 )
 
-from .base import REFERRALS_PER_PAGE, get_or_create_user, router, user_service
+from .base import REFERRALS_PER_PAGE, billing_service, require_user, router, user_service
 
 __all__ = ["cmd_referrals", "paginate_referrals"]
 
 
-async def _send_referrals(target: Message | CallbackQuery, user_id: int, tg_id: int, page: int = 0) -> None:
+async def _send_referrals(
+    target: Message | CallbackQuery, user_id: int, tg_id: int, page: int = 0
+) -> None:
     total = await user_service.count_referrals(user_id)
     offset = page * REFERRALS_PER_PAGE
     referrals = await user_service.get_referrals(user_id, limit=REFERRALS_PER_PAGE, offset=offset)
+    settings = await billing_service.get_settings()
 
     text = (
         "📊 <b>Ваши рефералы</b>\n\n"
         "Приглашайте друзей и получайте бонусы!\n"
+        f"• {settings.referral_first_deposit_bonus_pct}% от первого пополнения\n"
+        f"• {settings.referral_recurring_bonus_pct}% от следующих пополнений\n\n"
         f"Ваша реферальная ссылка (Нажмите чтобы скопировать):\n\n<code>https://t.me/andriyshkoy_vpn_bot?start={tg_id}</code>\n\n"
     )
 
@@ -27,10 +32,16 @@ async def _send_referrals(target: Message | CallbackQuery, user_id: int, tg_id: 
         text += "У вас нет рефералов."
         markup = None
     else:
+        referral_ids = [ref.id for ref in referrals]
+        totals = await billing_service.get_referral_bonus_totals(
+            user_id=user_id,
+            related_user_ids=referral_ids,
+        )
         text += f"Всего: {total}\n\n"
         for ref in referrals:
             name = f"@{ref.username}" if ref.username else f"ID: {ref.tg_id}"
-            text += f"• {name}\n"
+            bonus_total = totals.get(ref.id, 0)
+            text += f"• {name} — бонусы: {bonus_total:.2f} ₽\n"
 
         buttons = []
         if page > 0:
@@ -47,7 +58,17 @@ async def _send_referrals(target: Message | CallbackQuery, user_id: int, tg_id: 
 
 @router.message(Command("referrals"))
 async def cmd_referrals(message: Message) -> None:
-    user = await get_or_create_user(message.from_user.id, message.from_user.username)
+    user = await require_user(message)
+    if not user:
+        return
+    await _send_referrals(message, user.id, message.from_user.id, page=0)
+
+
+@router.message(F.text == "👥 Рефералы")
+async def referrals_button(message: Message) -> None:
+    user = await require_user(message)
+    if not user:
+        return
     await _send_referrals(message, user.id, message.from_user.id, page=0)
 
 
@@ -58,5 +79,7 @@ async def paginate_referrals(callback: CallbackQuery) -> None:
     except (IndexError, ValueError):
         await callback.answer("Некорректные данные", show_alert=True)
         return
-    user = await get_or_create_user(callback.from_user.id, callback.from_user.username)
+    user = await require_user(callback)
+    if not user:
+        return
     await _send_referrals(callback, user.id, callback.from_user.id, page=page)

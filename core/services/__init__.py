@@ -1,7 +1,7 @@
 from .api_gateway import APIGateway
 from .billing import BillingService
 from .config import ConfigService
-from .models import Config, Server, User
+from .models import BalanceTransaction, BillingSettings, Config, Server, User
 from .notifications import Notification, NotificationService
 from .payments import CryptoPaymentService, TelegramPayService
 from .server import ServerService
@@ -20,4 +20,6 @@ __all__ = [
     "Server",
     "User",
     "Config",
+    "BillingSettings",
+    "BalanceTransaction",
 ]

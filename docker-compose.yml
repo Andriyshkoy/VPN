@@ -27,15 +27,6 @@ services:
     env_file:
       - .env
 
-  admin:
-    build:
-      context: .
-      dockerfile: ./admin/Dockerfile
-    depends_on: [db, migrations]
-    env_file:
-      - .env
-    restart: on-failure
-
   bot:
     build:
       context: .
@@ -65,19 +56,5 @@ services:
       - .env
     restart: always
 
-  admin_frontend:
-    build:
-      context: ./admin_frontend
-      dockerfile: Dockerfile
-    depends_on: [admin]
-    env_file:
-      - ./admin_frontend/.env
-
-  nginx:
-    build: ./nginx
-    depends_on: [admin_frontend]
-    ports:
-      - "14081:80"
-  
 volumes:
   db_data:

@@ -1,5 +1,7 @@
-import pytest
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+
+import pytest
 
 from core.db.unit_of_work import uow
 from core.exceptions import InsufficientBalanceError
@@ -32,7 +34,7 @@ async def test_create_requires_balance(monkeypatch, sessionmaker):
     server_svc = ServerService(uow)
     user_svc = UserService(uow)
     config_svc = ConfigService(uow)
-    billing = BillingService(uow, per_config_cost=1)
+    billing = BillingService(uow)
 
     user = await user_svc.register(55)
     server = await server_svc.create(
@@ -51,7 +53,6 @@ async def test_create_requires_balance(monkeypatch, sessionmaker):
             owner_id=user.id,
             name="bal",
             display_name="disp",
-            creation_cost=10,
         )
 
 
@@ -62,7 +63,7 @@ async def test_services_workflow(monkeypatch, sessionmaker):
     server_svc = ServerService(uow)
     user_svc = UserService(uow)
     config_svc = ConfigService(uow)
-    billing = BillingService(uow, per_config_cost=1)
+    billing = BillingService(uow)
 
     # create user and server
     user = await user_svc.register(100)
@@ -84,7 +85,6 @@ async def test_services_workflow(monkeypatch, sessionmaker):
         owner_id=user.id,
         name="cfg1",
         display_name="disp",
-        creation_cost=10,
     )
 
     # suspend/unsuspend
@@ -114,7 +114,8 @@ async def test_billing(monkeypatch, sessionmaker):
     server_svc = ServerService(uow)
     user_svc = UserService(uow)
     config_svc = ConfigService(uow)
-    billing = BillingService(uow, per_config_cost=3)
+    billing = BillingService(uow)
+    await billing.update_settings(config_creation_cost=10, monthly_config_cost=2160)
 
     user = await user_svc.register(10)
     server = await server_svc.create(
@@ -134,17 +135,20 @@ async def test_billing(monkeypatch, sessionmaker):
         owner_id=user.id,
         name="c1",
         display_name="d1",
-        creation_cost=10,
     )
     await billing.create_paid_config(
         server_id=server.id,
         owner_id=user.id,
         name="c2",
         display_name="d2",
-        creation_cost=10,
     )
 
-    await billing.charge_all()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    async with uow() as repos:
+        cfgs = await repos["configs"].list(owner_id=user.id)
+        for cfg in cfgs:
+            cfg.last_billed_at = now - timedelta(hours=1)
+    await billing.charge_usage(now=now)
 
     updated = await user_svc.get(user.id)
     assert updated.balance == 4
@@ -156,7 +160,8 @@ async def test_charge_all_returns_dict(monkeypatch, sessionmaker):
 
     server_svc = ServerService(uow)
     user_svc = UserService(uow)
-    billing = BillingService(uow, per_config_cost=2)
+    billing = BillingService(uow)
+    await billing.update_settings(config_creation_cost=1, monthly_config_cost=720)
 
     user = await user_svc.register(99)
     server = await server_svc.create(
@@ -170,16 +175,19 @@ async def test_charge_all_returns_dict(monkeypatch, sessionmaker):
     )
 
     await billing.top_up(user.id, 10)
-    await billing.create_paid_config(
+    cfg = await billing.create_paid_config(
         server_id=server.id,
         owner_id=user.id,
         name="cfg",
         display_name="disp",
-        creation_cost=1,
     )
 
-    charges = await billing.charge_all()
-    assert list(charges.values()) == [Decimal(2)]
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    async with uow() as repos:
+        cfg_db = await repos["configs"].get(id=cfg.id)
+        cfg_db.last_billed_at = now - timedelta(hours=1)
+    charges = await billing.charge_usage(now=now)
+    assert list(charges.values()) == [Decimal("1.00")]
     charged_user = next(iter(charges))
     assert charged_user.id == user.id
 
@@ -191,7 +199,8 @@ async def test_billing_suspend_unsuspend(monkeypatch, sessionmaker):
     server_svc = ServerService(uow)
     user_svc = UserService(uow)
     config_svc = ConfigService(uow)
-    billing = BillingService(uow, per_config_cost=3)
+    billing = BillingService(uow)
+    await billing.update_settings(config_creation_cost=10, monthly_config_cost=2160)
 
     user = await user_svc.register(20)
     server = await server_svc.create(
@@ -211,10 +220,13 @@ async def test_billing_suspend_unsuspend(monkeypatch, sessionmaker):
         owner_id=user.id,
         name="c3",
         display_name="d3",
-        creation_cost=10,
     )
 
-    await billing.charge_all()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    async with uow() as repos:
+        cfg_db = await repos["configs"].get(id=cfg.id)
+        cfg_db.last_billed_at = now - timedelta(hours=1)
+    await billing.charge_usage(now=now)
 
     suspended = await config_svc.list_suspended(owner_id=user.id)
     assert len(suspended) == 1 and suspended[0].id == cfg.id
@@ -226,13 +238,40 @@ async def test_billing_suspend_unsuspend(monkeypatch, sessionmaker):
 
 
 @pytest.mark.asyncio
+async def test_referral_bonus_on_topup(sessionmaker):
+    user_svc = UserService(uow)
+    billing = BillingService(uow)
+    await billing.update_settings(
+        referral_first_deposit_bonus_pct=50, referral_recurring_bonus_pct=10
+    )
+
+    referrer = await user_svc.register(1000, username="referrer")
+    referred = await user_svc.register(2000, username="referred", ref_id=1000)
+
+    await billing.top_up(referred.id, 100, source="telegram_pay")
+    await billing.top_up(referred.id, 100, source="telegram_pay")
+
+    updated_referrer = await user_svc.get(referrer.id)
+    assert updated_referrer.balance == Decimal("60.00")
+
+    txs = await billing.list_transactions(user_id=referrer.id)
+    bonus_txs = [tx for tx in txs if tx.kind == "referral_bonus"]
+    assert len(bonus_txs) == 2
+    assert {tx.amount for tx in bonus_txs} == {
+        Decimal("50.00"),
+        Decimal("10.00"),
+    }
+    assert all(tx.related_user_id == referred.id for tx in bonus_txs)
+
+
+@pytest.mark.asyncio
 async def test_server_update_and_user_with_configs(monkeypatch, sessionmaker):
     monkeypatch.setattr("core.services.config.APIGateway", lambda *a, **kw: DummyGateway())
 
     server_svc = ServerService(uow)
     user_svc = UserService(uow)
     config_svc = ConfigService(uow)
-    billing = BillingService(uow, per_config_cost=1)
+    billing = BillingService(uow)
 
     user = await user_svc.register(200)
     server = await server_svc.create(
@@ -248,7 +287,6 @@ async def test_server_update_and_user_with_configs(monkeypatch, sessionmaker):
         owner_id=user.id,
         name="cfg4",
         display_name="d4",
-        creation_cost=10,
     )
 
     user_data, configs = await user_svc.get_with_configs(user.id)

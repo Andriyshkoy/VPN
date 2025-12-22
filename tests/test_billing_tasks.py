@@ -1,5 +1,6 @@
 import importlib
 import types
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -59,7 +60,8 @@ async def test_charge_and_notify(monkeypatch, sessionmaker):
 
     user_svc = UserService(uow)
     server_svc = ServerService(uow)
-    billing = BillingService(uow, per_config_cost=1)
+    billing = BillingService(uow)
+    await billing.update_settings(config_creation_cost=5, monthly_config_cost=720)
 
     user = await user_svc.register(123)
     server = await server_svc.create(
@@ -73,13 +75,16 @@ async def test_charge_and_notify(monkeypatch, sessionmaker):
     )
 
     await billing.top_up(user.id, 30)
-    await billing.create_paid_config(
+    cfg = await billing.create_paid_config(
         server_id=server.id,
         owner_id=user.id,
         name="cfg",
         display_name="d",
-        creation_cost=5,
     )
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    async with uow() as repos:
+        cfg_db = await repos["configs"].get(id=cfg.id)
+        cfg_db.last_billed_at = now - timedelta(hours=1)
 
     await billing_tasks._charge_all_and_notify_async()
 

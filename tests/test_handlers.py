@@ -66,7 +66,7 @@ async def test_tempfile_used(monkeypatch):
 
     async def fake_get_user(tg_id, username=None):
         return types.SimpleNamespace(id=1)
-    async def fake_create_config(server_id, owner_id, name, display_name, creation_cost):
+    async def fake_create_config(server_id, owner_id, name, display_name, **kwargs):
         return types.SimpleNamespace(id=5)
     async def fake_download_config(cfg_id):
         return b"data"
