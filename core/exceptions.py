@@ -18,8 +18,85 @@ class ConfigNotFoundError(ServiceError):
     """Raised when a requested configuration cannot be found."""
 
 
-class APIConnectionError(ServiceError):
-    """Raised when there's an error connecting to the VPN API."""
+class APIGatewayError(ServiceError):
+    """Base class for failures while talking to a VPN Manager API."""
+
+
+class APIConfigurationError(APIGatewayError, ValueError):
+    """Raised when a VPN Manager gateway is configured incorrectly."""
+
+
+class APIConnectionError(APIGatewayError):
+    """Backward-compatible base class for VPN Manager request failures."""
+
+    def __init__(self, message: str, *, attempts: int = 1) -> None:
+        super().__init__(message)
+        self.attempts = attempts
+
+
+class APITransportError(APIConnectionError):
+    """Raised after a transport or timeout failure cannot be retried."""
+
+
+class APIRetryableResponseError(APIConnectionError):
+    """Raised after retryable VPN Manager responses are exhausted."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int,
+        attempts: int = 1,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message, attempts=attempts)
+        self.status_code = status_code
+        self.retryable = retryable
+
+
+class APIRateLimitError(APIRetryableResponseError):
+    """Raised when VPN Manager keeps rate-limiting a request."""
+
+
+class APIServerError(APIRetryableResponseError):
+    """Raised when VPN Manager keeps returning a server-side failure."""
+
+
+class APIRequestRejectedError(APIGatewayError):
+    """Raised when VPN Manager definitively rejects a request."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int,
+        attempts: int = 1,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.attempts = attempts
+        self.retryable = retryable
+
+
+class APIHTTPError(APIRequestRejectedError):
+    """Raised for an otherwise unclassified, definitive HTTP rejection."""
+
+
+class APIAuthenticationError(APIRequestRejectedError):
+    """Raised when VPN Manager rejects the configured API key."""
+
+
+class APINotFoundError(APIRequestRejectedError):
+    """Raised when VPN Manager cannot find the requested resource."""
+
+
+class APIConflictError(APIRequestRejectedError):
+    """Raised when a VPN Manager operation conflicts with current state."""
+
+
+class APIProtocolError(APIConnectionError):
+    """Raised when VPN Manager returns a malformed success payload."""
 
 
 class InvalidOperationError(ServiceError):

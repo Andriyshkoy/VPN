@@ -15,12 +15,21 @@ services:
 
   redis:
     image: redis:7
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
   migrations:
     build:
       context: .
-      dockerfile: ./alembic/Dockerfile
+      dockerfile: Dockerfile
+      target: migrations
     depends_on:
       db:
         condition: service_healthy
@@ -30,8 +39,15 @@ services:
   admin:
     build:
       context: .
-      dockerfile: ./admin/Dockerfile
-    depends_on: [db, migrations]
+      dockerfile: Dockerfile
+      target: admin
+    depends_on:
+      db:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     env_file:
       - .env
     restart: on-failure
@@ -39,8 +55,15 @@ services:
   bot:
     build:
       context: .
-      dockerfile: ./bot/Dockerfile
-    depends_on: [db, migrations, redis]
+      dockerfile: Dockerfile
+      target: bot
+    depends_on:
+      db:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     env_file:
       - .env
     restart: on-failure
@@ -48,9 +71,16 @@ services:
   rq_worker:
     build:
       context: .
-      dockerfile: ./billing_daemon/Dockerfile
+      dockerfile: Dockerfile
+      target: billing
     command: ./billing_daemon/entrypoint_worker.sh
-    depends_on: [redis, db, migrations]
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
     env_file:
       - .env
     restart: always
@@ -58,9 +88,16 @@ services:
   rq_scheduler:
     build:
       context: .
-      dockerfile: ./billing_daemon/Dockerfile
+      dockerfile: Dockerfile
+      target: billing
     command: ./billing_daemon/entrypoint_scheduler.sh
-    depends_on: [redis, db, migrations]
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
     env_file:
       - .env
     restart: always
@@ -70,8 +107,8 @@ services:
       context: ./admin_frontend
       dockerfile: Dockerfile
     depends_on: [admin]
-    env_file:
-      - ./admin_frontend/.env
+    environment:
+      VITE_ADMIN_API_URL: ${VITE_ADMIN_API_URL:-http://localhost:14081}
 
   nginx:
     build: ./nginx
@@ -81,3 +118,4 @@ services:
   
 volumes:
   db_data:
+  redis_data:

@@ -52,7 +52,7 @@ async def test_charge_and_notify(monkeypatch, sessionmaker):
         def __init__(self, *a, **kw):
             pass
 
-        async def enqueue(self, chat_id, text):
+        async def enqueue(self, chat_id, text, *, notification_id=None):
             sent.append((chat_id, text))
 
     monkeypatch.setattr(billing_tasks, "NotificationService", DummyService)

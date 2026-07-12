@@ -100,7 +100,13 @@ async def test_uow(monkeypatch, engine):
     monkeypatch.setattr(db.unit_of_work, "async_session", maker, raising=False)
 
     async with uow() as repos:
-        assert set(repos.keys()) == {"users", "servers", "configs"}
+        assert set(repos.keys()) == {
+            "users",
+            "servers",
+            "configs",
+            "billing",
+            "vpn_operations",
+        }
         await repos["users"].add(User(tg_id=1))
 
     async with maker() as sess:
@@ -110,20 +116,28 @@ async def test_uow(monkeypatch, engine):
 
 
 @pytest.mark.asyncio
-async def test_server_delete_cascades_configs(session):
+async def test_server_delete_requires_drained_configs(session):
     user_repo = UserRepo(session)
     server_repo = ServerRepo(session)
     config_repo = ConfigRepo(session)
 
     user = await user_repo.get_or_create(42)
     server = await server_repo.create(
-        name="srv", ip="1.1.1.1", port=22,
-        host="host", location="US", api_key="k", cost=1
+        name="srv",
+        ip="1.1.1.1",
+        port=22,
+        host="host",
+        location="US",
+        api_key="k",
+        cost=1,
     )
     cfg = await config_repo.create(server.id, user.id, "cfg", "d")
 
-    # delete server
-    await server_repo.delete(id=server.id)
+    # A repository call cannot silently orphan remote credentials either.
+    assert await server_repo.delete(id=server.id) == 0
+    assert await server_repo.get(id=server.id) is not None
+    assert await config_repo.get(id=cfg.id) is not None
 
-    # config should also be removed
+    await config_repo.delete(id=cfg.id)
+    assert await server_repo.delete(id=server.id) == 1
     assert await config_repo.get(id=cfg.id) is None

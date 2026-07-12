@@ -31,3 +31,4 @@ def test_serialize_dataclass_handles_datetime_and_decimal():
     assert isinstance(data_server["monthly_cost"], float) and data_server[
         "monthly_cost"
     ] == float(server.monthly_cost)
+    assert data_server["api_key"] == "********"

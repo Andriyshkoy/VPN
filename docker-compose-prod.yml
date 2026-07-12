@@ -15,6 +15,14 @@ services:
 
   redis:
     image: redis:7
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
   migrations:
@@ -28,8 +36,12 @@ services:
   admin:
     image: andriyshkoy/vpn-admin:latest
     depends_on:
-      - db
-      - migrations
+      db:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     env_file:
       - .env
     restart: on-failure
@@ -37,9 +49,12 @@ services:
   bot:
     image: andriyshkoy/vpn-bot:latest
     depends_on:
-      - db
-      - migrations
-      - redis
+      db:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     env_file:
       - .env
     restart: on-failure
@@ -48,9 +63,12 @@ services:
     image: andriyshkoy/vpn-billing:latest
     command: ./billing_daemon/entrypoint_worker.sh
     depends_on:
-      - redis
-      - db
-      - migrations
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
     env_file:
       - .env
     restart: always
@@ -59,9 +77,12 @@ services:
     image: andriyshkoy/vpn-billing:latest
     command: ./billing_daemon/entrypoint_scheduler.sh
     depends_on:
-      - redis
-      - db
-      - migrations
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
     env_file:
       - .env
     restart: always
@@ -82,3 +103,4 @@ services:
 
 volumes:
   db_data:
+  redis_data:

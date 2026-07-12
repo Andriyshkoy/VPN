@@ -4,7 +4,7 @@ import contextlib
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.redis import RedisStorage
 
 from core.config import settings
 
@@ -13,7 +13,7 @@ from .notifications import notifications_listener
 
 
 def setup_bot() -> Dispatcher:
-    storage = MemoryStorage()
+    storage = RedisStorage.from_url(settings.redis_url)
     dp = Dispatcher(storage=storage)
     dp.include_router(router)
     return dp
@@ -27,7 +27,8 @@ async def main():
     dp = setup_bot()
 
     await setup_bot_commands(bot)
-    await bot.delete_webhook(drop_pending_updates=True)
+    # Never discard successful-payment updates received while the bot was down.
+    await bot.delete_webhook(drop_pending_updates=False)
     listener = asyncio.create_task(notifications_listener(bot))
     try:
         await dp.start_polling(bot)
