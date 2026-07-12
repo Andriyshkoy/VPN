@@ -20,7 +20,7 @@ extend-exclude = '''
 profile = "black"
 multi_line_output = 3
 line_length = 88
-known_first_party = ["core", "bot", "scripts", "billing_daemon"]
+known_first_party = ["core", "admin", "bot", "scripts", "billing_daemon"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -29,9 +29,3 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
 asyncio_mode = "auto"
-filterwarnings = [
-  "ignore:.*python_multipart.*:PendingDeprecationWarning",
-]
-markers = [
-  "integration: requires external services like postgres/redis",
-]

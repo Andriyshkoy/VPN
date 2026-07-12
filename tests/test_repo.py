@@ -100,13 +100,7 @@ async def test_uow(monkeypatch, engine):
     monkeypatch.setattr(db.unit_of_work, "async_session", maker, raising=False)
 
     async with uow() as repos:
-        assert set(repos.keys()) == {
-            "users",
-            "servers",
-            "configs",
-            "billing_settings",
-            "transactions",
-        }
+        assert set(repos.keys()) == {"users", "servers", "configs"}
         await repos["users"].add(User(tg_id=1))
 
     async with maker() as sess:

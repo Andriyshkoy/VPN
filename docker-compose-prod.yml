@@ -25,6 +25,15 @@ services:
     env_file:
       - .env
 
+  admin:
+    image: andriyshkoy/vpn-admin:latest
+    depends_on:
+      - db
+      - migrations
+    env_file:
+      - .env
+    restart: on-failure
+
   bot:
     image: andriyshkoy/vpn-bot:latest
     depends_on:
@@ -56,6 +65,20 @@ services:
     env_file:
       - .env
     restart: always
+
+  admin_frontend:
+    image: andriyshkoy/vpn-admin-frontend:latest
+    depends_on:
+      - admin
+    env_file:
+      - ./admin_frontend/.env
+
+  nginx:
+    image: andriyshkoy/vpn-nginx:latest
+    depends_on:
+      - admin_frontend
+    ports:
+      - "14081:80"
 
 volumes:
   db_data:

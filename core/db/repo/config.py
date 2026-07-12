@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Sequence
 
-from sqlalchemy import func, select, update
+from sqlalchemy import update
 
 from core.db.models import VPN_Config
 
@@ -74,7 +74,7 @@ class ConfigRepo(BaseRepo[VPN_Config]):
         stmt = (
             update(self.model)
             .where(self.model.id == config_id)
-            .values(suspended=False, suspended_at=None, last_billed_at=datetime.now())
+            .values(suspended=False, suspended_at=None)
             .returning(self.model)
         )
         result = await self.session.execute(stmt)
@@ -97,7 +97,7 @@ class ConfigRepo(BaseRepo[VPN_Config]):
         stmt = (
             update(self.model)
             .where(self.model.owner_id == owner_id, self.model.suspended.is_(True))
-            .values(suspended=False, suspended_at=None, last_billed_at=datetime.now())
+            .values(suspended=False, suspended_at=None)
         )
         result = await self.session.execute(stmt)
         await self.session.flush()
@@ -139,44 +139,3 @@ class ConfigRepo(BaseRepo[VPN_Config]):
         result = await self.session.execute(stmt)
         await self.session.flush()
         return result.scalar_one_or_none()
-
-    async def list_billable(self, before: datetime) -> Sequence[VPN_Config]:
-        """Return active configs that need billing before the given timestamp."""
-        stmt = (
-            select(self.model)
-            .where(
-                self.model.suspended.is_(False),
-                self.model.last_billed_at <= before,
-            )
-            .order_by(self.model.id)
-        )
-        result = await self.session.scalars(stmt)
-        return result.all()
-
-    async def advance_billing(
-        self,
-        config_id: int,
-        expected_last_billed_at: datetime,
-        new_last_billed_at: datetime,
-    ) -> bool:
-        """Advance last_billed_at if it hasn't changed since read."""
-        stmt = (
-            update(self.model)
-            .where(
-                self.model.id == config_id,
-                self.model.last_billed_at == expected_last_billed_at,
-            )
-            .values(last_billed_at=new_last_billed_at)
-        )
-        result = await self.session.execute(stmt)
-        await self.session.flush()
-        return bool(result.rowcount)
-
-    async def count_active(self, owner_id: int) -> int:
-        """Count active (not suspended) configs for a user."""
-        stmt = (
-            select(func.count())
-            .select_from(self.model)
-            .where(self.model.owner_id == owner_id, self.model.suspended.is_(False))
-        )
-        return await self.session.scalar(stmt)

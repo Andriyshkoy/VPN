@@ -7,8 +7,6 @@ from core.exceptions import ServiceError
 from ..states import RenameConfig
 
 # Import modules so handlers are registered
-from . import admin  # noqa: F401
-from . import cabinet  # noqa: F401
 from . import common  # noqa: F401
 from . import configs  # noqa: F401
 from . import payments  # noqa: F401

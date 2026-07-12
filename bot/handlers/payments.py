@@ -12,7 +12,7 @@ from aiogram.types import (
 from core.config import settings
 from core.services import TelegramPayService
 
-from .base import AVAILABLE_AMOUNTS, billing_service, require_user, router
+from .base import AVAILABLE_AMOUNTS, billing_service, get_or_create_user, router
 
 __all__ = [
     "cmd_topup",
@@ -26,9 +26,7 @@ __all__ = [
 
 @router.message(Command("topup"))
 async def cmd_topup(message: Message) -> None:
-    user = await require_user(message)
-    if not user:
-        return
+    await get_or_create_user(message.from_user.id, message.from_user.username)
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -55,25 +53,14 @@ async def cmd_topup(message: Message) -> None:
     )
 
 
-@router.message(F.text == "💳 Пополнить баланс")
-async def topup_button(message: Message) -> None:
-    await cmd_topup(message)
-
-
 @router.callback_query(lambda c: c.data == "pay:crypto")
 async def pay_crypto(callback: CallbackQuery) -> None:
-    user = await require_user(callback)
-    if not user:
-        return
     await callback.message.answer("Оплата криптовалютой скоро появится!")
     await callback.answer()
 
 
 @router.callback_query(lambda c: c.data == "pay:telegram")
 async def pay_telegram(callback: CallbackQuery, state: FSMContext, bot) -> None:
-    user = await require_user(callback)
-    if not user:
-        return
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=f"{amt} ₽", callback_data=f"topup:{amt}")]
@@ -86,9 +73,6 @@ async def pay_telegram(callback: CallbackQuery, state: FSMContext, bot) -> None:
 
 @router.callback_query(F.data.startswith("topup:"))
 async def got_topup_amount(callback: CallbackQuery, bot) -> None:
-    user = await require_user(callback)
-    if not user:
-        return
     try:
         amount = float(callback.data.split(":")[1])
         assert amount in AVAILABLE_AMOUNTS
@@ -108,10 +92,8 @@ async def process_pre_checkout_query(pcq: PreCheckoutQuery, bot) -> None:
 @router.message(F.successful_payment)
 async def successful_payment_handler(message: Message) -> None:
     qty = message.successful_payment.total_amount / 100
-    user = await require_user(message)
-    if not user:
-        return
-    await billing_service.top_up(user.id, qty, source="telegram_pay")
+    user = await get_or_create_user(message.from_user.id, message.from_user.username)
+    await billing_service.top_up(user.id, qty)
     await message.answer(
         f"✅ Платёж успешно завершён! Баланс пополнен на {qty} рублей."
     )

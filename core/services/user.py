@@ -40,11 +40,6 @@ class UserService:
                 return None
             return User.from_orm(user)
 
-    async def get_by_tg_id(self, tg_id: int) -> User | None:
-        async with self._uow() as repos:
-            user = await repos["users"].get(tg_id=tg_id)
-            return User.from_orm(user) if user else None
-
     async def list(
         self,
         *,
@@ -64,11 +59,6 @@ class UserService:
             users = await repos["users"].list(
                 limit=limit, offset=offset, **filters
             )
-            return [User.from_orm(u) for u in users]
-
-    async def search_by_username(self, query: str, limit: int = 20) -> list[User]:
-        async with self._uow() as repos:
-            users = await repos["users"].search_by_username(query, limit=limit)
             return [User.from_orm(u) for u in users]
 
     async def update(self, user_id: int, **fields) -> User | None:

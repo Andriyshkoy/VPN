@@ -1,13 +1,7 @@
 from contextlib import asynccontextmanager
 
 from . import async_session
-from .repo import (
-    BillingSettingsRepo,
-    ConfigRepo,
-    ServerRepo,
-    TransactionRepo,
-    UserRepo,
-)
+from .repo import ConfigRepo, ServerRepo, UserRepo
 
 
 @asynccontextmanager
@@ -16,7 +10,5 @@ async def uow():
         yield {
             "users": UserRepo(session),
             "servers": ServerRepo(session),
-            "configs": ConfigRepo(session),
-            "billing_settings": BillingSettingsRepo(session),
-            "transactions": TransactionRepo(session),
+            "configs": ConfigRepo(session)
         }

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Numeric, String, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.db import Base
@@ -32,12 +32,3 @@ class User(Base):
 
     # Кого пригласил этот пользователь
     referrals: Mapped[list["User"]] = relationship(back_populates="referred_by")
-
-    referral_first_bonus_paid: Mapped[bool] = mapped_column(Boolean, default=False)
-
-    transactions: Mapped[list["BalanceTransaction"]] = relationship(  # noqa F821 # type: ignore
-        "BalanceTransaction",
-        back_populates="user",
-        cascade="all, delete-orphan",
-        foreign_keys="BalanceTransaction.user_id",
-    )

@@ -1,4 +1,3 @@
-from decimal import Decimal
 from typing import Sequence
 
 from sqlalchemy import func, select, update
@@ -70,48 +69,6 @@ class UserRepo(BaseRepo[User]):
         result = await self.session.execute(stmt)
         await self.session.flush()
         return result.scalar_one_or_none()
-
-    async def reserve_balance(self, user_id: int, amount: Decimal) -> User | None:
-        """
-        Atomically decrement balance if sufficient.
-
-        Returns updated user or None if user missing/insufficient balance.
-        """
-        stmt = (
-            update(self.model)
-            .where(self.model.id == user_id, self.model.balance >= amount)
-            .values(balance=self.model.balance - amount)
-            .returning(self.model)
-        )
-        result = await self.session.execute(stmt)
-        await self.session.flush()
-        return result.scalar_one_or_none()
-
-    async def apply_balance_delta(self, user_id: int, amount: Decimal) -> User | None:
-        """Atomically apply a balance delta and return the updated user."""
-        stmt = (
-            update(self.model)
-            .where(self.model.id == user_id)
-            .values(balance=self.model.balance + amount)
-            .returning(self.model)
-        )
-        result = await self.session.execute(stmt)
-        await self.session.flush()
-        return result.scalar_one_or_none()
-
-    async def mark_referral_first_bonus_paid(self, user_id: int) -> bool:
-        """Mark the first referral bonus as paid for a user if not already."""
-        stmt = (
-            update(self.model)
-            .where(
-                self.model.id == user_id,
-                self.model.referral_first_bonus_paid.is_(False),
-            )
-            .values(referral_first_bonus_paid=True)
-        )
-        result = await self.session.execute(stmt)
-        await self.session.flush()
-        return bool(result.rowcount)
 
     async def get_referrals(self, user_id: int, limit: int = 10, offset: int = 0) -> Sequence[User]:
         """

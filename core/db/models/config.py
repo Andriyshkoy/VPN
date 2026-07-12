@@ -39,12 +39,6 @@ class VPN_Config(Base):
         DateTime,
         nullable=True
     )
-    last_billed_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=func.now(),
-        server_default=func.now(),
-        index=True,
-    )
 
     def __repr__(self):
         return f"<VPN_Config(name={self.name}, server={self.server.name})>"

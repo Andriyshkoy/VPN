@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import Callable, Sequence
 
-from core.exceptions import ConfigNotFoundError, ServerNotFoundError, UserNotFoundError
+from core.exceptions import (
+    ConfigNotFoundError,
+    InsufficientBalanceError,
+    ServerNotFoundError,
+    UserNotFoundError,
+)
 
 from .api_gateway import APIGateway
 from .models import Config
@@ -14,33 +19,6 @@ class ConfigService:
     def __init__(self, uow: Callable) -> None:
         self._uow = uow
 
-    async def _create_config_with_repos(
-        self,
-        repos: dict[str, object],
-        *,
-        server_id: int,
-        owner_id: int,
-        name: str,
-        display_name: str,
-        use_password: bool,
-    ) -> Config:
-        server = await repos["servers"].get(id=server_id)
-        if not server:
-            raise ServerNotFoundError(f"Server {server_id} not found")
-
-        user = await repos["users"].get(id=owner_id)
-        if not user:
-            raise UserNotFoundError(f"User {owner_id} not found")
-        cfg = await repos["configs"].create(
-            server_id,
-            owner_id,
-            name,
-            display_name,
-        )
-        async with APIGateway(server.ip, server.port, server.api_key) as api:
-            await api.create_client(name, use_password=use_password)
-        return Config.from_orm(cfg)
-
     # ---------- CRUD wrappers ----------
 
     async def create_config(
@@ -51,26 +29,28 @@ class ConfigService:
         name: str,
         display_name: str,
         use_password: bool = False,
-        repos: dict[str, object] | None = None,
     ) -> Config:
-        if repos is None:
-            async with self._uow() as repos_ctx:
-                return await self._create_config_with_repos(
-                    repos_ctx,
-                    server_id=server_id,
-                    owner_id=owner_id,
-                    name=name,
-                    display_name=display_name,
-                    use_password=use_password,
-                )
-        return await self._create_config_with_repos(
-            repos,
-            server_id=server_id,
-            owner_id=owner_id,
-            name=name,
-            display_name=display_name,
-            use_password=use_password,
-        )
+        async with self._uow() as repos:
+            server = await repos["servers"].get(id=server_id)
+            if not server:
+                raise ServerNotFoundError(f"Server {server_id} not found")
+
+            user = await repos["users"].get(id=owner_id)
+            if not user:
+                raise UserNotFoundError(f"User {owner_id} not found")
+            if user.balance <= 0:
+                raise InsufficientBalanceError("Insufficient balance")
+
+            async with APIGateway(server.ip, server.port, server.api_key) as api:
+                await api.create_client(name, use_password=use_password)
+
+            cfg = await repos["configs"].create(
+                server_id,
+                owner_id,
+                name,
+                display_name,
+            )
+            return Config.from_orm(cfg)
 
     async def download_config(self, config_id: int) -> bytes:
         async with self._uow() as repos:
@@ -186,8 +166,3 @@ class ConfigService:
                 raise ServerNotFoundError(f"Server {server_id} not found")
             async with APIGateway(server.ip, server.port, server.api_key) as api:
                 return await api.list_blocked()
-
-    async def count_active(self, owner_id: int) -> int:
-        """Return count of active configs for a user."""
-        async with self._uow() as repos:
-            return await repos["configs"].count_active(owner_id) or 0
