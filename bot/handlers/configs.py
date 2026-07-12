@@ -1,6 +1,6 @@
 import os
 import tempfile
-import uuid
+from uuid import NAMESPACE_URL, uuid5
 
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -10,10 +10,11 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    Update,
 )
 
 from core.config import settings
-from core.exceptions import InsufficientBalanceError, ServiceError
+from core.exceptions import APIConnectionError, InsufficientBalanceError, ServiceError
 
 from ..states import CreateConfig, RenameConfig
 from .base import (
@@ -53,7 +54,9 @@ async def cmd_configs(message: Message) -> None:
         title = cfg.display_name
         if cfg.suspended:
             title += " (приостановлена)"
-        buttons.append([InlineKeyboardButton(text=title, callback_data=f"cfg:{cfg.id}")])
+        buttons.append(
+            [InlineKeyboardButton(text=title, callback_data=f"cfg:{cfg.id}")]
+        )
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer("Ваши конфигурации:", reply_markup=kb)
 
@@ -66,7 +69,11 @@ async def cmd_create_config(message: Message, state: FSMContext) -> None:
         await message.answer("Нет доступных серверов")
         return
     buttons = [
-        [InlineKeyboardButton(text=" ".join([s.location, s.name]), callback_data=f"server:{s.id}")]
+        [
+            InlineKeyboardButton(
+                text=" ".join([s.location, s.name]), callback_data=f"server:{s.id}"
+            )
+        ]
         for s in servers
     ]
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -94,7 +101,12 @@ async def choose_server(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.message(CreateConfig.entering_name)
-async def got_name(message: Message, state: FSMContext, bot) -> None:
+async def got_name(
+    message: Message,
+    state: FSMContext,
+    bot,
+    event_update: Update,
+) -> None:
     data = await state.get_data()
     server_id = data.get("server_id")
     if not server_id:
@@ -102,7 +114,8 @@ async def got_name(message: Message, state: FSMContext, bot) -> None:
         await state.clear()
         return
     user = await get_or_create_user(message.from_user.id, message.from_user.username)
-    unique_name = uuid.uuid4().hex
+    purchase_key = f"telegram:create-config:update:{event_update.update_id}"
+    unique_name = uuid5(NAMESPACE_URL, purchase_key).hex
     try:
         cfg = await billing_service.create_paid_config(
             server_id=server_id,
@@ -110,21 +123,25 @@ async def got_name(message: Message, state: FSMContext, bot) -> None:
             name=unique_name,
             display_name=message.text,
             creation_cost=settings.config_creation_cost,
+            idempotency_key=purchase_key,
         )
     except InsufficientBalanceError:
         await message.answer("Недостаточно средств. Пополните баланс")
         await state.clear()
         return
+    except APIConnectionError:
+        # The config/reservation intent is already durable. Let the inbox
+        # retry this exact Telegram update so the same config is eventually
+        # downloaded and delivered without another debit.
+        raise
     except ServiceError:
         await message.answer("Произошла ошибка. Попробуйте позже")
         await state.clear()
         return
-    try:
-        content = await config_service.download_config(cfg.id)
-    except ServiceError:
-        await message.answer("Произошла ошибка. Попробуйте позже")
-        await state.clear()
-        return
+    # Delivery belongs to the durable update attempt. Any Manager or Telegram
+    # failure must bubble up so this update is retried; swallowing it here
+    # would ACK an undelivered, already-paid profile.
+    content = await config_service.download_config(cfg.id)
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
@@ -161,9 +178,13 @@ async def show_config(callback: CallbackQuery) -> None:
         f"Статус: {'приостановлена' if cfg.suspended else 'активна'}"
     )
     buttons = []
-    buttons.append([InlineKeyboardButton(text="Удалить", callback_data=f"del:{cfg.id}")])
+    buttons.append(
+        [InlineKeyboardButton(text="Удалить", callback_data=f"del:{cfg.id}")]
+    )
     buttons.append([InlineKeyboardButton(text="Скачать", callback_data=f"dl:{cfg.id}")])
-    buttons.append([InlineKeyboardButton(text="Переименовать", callback_data=f"rn:{cfg.id}")])
+    buttons.append(
+        [InlineKeyboardButton(text="Переименовать", callback_data=f"rn:{cfg.id}")]
+    )
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()

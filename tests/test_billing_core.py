@@ -4,8 +4,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func, select
 
 from core.config import settings
 from core.db.models.ledger import LedgerKind
@@ -27,6 +26,7 @@ from core.services import BillingService, ServerService, UserService
 class BillingGateway:
     def __init__(self, behavior: str = "success") -> None:
         self.behavior = behavior
+        self.create_calls = 0
 
     async def __aenter__(self):
         return self
@@ -35,6 +35,7 @@ class BillingGateway:
         return None
 
     async def create_client(self, *args, **kwargs):
+        self.create_calls += 1
         self._mutate()
 
     async def download_config(self, *args, **kwargs):
@@ -222,6 +223,39 @@ async def test_telegram_payment_is_credited_once_and_validates_intent(sessionmak
 
 
 @pytest.mark.asyncio
+async def test_payment_intent_replay_returns_one_stable_invoice(sessionmaker):
+    user = await UserService(uow).register(107)
+    billing = BillingService(uow, per_config_cost="1.00")
+
+    first = await billing.create_payment_intent(
+        user_id=user.id,
+        amount="100.00",
+        currency="RUB",
+        idempotency_key="telegram:invoice:update:7001",
+    )
+    replay = await billing.create_payment_intent(
+        user_id=user.id,
+        amount="100.00",
+        currency="RUB",
+        idempotency_key="telegram:invoice:update:7001",
+    )
+
+    assert replay == first
+    with pytest.raises(InvalidOperationError, match="does not match intent"):
+        await billing.create_payment_intent(
+            user_id=user.id,
+            amount="200.00",
+            currency="RUB",
+            idempotency_key="telegram:invoice:update:7001",
+        )
+    async with uow() as repos:
+        count = await repos["users"].session.scalar(
+            select(func.count()).select_from(ProviderPayment)
+        )
+    assert count == 1
+
+
+@pytest.mark.asyncio
 async def test_payment_currency_and_intent_expiry_are_enforced(sessionmaker):
     user = await UserService(uow).register(106)
     billing = BillingService(uow, per_config_cost="1.00")
@@ -261,7 +295,9 @@ async def test_periodic_charge_claims_stable_period_once(sessionmaker):
             server.id, user.id, "periodic-test", "Periodic test"
         )
 
-    clock = lambda: datetime(2026, 7, 12, 12, 15, tzinfo=timezone.utc)
+    def clock():
+        return datetime(2026, 7, 12, 12, 15, tzinfo=timezone.utc)
+
     billing = BillingService(
         uow, per_config_cost="2.00", billing_period_seconds=3600, clock=clock
     )
@@ -437,7 +473,7 @@ async def test_ambiguous_provision_failure_keeps_reservation(monkeypatch, sessio
 
 
 @pytest.mark.asyncio
-async def test_duplicate_paid_config_never_refunds_successful_purchase(
+async def test_paid_config_replay_returns_same_config_and_never_charges_twice(
     monkeypatch, sessionmaker
 ):
     user, server = await _user_and_server(balance=Decimal("20.00"))
@@ -456,7 +492,18 @@ async def test_duplicate_paid_config_never_refunds_successful_purchase(
     )
     assert result.name == "same-purchase"
 
-    with pytest.raises(IntegrityError):
+    replay = await billing.create_paid_config(
+        server_id=server.id,
+        owner_id=user.id,
+        name="same-purchase",
+        display_name="First attempt",
+        creation_cost="10.00",
+        idempotency_key="client-request-1",
+    )
+    assert replay.id == result.id
+    assert gateway.create_calls == 1
+
+    with pytest.raises(InvalidOperationError, match="another VPN purchase"):
         await billing.create_paid_config(
             server_id=server.id,
             owner_id=user.id,

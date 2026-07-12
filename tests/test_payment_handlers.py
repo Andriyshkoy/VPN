@@ -59,13 +59,18 @@ async def test_topup_invoice_uses_persisted_intent_without_ui_change(monkeypatch
     )
     monkeypatch.setattr(payments, "TelegramPayService", PayService)
 
-    await payments.got_topup_amount(DummyCallback(), DummyBot())
+    await payments.got_topup_amount(
+        DummyCallback(),
+        DummyBot(),
+        SimpleNamespace(update_id=7001),
+    )
 
     assert sent["intent_args"] == {
         "user_id": user.id,
         "amount": Decimal("100"),
         "provider": "telegram",
         "currency": "RUB",
+        "idempotency_key": "telegram:invoice:update:7001",
     }
     assert sent["invoice"] == (
         456,

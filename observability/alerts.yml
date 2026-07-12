@@ -1,0 +1,204 @@
+groups:
+  - name: vpn-hub-availability
+    rules:
+      - alert: VPNHubMetricsTargetDown
+        expr: up{job=~"vpn-hub-admin|vpn-hub-statsd|vpn-hub-postgres|vpn-hub-redis"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "VPN Hub metrics target is unavailable"
+          description: "Prometheus cannot scrape {{ $labels.job }} at {{ $labels.instance }}."
+          runbook: "docs/runbooks/observability.md#vpn-hub-metrics-target-down"
+
+      - alert: VPNHubRedisUnavailable
+        expr: vpn_hub_dependency_ready{dependency="redis"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "VPN Hub cannot reach Redis"
+          description: "Admin readiness reports Redis unavailable; bot state, RQ, sessions and notifications are affected."
+          runbook: "docs/runbooks/observability.md#redis-unavailable"
+
+  - name: vpn-hub-billing
+    rules:
+      - alert: VPNHubBillingNeverCompleted
+        expr: |
+          (vpn_hub_feature_enabled{feature="billing"} == 1)
+          and on() (vpn_hub_feature_enabled{feature="maintenance"} == 0)
+          and on() (vpn_hub_billing_last_completed_timestamp_seconds == 0)
+          and on() ((time() - vpn_hub_observability_start_timestamp_seconds) > (2 * vpn_hub_billing_interval_seconds))
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Periodic billing has never completed"
+          description: "Billing is enabled, but no completed run appeared within two configured periods after observability startup."
+          runbook: "docs/runbooks/observability.md#billing-never-completed"
+
+      - alert: VPNHubBillingStalled
+        expr: |
+          (vpn_hub_feature_enabled{feature="billing"} == 1)
+          and on() (vpn_hub_feature_enabled{feature="maintenance"} == 0)
+          and on() (vpn_hub_billing_last_completed_timestamp_seconds > 0)
+          and on() ((time() - vpn_hub_billing_last_completed_timestamp_seconds) > (2 * vpn_hub_billing_interval_seconds))
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Periodic billing has stopped advancing"
+          description: "No completed billing run has appeared for more than two configured periods."
+          runbook: "docs/runbooks/observability.md#billing-stalled"
+
+      - alert: VPNHubBillingRunStuck
+        expr: vpn_hub_billing_oldest_running_age_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A billing run remains in running state"
+          description: "The oldest running billing record is {{ $value | humanizeDuration }} old."
+          runbook: "docs/runbooks/observability.md#billing-run-stuck"
+
+      - alert: VPNHubBackgroundJobErrors
+        expr: sum by (job) (increase(vpn_hub_background_jobs_total{outcome="error"}[15m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "VPN Hub background job failed"
+          description: "Job {{ $labels.job }} failed during the last 15 minutes."
+          runbook: "docs/runbooks/observability.md#background-job-errors"
+
+  - name: vpn-hub-vpn-lifecycle
+    rules:
+      - alert: VPNHubVPNOperationBacklogOld
+        expr: |
+          (vpn_hub_vpn_operation_oldest_backlog_age_seconds > 600)
+          and on() (vpn_hub_vpn_operation_backlog > 0)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "VPN lifecycle backlog is not converging"
+          description: "The oldest retryable VPN operation is {{ $value | humanizeDuration }} old."
+          runbook: "docs/runbooks/observability.md#vpn-operation-backlog"
+
+      - alert: VPNHubVPNOperationsExhausted
+        expr: vpn_hub_vpn_operations{status="exhausted"} > 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "VPN operations exhausted their retry budget"
+          description: "{{ $value }} VPN operations require operator reconciliation."
+          runbook: "docs/runbooks/observability.md#vpn-operations-exhausted"
+
+  - name: vpn-hub-notifications
+    rules:
+      - alert: VPNHubNotificationOutboxLagging
+        expr: |
+          (vpn_hub_notification_outbox_oldest_backlog_age_seconds > vpn_hub_notification_outbox_visibility_timeout_seconds)
+          and on() (vpn_hub_notification_outbox_backlog > 0)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Billing notification outbox is delayed"
+          description: "The oldest pending or stale queued notification visibility timestamp is {{ $value | humanizeDuration }} old."
+          runbook: "docs/runbooks/observability.md#notification-outbox-lag"
+
+      - alert: VPNHubNotificationOutboxRetrying
+        expr: vpn_hub_notification_outbox_retrying > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Notification outbox publication keeps failing"
+          description: "{{ $value }} pending outbox rows have at least one failed Redis publish."
+          runbook: "docs/runbooks/observability.md#notification-outbox-retrying"
+
+  - name: vpn-hub-telegram-inbox
+    rules:
+      - alert: VPNHubTelegramInboxBacklogOld
+        expr: |
+          (vpn_hub_telegram_update_inbox_oldest_backlog_age_seconds > 300)
+          and on() (vpn_hub_telegram_update_inbox_backlog > 0)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Telegram update inbox is not draining"
+          description: "The oldest non-terminal Telegram update is {{ $value | humanizeDuration }} old."
+          runbook: "docs/runbooks/observability.md#telegram-inbox-backlog"
+
+      - alert: VPNHubTelegramInboxDead
+        expr: vpn_hub_telegram_update_inbox_dead > 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Telegram updates exhausted their processing budget"
+          description: "{{ $value }} Telegram updates require operator review."
+          runbook: "docs/runbooks/observability.md#telegram-inbox-dead"
+
+  - name: vpn-hub-manager-tls
+    rules:
+      - alert: VPNHubManagerTLSMaterialInvalid
+        expr: |
+          (vpn_hub_manager_tls_enabled == 1)
+          and on() (vpn_hub_manager_tls_material_ready == 0)
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "VPN Manager TLS material is unusable"
+          description: "Configured CA/client certificate files are missing, unreadable, expired, not yet valid, or the client key does not match."
+          runbook: "docs/runbooks/observability.md#manager-tls-material-invalid"
+
+      - alert: VPNHubManagerTLSCertificateExpiring
+        expr: |
+          ((vpn_hub_manager_tls_certificate_expiry_timestamp_seconds - time()) < (30 * 24 * 60 * 60))
+          and
+          (vpn_hub_manager_tls_certificate_expiry_timestamp_seconds > time())
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "VPN Manager TLS certificate expires soon"
+          description: "The configured {{ $labels.certificate }} certificate expires in {{ $value | humanizeDuration }}."
+          runbook: "docs/runbooks/observability.md#manager-tls-certificate-expiring"
+
+  - name: vpn-hub-manager
+    rules:
+      - alert: VPNHubManagerErrorRateHigh
+        expr: |
+          (
+            sum(rate(vpn_hub_manager_requests_total{outcome!="success"}[5m]))
+            /
+            clamp_min(sum(rate(vpn_hub_manager_requests_total[5m])), 0.001)
+          ) > 0.20
+          and
+          sum(rate(vpn_hub_manager_requests_total[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "VPN Manager request error rate is high"
+          description: "More than 20% of Manager requests have failed for ten minutes."
+          runbook: "docs/runbooks/observability.md#manager-error-rate"
+
+      - alert: VPNHubManagerLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(vpn_hub_manager_request_duration_seconds_bucket[10m]))
+          ) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "VPN Manager p95 latency is high"
+          description: "Manager request p95, including retry backoff, exceeds five seconds."
+          runbook: "docs/runbooks/observability.md#manager-latency"

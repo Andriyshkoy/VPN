@@ -1,0 +1,79 @@
+defaults:
+  glob_disable_ordering: false
+
+mappings:
+  - match: "vpn_hub.manager.requests"
+    match_metric_type: counter
+    name: "vpn_hub_manager_requests_total"
+    help: "Logical requests made to a VPN Manager."
+    honor_labels: true
+    labels:
+      service: "unknown"
+      operation: "unknown"
+      method: "unknown"
+      outcome: "unknown"
+      status_code: "none"
+
+  - match: "vpn_hub.manager.retries"
+    match_metric_type: counter
+    name: "vpn_hub_manager_retries_total"
+    help: "Additional VPN Manager attempts after the first request."
+    honor_labels: true
+    labels:
+      service: "unknown"
+      operation: "unknown"
+      method: "unknown"
+      outcome: "unknown"
+      status_code: "none"
+
+  - match: "vpn_hub.manager.request_duration"
+    match_metric_type: observer
+    name: "vpn_hub_manager_request_duration_seconds"
+    help: "End-to-end VPN Manager request time including retry backoff."
+    observer_type: histogram
+    histogram_options:
+      buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 40]
+    honor_labels: true
+    labels:
+      service: "unknown"
+      operation: "unknown"
+      method: "unknown"
+      outcome: "unknown"
+      status_code: "none"
+
+  - match: "vpn_hub.background_jobs"
+    match_metric_type: counter
+    name: "vpn_hub_background_jobs_total"
+    help: "RQ job executions by stable job name and outcome."
+    honor_labels: true
+    labels:
+      service: "unknown"
+      job: "unknown"
+      outcome: "unknown"
+
+  - match: "vpn_hub.background_job_duration"
+    match_metric_type: observer
+    name: "vpn_hub_background_job_duration_seconds"
+    help: "RQ job duration."
+    observer_type: histogram
+    histogram_options:
+      buckets: [0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300]
+    honor_labels: true
+    labels:
+      service: "unknown"
+      job: "unknown"
+      outcome: "unknown"
+
+  - match: "vpn_hub.notification_outbox.publish"
+    match_metric_type: counter
+    name: "vpn_hub_notification_outbox_publish_total"
+    help: "Attempts to publish PostgreSQL notification outbox rows to Redis."
+    honor_labels: true
+    labels:
+      service: "unknown"
+      outcome: "unknown"
+
+  - match: "."
+    match_type: regex
+    action: drop
+    name: "dropped"

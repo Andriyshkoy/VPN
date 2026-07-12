@@ -1,21 +1,25 @@
 import asyncio
 import logging
+import time
+from collections.abc import Awaitable, Callable
 
 from core.config import settings
 from core.db.unit_of_work import uow
+from core.observability import observe_background_job, observe_outbox_publish
 from core.services import BillingService
 from core.services.notifications import NotificationService
 
 logger = logging.getLogger(__name__)
 
 
-async def _charge_all_and_notify_async() -> None:
+async def _charge_all_and_notify_async() -> bool:
     if settings.maintenance_mode or not settings.billing_enabled:
-        return
+        return False
 
     billing = BillingService(uow, per_config_cost=settings.per_config_cost)
     await billing.charge_all()
     await _publish_notification_outbox_async()
+    return True
 
 
 async def _publish_notification_outbox_async(*, limit: int = 20) -> int:
@@ -37,6 +41,7 @@ async def _publish_notification_outbox_async(*, limit: int = 20) -> int:
                     notification_id=item.dedupe_key,
                 )
             except Exception as exc:
+                observe_outbox_publish("error")
                 logger.exception(
                     "Failed to publish billing notification outbox row",
                     extra={"outbox_id": item.id},
@@ -49,29 +54,45 @@ async def _publish_notification_outbox_async(*, limit: int = 20) -> int:
                 # enqueue() returning False means the stable ID was already
                 # published before a prior process crashed; that is success.
                 await billing_repo.mark_notification_published(item)
+                observe_outbox_publish("published")
                 published += 1
     return published
 
 
-async def _reconcile_vpn_operations_async() -> None:
+async def _reconcile_vpn_operations_async() -> bool:
     if settings.maintenance_mode:
-        return
+        return False
     billing = BillingService(uow, per_config_cost=settings.per_config_cost)
     await billing.reconcile_pending_config_operations()
+    return True
+
+
+def _run_observed_job(
+    name: str,
+    function: Callable[[], Awaitable[object]],
+) -> object:
+    started = time.monotonic()
+    outcome = "error"
+    try:
+        result = asyncio.run(function())
+        outcome = "skipped" if result is False else "success"
+        return result
+    finally:
+        observe_background_job(name, outcome, time.monotonic() - started)
 
 
 def charge_all_and_notify() -> None:
     """Synchronously run billing and notifications for RQ."""
-    asyncio.run(_charge_all_and_notify_async())
+    _run_observed_job("billing", _charge_all_and_notify_async)
 
 
 def reconcile_vpn_operations() -> None:
     """Synchronously reconcile durable VPN operations for RQ."""
 
-    asyncio.run(_reconcile_vpn_operations_async())
+    _run_observed_job("vpn_reconcile", _reconcile_vpn_operations_async)
 
 
 def publish_notification_outbox() -> None:
     """Synchronously publish pending outbox rows for RQ."""
 
-    asyncio.run(_publish_notification_outbox_async())
+    _run_observed_job("notification_outbox", _publish_notification_outbox_async)

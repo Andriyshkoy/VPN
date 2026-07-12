@@ -197,6 +197,24 @@ class BillingRepo:
         intent_id = intent_id or str(uuid4())
         if len(intent_id) > 36:
             raise InvalidOperationError("Invalid payment intent ID")
+        existing = await self.session.scalar(
+            select(ProviderPayment).where(ProviderPayment.intent_id == intent_id)
+        )
+        if existing is not None:
+            self._validate_payment(
+                existing,
+                user_id=user_id,
+                amount=normalized_amount,
+                currency=currency,
+                payload=f"topup:{intent_id}",
+                require_payload=True,
+            )
+            if existing.provider != provider:
+                raise InvalidOperationError(
+                    "Payment intent key was already used for another provider"
+                )
+            return existing
+
         payment = ProviderPayment(
             intent_id=intent_id,
             user_id=user_id,
@@ -208,9 +226,30 @@ class BillingRepo:
             expires_at=datetime.now(timezone.utc)
             + timedelta(seconds=settings.payment_intent_ttl_seconds),
         )
-        self.session.add(payment)
-        await self.session.flush()
-        return payment
+        try:
+            async with self.session.begin_nested():
+                self.session.add(payment)
+                await self.session.flush()
+            return payment
+        except IntegrityError:
+            existing = await self.session.scalar(
+                select(ProviderPayment).where(ProviderPayment.intent_id == intent_id)
+            )
+            if existing is None:
+                raise
+            self._validate_payment(
+                existing,
+                user_id=user_id,
+                amount=normalized_amount,
+                currency=currency,
+                payload=f"topup:{intent_id}",
+                require_payload=True,
+            )
+            if existing.provider != provider:
+                raise InvalidOperationError(
+                    "Payment intent key was already used for another provider"
+                )
+            return existing
 
     async def validate_payment_intent(
         self,

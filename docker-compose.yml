@@ -1,3 +1,9 @@
+x-vpn-manager-tls-volume: &vpn-manager-tls-volume
+  type: bind
+  source: ${VPN_MANAGER_TLS_DIR:-./secrets/vpn-manager}
+  target: /run/secrets/vpn-manager
+  read_only: true
+
 services:
   db:
     image: postgres:16
@@ -34,7 +40,7 @@ services:
       db:
         condition: service_healthy
     env_file:
-      - .env
+      - ${VPN_ENV_FILE:-.env}
 
   admin:
     build:
@@ -49,7 +55,24 @@ services:
       redis:
         condition: service_healthy
     env_file:
-      - .env
+      - ${VPN_ENV_FILE:-.env}
+    volumes:
+      - *vpn-manager-tls-volume
+    environment:
+      OBSERVABILITY_ENABLED: "true"
+      STATSD_HOST: statsd_exporter
+      VPN_HUB_SERVICE: admin
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
     restart: on-failure
 
   bot:
@@ -65,7 +88,13 @@ services:
       redis:
         condition: service_healthy
     env_file:
-      - .env
+      - ${VPN_ENV_FILE:-.env}
+    volumes:
+      - *vpn-manager-tls-volume
+    environment:
+      OBSERVABILITY_ENABLED: "true"
+      STATSD_HOST: statsd_exporter
+      VPN_HUB_SERVICE: bot
     restart: on-failure
     
   rq_worker:
@@ -82,7 +111,13 @@ services:
       migrations:
         condition: service_completed_successfully
     env_file:
-      - .env
+      - ${VPN_ENV_FILE:-.env}
+    volumes:
+      - *vpn-manager-tls-volume
+    environment:
+      OBSERVABILITY_ENABLED: "true"
+      STATSD_HOST: statsd_exporter
+      VPN_HUB_SERVICE: rq_worker
     restart: always
 
   rq_scheduler:
@@ -99,8 +134,85 @@ services:
       migrations:
         condition: service_completed_successfully
     env_file:
-      - .env
+      - ${VPN_ENV_FILE:-.env}
+    environment:
+      OBSERVABILITY_ENABLED: "true"
+      STATSD_HOST: statsd_exporter
+      VPN_HUB_SERVICE: rq_scheduler
     restart: always
+
+  statsd_exporter:
+    image: prom/statsd-exporter:v0.29.0@sha256:632f705804922d50c1c95ba8ff9c8c0cc18d4bbb0cc265dc4f9ae708271c95b3
+    command:
+      - --statsd.mapping-config=/etc/statsd-exporter/statsd-mapping.yml
+    volumes:
+      - ./observability/statsd-mapping.yml:/etc/statsd-exporter/statsd-mapping.yml:ro
+    expose:
+      - "9102"
+      - "9125/udp"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  postgres_exporter:
+    image: prometheuscommunity/postgres-exporter:v0.19.1@sha256:e96064f876226d94bb6ce48a4c4b3dd76edba91168ec1ab024e5c4b959310b0f
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATA_SOURCE_URI: "db:5432/${POSTGRES_DB}?sslmode=disable"
+      DATA_SOURCE_USER: ${POSTGRES_USER}
+      DATA_SOURCE_PASS: ${POSTGRES_PASSWORD}
+    expose:
+      - "9187"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  redis_exporter:
+    image: oliver006/redis_exporter:v1.84.0@sha256:7ef8e9c26638158fa4e7ad60df8c7e53d1919986753d6c1d2d1876b6ec38d87b
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    expose:
+      - "9121"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.12.0@sha256:69f5241418838263316593f7274a304b095c40bcf22e57272865da91bd60a8ac
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+    depends_on:
+      admin:
+        condition: service_started
+      statsd_exporter:
+        condition: service_started
+      postgres_exporter:
+        condition: service_started
+      redis_exporter:
+        condition: service_started
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    ports:
+      - "127.0.0.1:19090:9090"
+    restart: unless-stopped
 
   admin_frontend:
     build:
@@ -119,3 +231,4 @@ services:
 volumes:
   db_data:
   redis_data:
+  prometheus_data:

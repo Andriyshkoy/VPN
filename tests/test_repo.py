@@ -1,6 +1,6 @@
 import pytest
 
-from core.db.models import Server, User
+from core.db.models import User
 from core.db.repo import ConfigRepo, ServerRepo, UserRepo
 from core.db.unit_of_work import uow
 
@@ -106,6 +106,7 @@ async def test_uow(monkeypatch, engine):
             "configs",
             "billing",
             "vpn_operations",
+            "telegram_updates",
         }
         await repos["users"].add(User(tg_id=1))
 

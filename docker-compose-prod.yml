@@ -1,6 +1,37 @@
+name: vpn
+
+x-vpn-manager-tls-volume: &vpn-manager-tls-volume
+  type: bind
+  source: ${VPN_MANAGER_TLS_DIR_PROD:-/etc/vpn-hub/manager-pki}
+  target: /run/secrets/vpn-manager
+  read_only: true
+
+x-observability-environment: &observability-environment
+  OBSERVABILITY_ENABLED: ${OBSERVABILITY_ENABLED:-false}
+  STATSD_HOST: statsd_exporter
+  STATSD_PORT: 9125
+  # Production passwords must be URL-safe (the runbook uses hex) so the same
+  # value is valid in both Redis AUTH and this connection URI.
+  REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
+
+x-control-plane-environment: &control-plane-environment
+  # Production is fail-closed on the private mTLS listener. Legacy HTTP is a
+  # rollback window for old code, never an implicit fallback for this release.
+  VPN_MANAGER_TLS_ENABLED: "true"
+  VPN_MANAGER_MTLS_REQUIRED: "true"
+  VPN_MANAGER_TLS_PORT: 16291
+
+x-backend-security: &backend-security
+  read_only: true
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  init: true
+  tmpfs:
+    - /tmp
+
 services:
   db:
-    image: postgres:16
+    image: postgres:16@sha256:5a65324fe84dc41709ff914e90b07f3e2f577073ed27bf917d4873aca0c9ec51
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -12,29 +43,45 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    networks: [data]
+    restart: unless-stopped
 
   redis:
-    image: redis:7
-    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    image: redis:7@sha256:24ea35ee039d7345bef2377611e3b1a615231746de4cfea74c1414575ee56167
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        : "$${REDIS_PASSWORD:?REDIS_PASSWORD is required in production}"
+        exec redis-server --appendonly yes --appendfsync everysec \
+          --requirepass "$$REDIS_PASSWORD"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$${REDIS_PASSWORD} redis-cli ping"]
       interval: 5s
       timeout: 3s
       retries: 10
+    networks: [data]
     restart: unless-stopped
 
   migrations:
-    image: andriyshkoy/vpn-migrations:latest
+    <<: *backend-security
+    image: ${VPN_MIGRATIONS_IMAGE:-andriyshkoy/vpn-migrations:unreleased}
+    profiles: ["hub", "bot", "worker", "billing-scheduler"]
     depends_on:
       db:
         condition: service_healthy
     env_file:
-      - .env
+      - ${VPN_ENV_FILE:-.env}
+    networks: [data]
 
   admin:
-    image: andriyshkoy/vpn-admin:latest
+    <<: *backend-security
+    image: ${VPN_ADMIN_IMAGE:-andriyshkoy/vpn-admin:unreleased}
+    profiles: ["hub"]
     depends_on:
       db:
         condition: service_healthy
@@ -43,11 +90,31 @@ services:
       redis:
         condition: service_healthy
     env_file:
-      - .env
-    restart: on-failure
+      - ${VPN_ENV_FILE:-.env}
+    environment:
+      <<: [*observability-environment, *control-plane-environment]
+      VPN_HUB_SERVICE: admin
+    volumes:
+      - *vpn-manager-tls-volume
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    networks: [edge, app, data, monitoring]
+    stop_grace_period: 30s
+    restart: unless-stopped
 
   bot:
-    image: andriyshkoy/vpn-bot:latest
+    <<: *backend-security
+    image: ${VPN_BOT_IMAGE:-andriyshkoy/vpn-bot:unreleased}
+    profiles: ["bot"]
     depends_on:
       db:
         condition: service_healthy
@@ -56,11 +123,20 @@ services:
       redis:
         condition: service_healthy
     env_file:
-      - .env
-    restart: on-failure
+      - ${VPN_ENV_FILE:-.env}
+    environment:
+      <<: [*observability-environment, *control-plane-environment]
+      VPN_HUB_SERVICE: bot
+    volumes:
+      - *vpn-manager-tls-volume
+    networks: [app, data, monitoring]
+    stop_grace_period: 30s
+    restart: unless-stopped
 
   rq_worker:
-    image: andriyshkoy/vpn-billing:latest
+    <<: *backend-security
+    image: ${VPN_BILLING_IMAGE:-andriyshkoy/vpn-billing:unreleased}
+    profiles: ["worker"]
     command: ./billing_daemon/entrypoint_worker.sh
     depends_on:
       redis:
@@ -70,11 +146,20 @@ services:
       migrations:
         condition: service_completed_successfully
     env_file:
-      - .env
-    restart: always
+      - ${VPN_ENV_FILE:-.env}
+    environment:
+      <<: [*observability-environment, *control-plane-environment]
+      VPN_HUB_SERVICE: rq_worker
+    volumes:
+      - *vpn-manager-tls-volume
+    networks: [app, data, monitoring]
+    stop_grace_period: 60s
+    restart: unless-stopped
 
   rq_scheduler:
-    image: andriyshkoy/vpn-billing:latest
+    <<: *backend-security
+    image: ${VPN_BILLING_IMAGE:-andriyshkoy/vpn-billing:unreleased}
+    profiles: ["billing-scheduler"]
     command: ./billing_daemon/entrypoint_scheduler.sh
     depends_on:
       redis:
@@ -84,23 +169,122 @@ services:
       migrations:
         condition: service_completed_successfully
     env_file:
-      - .env
-    restart: always
+      - ${VPN_ENV_FILE:-.env}
+    environment:
+      <<: *observability-environment
+      VPN_HUB_SERVICE: rq_scheduler
+    networks: [data, monitoring]
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  statsd_exporter:
+    image: prom/statsd-exporter:v0.29.0@sha256:632f705804922d50c1c95ba8ff9c8c0cc18d4bbb0cc265dc4f9ae708271c95b3
+    profiles: ["monitoring"]
+    command:
+      - --statsd.mapping-config=/etc/statsd-exporter/statsd-mapping.yml
+    volumes:
+      - ./observability/statsd-mapping.yml:/etc/statsd-exporter/statsd-mapping.yml:ro
+    expose:
+      - "9102"
+      - "9125/udp"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    networks: [app, monitoring]
+    restart: unless-stopped
+
+  postgres_exporter:
+    image: prometheuscommunity/postgres-exporter:v0.19.1@sha256:e96064f876226d94bb6ce48a4c4b3dd76edba91168ec1ab024e5c4b959310b0f
+    profiles: ["monitoring"]
+    environment:
+      DATA_SOURCE_URI: "db:5432/${POSTGRES_DB}?sslmode=disable"
+      POSTGRES_EXPORTER_USER: "${POSTGRES_EXPORTER_USER:-}"
+      POSTGRES_EXPORTER_PASSWORD: "${POSTGRES_EXPORTER_PASSWORD:-}"
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        : "$${POSTGRES_EXPORTER_USER:?POSTGRES_EXPORTER_USER is required}"
+        : "$${POSTGRES_EXPORTER_PASSWORD:?POSTGRES_EXPORTER_PASSWORD is required}"
+        export DATA_SOURCE_USER="$$POSTGRES_EXPORTER_USER"
+        export DATA_SOURCE_PASS="$$POSTGRES_EXPORTER_PASSWORD"
+        exec /bin/postgres_exporter
+    expose:
+      - "9187"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    networks: [data, monitoring]
+    restart: unless-stopped
+
+  redis_exporter:
+    image: oliver006/redis_exporter:v1.84.0@sha256:7ef8e9c26638158fa4e7ad60df8c7e53d1919986753d6c1d2d1876b6ec38d87b
+    profiles: ["monitoring"]
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    expose:
+      - "9121"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    networks: [data, monitoring]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.12.0@sha256:69f5241418838263316593f7274a304b095c40bcf22e57272865da91bd60a8ac
+    profiles: ["monitoring"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    expose:
+      - "9090"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    networks: [monitoring]
+    restart: unless-stopped
 
   admin_frontend:
-    image: andriyshkoy/vpn-admin-frontend:latest
+    image: ${VPN_ADMIN_FRONTEND_IMAGE:-andriyshkoy/vpn-admin-frontend:unreleased}
+    profiles: ["hub"]
     depends_on:
       - admin
-    env_file:
-      - ./admin_frontend/.env
+    networks: [edge]
+    restart: unless-stopped
 
   nginx:
-    image: andriyshkoy/vpn-nginx:latest
+    image: ${VPN_NGINX_IMAGE:-andriyshkoy/vpn-nginx:unreleased}
+    profiles: ["hub"]
     depends_on:
       - admin_frontend
     ports:
       - "14081:80"
+    networks: [edge]
+    restart: unless-stopped
 
 volumes:
   db_data:
+    external: true
+    name: vpn_db_data
   redis_data:
+    external: true
+    name: vpn_redis_data
+  prometheus_data:
+    external: true
+    name: vpn_prometheus_data
+
+networks:
+  edge:
+  app:
+  data:
+    internal: true
+  monitoring:
+    internal: true

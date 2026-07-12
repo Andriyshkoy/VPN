@@ -110,6 +110,10 @@ ENV/
 env.bak/
 venv.bak/
 
+# Local control-plane certificates/keys are mounted at runtime, never tracked.
+secrets/vpn-manager/*
+!secrets/vpn-manager/.gitkeep
+
 # Spyder project settings
 .spyderproject
 .spyproject

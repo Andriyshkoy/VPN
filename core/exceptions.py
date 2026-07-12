@@ -34,6 +34,15 @@ class APIConnectionError(APIGatewayError):
         self.attempts = attempts
 
 
+class APITLSConfigurationError(APIConnectionError):
+    """Retryable Manager TLS material/configuration failure.
+
+    Certificate mounts and rotations are external runtime state. Treating a
+    temporarily missing or unreadable file as a definitive Manager rejection
+    would incorrectly terminate provisioning and refund its reservation.
+    """
+
+
 class APITransportError(APIConnectionError):
     """Raised after a transport or timeout failure cannot be retried."""
 

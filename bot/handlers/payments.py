@@ -12,6 +12,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
     PreCheckoutQuery,
+    Update,
 )
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -79,7 +80,7 @@ async def pay_telegram(callback: CallbackQuery, state: FSMContext, bot) -> None:
 
 
 @router.callback_query(F.data.startswith("topup:"))
-async def got_topup_amount(callback: CallbackQuery, bot) -> None:
+async def got_topup_amount(callback: CallbackQuery, bot, event_update: Update) -> None:
     try:
         amount = Decimal(callback.data.split(":", 1)[1])
         allowed_amounts = {Decimal(str(value)) for value in AVAILABLE_AMOUNTS}
@@ -95,6 +96,7 @@ async def got_topup_amount(callback: CallbackQuery, bot) -> None:
         amount=amount,
         provider="telegram",
         currency="RUB",
+        idempotency_key=f"telegram:invoice:update:{event_update.update_id}",
     )
     service = TelegramPayService(bot, settings.telegram_pay_token)
     await service.send_invoice(

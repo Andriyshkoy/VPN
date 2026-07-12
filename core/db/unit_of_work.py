@@ -3,7 +3,14 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from . import async_session
-from .repo import BillingRepo, ConfigRepo, ServerRepo, UserRepo, VPNOperationRepo
+from .repo import (
+    BillingRepo,
+    ConfigRepo,
+    ServerRepo,
+    TelegramUpdateRepo,
+    UserRepo,
+    VPNOperationRepo,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,6 +22,7 @@ class Repositories(Mapping[str, object]):
     configs: ConfigRepo
     billing: BillingRepo
     vpn_operations: VPNOperationRepo
+    telegram_updates: TelegramUpdateRepo
 
     def __getitem__(self, key: str):
         try:
@@ -23,10 +31,19 @@ class Repositories(Mapping[str, object]):
             raise KeyError(key) from exc
 
     def __iter__(self) -> Iterator[str]:
-        return iter(("users", "servers", "configs", "billing", "vpn_operations"))
+        return iter(
+            (
+                "users",
+                "servers",
+                "configs",
+                "billing",
+                "vpn_operations",
+                "telegram_updates",
+            )
+        )
 
     def __len__(self) -> int:
-        return 5
+        return 6
 
 
 @asynccontextmanager
@@ -38,4 +55,5 @@ async def uow():
             configs=ConfigRepo(session),
             billing=BillingRepo(session),
             vpn_operations=VPNOperationRepo(session),
+            telegram_updates=TelegramUpdateRepo(session),
         )

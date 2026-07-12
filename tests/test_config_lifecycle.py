@@ -11,8 +11,8 @@ from core.domain import VPNOperationStatus, VPNState
 from core.exceptions import (
     APIHTTPError,
     APINotFoundError,
+    APITLSConfigurationError,
     APITransportError,
-    InvalidOperationError,
 )
 from core.services import BillingService, ConfigService, ServerService, UserService
 
@@ -164,6 +164,39 @@ async def test_provision_failure_is_recoverable(
     assert row.actual_state == actual_state
     assert row.last_error
     assert operation.status == operation_status
+
+
+@pytest.mark.asyncio
+async def test_tls_material_failure_keeps_operation_retryable_and_not_refunded(
+    monkeypatch,
+    sessionmaker,
+):
+    def missing_tls_gateway(*args, **kwargs):
+        raise APITLSConfigurationError("TLS secret mount is temporarily missing")
+
+    monkeypatch.setattr("core.services.config.APIGateway", missing_tls_gateway)
+    user, server = await _user_and_server()
+    billing = BillingService(uow, per_config_cost="1.00")
+    await billing.top_up(user.id, "10.00", idempotency_key="tls-retry-seed")
+
+    with pytest.raises(APITLSConfigurationError):
+        await billing.create_paid_config(
+            server_id=server.id,
+            owner_id=user.id,
+            name="tls-retryable",
+            display_name="TLS retryable",
+            creation_cost="10.00",
+        )
+
+    async with uow() as repos:
+        config = await repos["configs"].get(name="tls-retryable")
+        operation = await repos["vpn_operations"].get(operation_id=config.operation_id)
+    assert operation.status == VPNOperationStatus.FAILED.value
+    assert operation.next_attempt_at is not None
+    assert config.actual_state == VPNState.PROVISIONING.value
+    _, refunded = await billing.reconcile_pending_config_operations()
+    assert refunded == 0
+    assert (await UserService(uow).get(user.id)).balance == Decimal("0.00")
 
 
 @pytest.mark.asyncio

@@ -9,9 +9,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from core.db import Base
+from core.db.models.config import VPN_Config
 from core.db.models.ledger import LedgerEntry, LedgerKind
+from core.db.models.payment import ProviderPayment
 from core.db.models.user import User
+from core.db.models.vpn_operation import VPNOperation
 from core.db.repo.billing import BillingRepo
+from core.db.unit_of_work import uow
+from core.services import BillingService, ServerService, UserService
 
 POSTGRES_TEST_URL = os.getenv("POSTGRES_TEST_URL")
 pytestmark = pytest.mark.skipif(
@@ -65,6 +70,104 @@ async def test_atomic_updates_and_duplicate_key_under_postgres():
                 .where(LedgerEntry.user_id == user_id)
             )
             assert count == 3
+    finally:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.drop_all)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_paid_config_replay_creates_and_charges_once(monkeypatch):
+    engine = create_async_engine(POSTGRES_TEST_URL, echo=False)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    class Gateway:
+        def __init__(self) -> None:
+            self.create_calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def create_client(self, *args, **kwargs):
+            self.create_calls += 1
+            await asyncio.sleep(0.05)
+
+        async def download_config(self, *args, **kwargs):
+            return b"profile"
+
+    gateway = Gateway()
+    monkeypatch.setattr("core.db.unit_of_work.async_session", maker)
+    monkeypatch.setattr(
+        "core.services.config.APIGateway",
+        lambda *args, **kwargs: gateway,
+    )
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.drop_all)
+            await connection.run_sync(Base.metadata.create_all)
+
+        user = await UserService(uow).register(9002, balance="20.00")
+        server = await ServerService(uow).create(
+            name="paid-replay",
+            ip="127.0.0.1",
+            port=16290,
+            host="vpn.test",
+            location="test",
+            api_key="secret",
+            cost=0,
+        )
+        billing = BillingService(uow, per_config_cost="1.00")
+
+        async def purchase():
+            return await billing.create_paid_config(
+                server_id=server.id,
+                owner_id=user.id,
+                name="stable-telegram-update",
+                display_name="Phone",
+                creation_cost="10.00",
+                idempotency_key="telegram:create-config:update:9002",
+            )
+
+        first, second = await asyncio.gather(purchase(), purchase())
+
+        assert first.id == second.id
+        assert gateway.create_calls == 1
+
+        async def invoice():
+            return await billing.create_payment_intent(
+                user_id=user.id,
+                amount="100.00",
+                provider="telegram",
+                currency="RUB",
+                idempotency_key="telegram:invoice:update:9002",
+            )
+
+        first_invoice, second_invoice = await asyncio.gather(invoice(), invoice())
+        assert first_invoice.intent_id == second_invoice.intent_id
+        async with maker() as session:
+            assert (await session.get(User, user.id)).balance == Decimal("10.00")
+            assert (
+                await session.scalar(select(func.count()).select_from(VPN_Config)) == 1
+            )
+            assert (
+                await session.scalar(select(func.count()).select_from(VPNOperation))
+                == 1
+            )
+            assert (
+                await session.scalar(select(func.count()).select_from(ProviderPayment))
+                == 1
+            )
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(LedgerEntry)
+                    .where(LedgerEntry.kind == LedgerKind.CONFIG_RESERVATION.value)
+                )
+                == 1
+            )
     finally:
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.drop_all)
