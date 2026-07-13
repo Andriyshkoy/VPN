@@ -30,15 +30,27 @@ _KIND_LABELS = {
 accounting_service = AccountingService(uow)
 
 
-def render_balance_history(page: BalanceHistoryPage) -> str:
+def render_balance_history(
+    page: BalanceHistoryPage,
+    *,
+    direction: str | None = None,
+) -> str:
+    title = {
+        "credit": "➕ <b>Пополнения и начисления</b>",
+        "debit": "➖ <b>Списания</b>",
+    }.get(direction, "📒 <b>История баланса</b>")
     if not page.items:
-        return (
-            "📒 <b>История баланса</b>\n\n"
+        empty_text = {
+            "credit": "Пополнений и начислений пока нет.",
+            "debit": "Списаний пока нет.",
+        }.get(
+            direction,
             "Операций пока нет. После первого пополнения или списания они "
-            "появятся здесь."
+            "появятся здесь.",
         )
+        return f"{title}\n\n{empty_text}"
 
-    lines = ["📒 <b>История баланса</b>", ""]
+    lines = [title, ""]
     for item in page.items:
         created_at = item.created_at
         if created_at.tzinfo is None:
@@ -58,7 +70,11 @@ def render_balance_history(page: BalanceHistoryPage) -> str:
 
     first = page.offset + 1
     last = page.offset + len(page.items)
-    lines.append(f"Операции {first}–{last} из {page.total}")
+    page_label = {
+        "credit": "Пополнения и начисления",
+        "debit": "Списания",
+    }.get(direction, "Операции")
+    lines.append(f"{page_label} {first}–{last} из {page.total}")
     return "\n".join(lines)
 
 
@@ -68,6 +84,7 @@ async def _history_for_telegram_user(
     *,
     offset: int,
     snapshot_id: int | None = None,
+    direction: str | None = None,
 ) -> BalanceHistoryPage | None:
     user = await get_or_create_user(tg_id, username)
     if user is None:
@@ -77,6 +94,7 @@ async def _history_for_telegram_user(
         limit=HISTORY_PAGE_SIZE,
         offset=offset,
         snapshot_id=snapshot_id,
+        direction=direction,
     )
 
 
@@ -95,6 +113,7 @@ async def cmd_balance_history(message: Message) -> None:
             limit=page.limit,
             total=page.total,
             snapshot_id=page.snapshot_id,
+            direction=None,
         ),
     )
 
@@ -104,6 +123,9 @@ async def balance_history_callback(callback: CallbackQuery) -> None:
     raw_cursor = callback.data.partition(":")[2]
     try:
         cursor_parts = raw_cursor.split(":")
+        direction = None
+        if cursor_parts[0] in ("credit", "debit"):
+            direction = cursor_parts.pop(0)
         if len(cursor_parts) == 1:
             snapshot_id = None
             offset = int(cursor_parts[0])
@@ -128,18 +150,20 @@ async def balance_history_callback(callback: CallbackQuery) -> None:
         callback.from_user.username,
         offset=offset,
         snapshot_id=snapshot_id,
+        direction=direction,
     )
     if page is None:
         await safe_callback_answer(callback)
         return
     await safe_edit_text(
         callback.message,
-        render_balance_history(page),
+        render_balance_history(page, direction=direction),
         reply_markup=balance_history_keyboard(
             offset=page.offset,
             limit=page.limit,
             total=page.total,
             snapshot_id=page.snapshot_id,
+            direction=direction,
         ),
     )
     await safe_callback_answer(callback)

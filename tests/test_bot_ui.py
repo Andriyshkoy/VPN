@@ -156,6 +156,47 @@ async def test_config_fsm_gives_hints_instead_of_silently_ignoring_messages():
 
 
 @pytest.mark.asyncio
+async def test_create_config_presents_monthly_price_without_hourly_microcharge(
+    monkeypatch,
+):
+    class State:
+        selected = None
+
+        async def set_state(self, value):
+            self.selected = value
+
+    async def register(*args, **kwargs):
+        return SimpleNamespace(id=1)
+
+    async def list_servers():
+        return [SimpleNamespace(id=7, location="🇳🇱", name="Amsterdam")]
+
+    monkeypatch.setattr(configs, "get_or_create_user", register)
+    monkeypatch.setattr(configs.server_service, "list", list_servers)
+    monkeypatch.setattr(configs.settings, "maintenance_mode", False)
+    monkeypatch.setattr(configs.settings, "provisioning_enabled", True)
+    monkeypatch.setattr(configs.settings, "config_creation_cost", Decimal("10.00"))
+    monkeypatch.setattr(configs.settings, "per_config_cost", Decimal("0.07"))
+    monkeypatch.setattr(configs.settings, "billing_interval", 3_600)
+    message = DummyMessage()
+    state = State()
+
+    await configs._begin_create_config(
+        message,
+        state,
+        tg_id=message.from_user.id,
+        username=message.from_user.username,
+    )
+
+    text = message.calls[-1][0]
+    assert "около 50 ₽ в месяц" in text
+    assert "небольшими частями в течение месяца" in text
+    assert "0,07 ₽" not in text
+    assert "раз в час" not in text
+    assert state.selected == CreateConfig.choosing_server
+
+
+@pytest.mark.asyncio
 async def test_group_ui_redirects_without_exposing_account_data():
     message = DummyMessage(MENU_BALANCE)
     message.chat.type = "group"
@@ -554,7 +595,8 @@ async def test_referrals_show_private_link_terms_stats_and_legacy_callback(monke
         button for row in kwargs["reply_markup"].inline_keyboard for button in row
     ]
     assert buttons[0].url.startswith("https://t.me/share/url?")
-    assert buttons[1].callback_data == "balance_history:0"
+    assert buttons[1].callback_data == "balance_history:credit:0"
+    assert buttons[2].callback_data == "balance_history:debit:0"
 
     callback = DummyCallback("refs:-1")
     callback.bot = bot

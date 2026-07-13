@@ -116,8 +116,9 @@ stored independently from balance-based suspension. Installation help is split
 by platform and points to official OpenVPN clients. The referral screen shows
 only the account owner's opaque invite link, aggregate two-level counts, and
 earned totals; it never exposes another user's Telegram identity or individual
-deposit. The balance screen exposes a paginated private ledger history with the
-amount, reason, timestamp, and resulting balance for every recorded movement.
+deposit. The balance screen exposes separate paginated views for credits and
+debits, with the amount, reason, timestamp, and resulting balance for every
+recorded movement.
 See [the referral accounting guide](docs/referrals.md) for policy, backfill,
 and manual-refund boundaries.
 
