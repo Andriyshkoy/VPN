@@ -41,6 +41,11 @@ runtime processes, not independent microservices.
   from creating duplicate charges.
 - Paid config creation reserves the creation cost and records compensating
   refunds for definitive provisioning failures.
+- With referral settlement enabled, a live confirmed provider payment credits
+  at most two rewards in the same transaction: 5% to the direct inviter and 1%
+  to the inviter above them. A temporarily paused payment is caught up later.
+  Rewards are internal VPN balance, never compound, and have their own
+  immutable audit rows and ledger entries.
 
 The existing tariff is still controlled by `PER_CONFIG_COST` and
 `BILLING_INTERVAL`. Changing either value is a business decision: test it on a
@@ -92,8 +97,14 @@ for dead-letter recovery and the future webhook boundary.
 
 ### Telegram user interface
 
+The bot is invite-only. Existing database users are grandfathered; an unknown
+Telegram account is created only by a private `/start ref_<opaque-code>` deep
+link. Unknown messages are silently ignored, while payment protocol events
+fail closed without fabricating an account. Numeric Telegram IDs are not valid
+invites.
+
 `/start` installs a persistent reply keyboard for balance, configs, top-up,
-installation guides, and the future referral program. Historical commands stay
+installation guides, and the referral program. Historical commands stay
 available as compatibility aliases, while Telegram's visible command list is
 limited to `/start`, `/menu`, and `/help`. Navigation is routed before FSM text
 handlers and clears an unfinished create/rename flow, so a menu label can never
@@ -102,10 +113,13 @@ become a configuration name accidentally.
 Config details use inline controls for download, rename, and a confirmed delete.
 Historical manual pause/resume callbacks fail closed until user intent can be
 stored independently from balance-based suspension. Installation help is split
-by platform and points to official OpenVPN clients. The referral screen
-intentionally remains a placeholder until qualification, anti-abuse, and
-idempotent ledger rewards exist; it does not publish invite links or referral
-PII.
+by platform and points to official OpenVPN clients. The referral screen shows
+only the account owner's opaque invite link, aggregate two-level counts, and
+earned totals; it never exposes another user's Telegram identity or individual
+deposit. The balance screen exposes a paginated private ledger history with the
+amount, reason, timestamp, and resulting balance for every recorded movement.
+See [the referral accounting guide](docs/referrals.md) for policy, backfill,
+and manual-refund boundaries.
 
 ## Configuration
 
@@ -140,6 +154,10 @@ Store the second command's output in `ADMIN_PASSWORD_HASH`.
 | `ADMIN_PASSWORD_HASH` | bcrypt password hash | Required for login |
 | `REDIS_URL` | Redis used by all backend processes | `redis://redis:6379/0` |
 | `PAYMENT_INTENT_TTL_SECONDS` | Lifetime of a pending invoice intent | `3600` |
+| `REFERRAL_REWARDS_ENABLED` | Credit rewards for newly confirmed provider payments | `true` |
+| `REFERRAL_LEVEL_1_RATE_BPS` | Direct inviter reward in basis points | `500` (5%) |
+| `REFERRAL_LEVEL_2_RATE_BPS` | Second-level reward in basis points | `100` (1%) |
+| `REFERRAL_PROGRAM_VERSION` | Immutable policy label stored with every reward | `v1-5pct-1pct` |
 | `VPN_OPERATION_MAX_ATTEMPTS` | Ambiguous Manager attempts before operator intervention | `20` |
 | `VPN_MANAGER_TLS_ENABLED`, `VPN_MANAGER_TLS_PORT` | Opt-in verified HTTPS/mTLS and parallel migration port | `false`, `16291` in `.env.example` |
 | `VPN_MANAGER_MTLS_REQUIRED` | Fail closed unless TLS, CA and Hub client identity paths are configured | `false` |
@@ -177,6 +195,7 @@ These switches live in backend settings and do not depend on either UI:
 | `BILLING_ENABLED=false` | Makes periodic billing jobs no-op. |
 | `PROVISIONING_ENABLED=false` | Rejects new configs and unsuspension; suspension/revocation can still proceed. |
 | `NOTIFICATIONS_ENABLED=false` | Pauses bot delivery and prevents billing jobs from enqueueing new notices. Existing queued messages remain in Redis. |
+| `REFERRAL_REWARDS_ENABLED=false` | Keeps provider top-ups active but pauses reward settlement and its catch-up job. Credited payments remain queued and are settled idempotently after re-enabling; existing history and balances remain unchanged. |
 | `NOTIFICATION_MAX_ATTEMPTS` | Moves repeatedly failing Telegram deliveries to the failed queue after delayed exponential retries. |
 
 For incident maintenance, set at least `MAINTENANCE_MODE=true` and
@@ -279,9 +298,15 @@ the current endpoint list.
   compatibility; verified HTTPS/mTLS is opt-in and documented in
   [the control-plane guide](docs/vpn-control-plane.md).
 - Preserve `ENCRYPTION_KEY`, PostgreSQL, and Redis backups before migrations.
+- Referral migration `f1a8c3d9e742` generates opaque codes for every existing
+  user and backfills every persisted credited provider payment. Payments made
+  before `provider_payment` existed cannot be reconstructed from an aggregate
+  balance; use a verified provider export rather than guessing from
+  `opening_balance`.
 - Once the new ledger/lifecycle tables contain operational data, the migration
   deliberately refuses a destructive schema downgrade. Roll application code
-  back without downgrading the database.
+  back only to an image compatible with the referral schema and without
+  downgrading the database.
 - `docker-compose-prod.yml` references prebuilt images and is not part of the
   local workflow. Building or testing this repository does not publish images
   or deploy anything.

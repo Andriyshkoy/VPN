@@ -16,6 +16,7 @@ from aiogram.types import (
 from sqlalchemy.exc import SQLAlchemyError
 
 from core.config import settings
+from core.exceptions import UserNotFoundError
 from core.services import TelegramPayService
 
 from ..keyboards import main_menu_keyboard
@@ -143,6 +144,8 @@ async def got_topup_amount(callback: CallbackQuery, bot, event_update: Update) -
 async def process_pre_checkout_query(pcq: PreCheckoutQuery, bot) -> None:
     try:
         user = await get_or_create_user(pcq.from_user.id, pcq.from_user.username)
+        if user is None:
+            raise UserNotFoundError("Unknown Telegram payer")
         await billing_service.validate_payment_intent(
             user_id=user.id,
             claim_id=pcq.id,
@@ -176,6 +179,10 @@ async def successful_payment_handler(message: Message, bot) -> None:
                 message.from_user.id,
                 message.from_user.username,
             )
+            if user is None:
+                raise UserNotFoundError(
+                    "Captured Telegram payment belongs to an unknown account"
+                )
             await billing_service.record_telegram_payment(
                 user_id=user.id,
                 telegram_payment_charge_id=payment.telegram_payment_charge_id,

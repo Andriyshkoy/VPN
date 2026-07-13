@@ -30,6 +30,8 @@ class LedgerKind(StrEnum):
     PERIODIC_CHARGE = "periodic_charge"
     CONFIG_RESERVATION = "config_reservation"
     CONFIG_REFUND = "config_refund"
+    REFERRAL_REWARD_L1 = "referral_reward_l1"
+    REFERRAL_REWARD_L2 = "referral_reward_l2"
 
 
 class LedgerEntry(Base):

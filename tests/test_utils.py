@@ -12,6 +12,7 @@ def test_serialize_dataclass_handles_datetime_and_decimal():
         username="name",
         created=datetime(2025, 1, 1, 12, 0),
         balance=Decimal("1.5"),
+        referral_code="A_b-" * 8,
     )
     server = Server(
         id=1,

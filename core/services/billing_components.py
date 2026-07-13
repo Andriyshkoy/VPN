@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from decimal import Decimal
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -18,6 +19,8 @@ from core.exceptions import (
 
 from .billing_contracts import PaymentIntent, PaymentReceipt
 from .models import Config, User
+
+logger = logging.getLogger(__name__)
 
 
 class BalanceOperations:
@@ -183,7 +186,8 @@ class ProviderPaymentOperations:
     ) -> PaymentReceipt:
         planned: list[str] = []
         async with self._uow() as repos:
-            result = await self._billing_repo(repos).record_provider_payment(
+            billing_repo = self._billing_repo(repos)
+            result = await billing_repo.record_provider_payment(
                 user_id=user_id,
                 provider=provider,
                 provider_payment_id=provider_payment_id,
@@ -194,6 +198,18 @@ class ProviderPaymentOperations:
                 raw_data=raw_data,
             )
             user = User.from_orm(result.user)
+            # New captures settle referrals in the same transaction. A replay
+            # may also safely catch up a credited payment left unsettled by a
+            # rolling deployment or a temporary referral kill switch.
+            reward_results = []
+            if (
+                settings.referral_rewards_enabled
+                and result.payment.referral_settled_at is None
+            ):
+                reward_results = await self._apply_referral_rewards_or_quarantine(
+                    billing_repo,
+                    result.payment,
+                )
             if user.balance > 0:
                 planned = await self._config_service.prepare_entitlement(
                     repos=repos,
@@ -201,14 +217,131 @@ class ProviderPaymentOperations:
                     desired_state=VPNState.ACTIVE.value,
                     kind=VPNOperationKind.UNSUSPEND.value,
                 )
+            for reward_result in reward_results:
+                if reward_result.user.balance <= 0:
+                    continue
+                planned.extend(
+                    await self._config_service.prepare_entitlement(
+                        repos=repos,
+                        owner_id=reward_result.user.id,
+                        desired_state=VPNState.ACTIVE.value,
+                        kind=VPNOperationKind.UNSUSPEND.value,
+                    )
+                )
 
-        await self._config_service.execute_operations(planned, owner_id=user_id)
+        await self._config_service.execute_operations(list(dict.fromkeys(planned)))
         return PaymentReceipt(
             user=user,
             provider=provider,
             provider_payment_id=provider_payment_id,
             credited=result.credited,
         )
+
+    async def reconcile_referral_rewards(self, *, limit: int = 100) -> int:
+        """Settle missed provider rewards and repair retroactive entitlements.
+
+        Every payment is committed in its own Unit of Work, keeping locks short
+        while preserving the same atomic reward/ledger invariants as live
+        capture. Migration-issued rewards are also used to restore configs when
+        the resulting account balance is positive.
+        """
+
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 1000
+        ):
+            raise InvalidOperationError("Invalid referral reconciliation limit")
+        if settings.maintenance_mode or not settings.referral_rewards_enabled:
+            return 0
+
+        settled = 0
+        quarantined = 0
+        for _index in range(limit):
+            async with self._uow() as repos:
+                billing_repo = self._billing_repo(repos)
+                payment = await billing_repo.claim_next_unsettled_referral_payment()
+                if payment is None:
+                    break
+                reward_results = await self._apply_referral_rewards_or_quarantine(
+                    billing_repo,
+                    payment,
+                )
+                if payment.referral_settlement_status == "invalid_accounting":
+                    quarantined += 1
+                    continue
+                for reward_result in reward_results:
+                    if reward_result.user.balance <= 0:
+                        continue
+                    await self._config_service.prepare_entitlement(
+                        repos=repos,
+                        owner_id=reward_result.user.id,
+                        desired_state=VPNState.ACTIVE.value,
+                        kind=VPNOperationKind.UNSUSPEND.value,
+                    )
+                settled += 1
+
+        # Backfilled rewards are written by Alembic rather than this service,
+        # so their entitlement side effect is deliberately reconciled here.
+        async with self._uow() as repos:
+            owner_ids = tuple(
+                await self._billing_repo(repos).list_referral_entitlement_candidate_ids(
+                    limit=limit
+                )
+            )
+
+        # Recheck each balance under its user-row lock and commit one owner's
+        # config intent at a time. This prevents a stale positive-balance read
+        # from overriding a concurrent charge/suspension, and avoids holding a
+        # batch of unrelated config locks in one transaction.
+        for owner_id in owner_ids:
+            async with self._uow() as repos:
+                user = await repos["users"].get_for_update(owner_id)
+                if user is None or user.balance <= 0:
+                    continue
+                await self._config_service.prepare_entitlement(
+                    repos=repos,
+                    owner_id=owner_id,
+                    desired_state=VPNState.ACTIVE.value,
+                    kind=VPNOperationKind.UNSUSPEND.value,
+                )
+        if quarantined:
+            # Each payment above used an independent committed UOW, so raising
+            # here signals the existing background-job alert without undoing
+            # quarantine markers or blocking later valid payments in the batch.
+            raise InvalidOperationError(
+                f"{quarantined} referral payment(s) quarantined"
+            )
+        return settled
+
+    async def _apply_referral_rewards_or_quarantine(
+        self,
+        billing_repo,
+        payment,
+    ):
+        """Rollback partial rewards and quarantine irreconcilable accounting."""
+
+        payment_id = payment.id
+        try:
+            async with billing_repo.session.begin_nested():
+                return await billing_repo.apply_provider_referral_rewards(
+                    payment=payment,
+                    level_rates_bps=(
+                        settings.referral_level_1_rate_bps,
+                        settings.referral_level_2_rate_bps,
+                    ),
+                    program_version=settings.referral_program_version,
+                )
+        except InvalidOperationError:
+            payment = await billing_repo.quarantine_invalid_referral_accounting(
+                payment_id=payment_id,
+                program_version=settings.referral_program_version,
+            )
+            logger.exception(
+                "Referral payment accounting quarantined",
+                extra={"provider_payment_row_id": payment.id},
+            )
+            return []
 
     async def record_telegram_payment(
         self,

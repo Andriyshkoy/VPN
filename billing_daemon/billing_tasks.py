@@ -11,6 +11,8 @@ from core.services.notifications import NotificationService
 
 logger = logging.getLogger(__name__)
 
+REFERRAL_RECONCILE_BATCH_SIZE = 100
+
 
 async def _charge_all_and_notify_async() -> bool:
     if settings.maintenance_mode or not settings.billing_enabled:
@@ -67,6 +69,19 @@ async def _reconcile_vpn_operations_async() -> bool:
     return True
 
 
+async def _reconcile_referral_rewards_async(
+    *, limit: int = REFERRAL_RECONCILE_BATCH_SIZE
+) -> bool:
+    """Catch up durable provider payments that have no referral settlement yet."""
+
+    if settings.maintenance_mode or not settings.referral_rewards_enabled:
+        return False
+
+    billing = BillingService(uow, per_config_cost=settings.per_config_cost)
+    await billing.reconcile_referral_rewards(limit=limit)
+    return True
+
+
 def _run_observed_job(
     name: str,
     function: Callable[[], Awaitable[object]],
@@ -90,6 +105,12 @@ def reconcile_vpn_operations() -> None:
     """Synchronously reconcile durable VPN operations for RQ."""
 
     _run_observed_job("vpn_reconcile", _reconcile_vpn_operations_async)
+
+
+def reconcile_referral_rewards() -> None:
+    """Synchronously reconcile referral rewards for RQ."""
+
+    _run_observed_job("referral_reconcile", _reconcile_referral_rewards_async)
 
 
 def publish_notification_outbox() -> None:

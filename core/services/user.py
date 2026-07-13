@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Callable
 from uuid import uuid4
 
@@ -31,10 +32,12 @@ class UserService:
         async with self._uow() as repos:
             user, created = await repos["users"].get_or_create_with_status(tg_id, **kw)
             if not created and user.telegram_delivery_status != "active":
-                user = await repos["users"].set_telegram_delivery_status(
+                updated = await repos["users"].set_telegram_delivery_status(
                     tg_id,
                     delivery_status="active",
                 )
+                if updated is not None:
+                    user = updated
             if initial_balance and created:
                 movement = await repos["billing"].apply_balance_change(
                     user_id=user.id,
@@ -46,6 +49,74 @@ class UserService:
                 )
                 user = movement.user
             return User.from_orm(user)
+
+    async def find_by_tg_id(
+        self,
+        tg_id: int,
+        *,
+        reactivate_delivery: bool = False,
+    ) -> User | None:
+        """Recognize an existing account without ever creating one.
+
+        Delivery status is repaired only when the caller explicitly confirms a
+        private inbound message. Callbacks and payment protocol updates do not
+        prove that the bot can send a new private message.
+        """
+
+        async with self._uow() as repos:
+            user = await repos["users"].get_by_tg_id(tg_id)
+            if (
+                reactivate_delivery
+                and user is not None
+                and user.telegram_delivery_status != "active"
+            ):
+                updated = await repos["users"].set_telegram_delivery_status(
+                    tg_id,
+                    delivery_status="active",
+                )
+                if updated is not None:
+                    user = updated
+            return User.from_orm(user) if user is not None else None
+
+    async def register_invited(
+        self,
+        tg_id: int,
+        *,
+        username: str | None,
+        referral_code: str | None,
+    ) -> User | None:
+        """Return a grandfathered account or create one by private invite.
+
+        The public payload is ``ref_<32 URL-safe characters>``. Existing
+        accounts do not need a payload; unknown or legacy numeric payloads are
+        deliberately ignored. This lookup never changes Telegram delivery
+        status; the access middleware owns private-message reachability.
+        """
+
+        code = self._parse_referral_payload(referral_code)
+        async with self._uow() as repos:
+            user = await repos["users"].get_by_tg_id(tg_id)
+            if user is not None:
+                if username != user.username:
+                    user = await repos["users"].update(user.id, username=username)
+                return User.from_orm(user)
+
+            if code is None:
+                return None
+
+            user, _ = await repos["users"].get_or_create_invited(
+                tg_id,
+                referral_code=code,
+                username=username,
+            )
+            return User.from_orm(user) if user is not None else None
+
+    @staticmethod
+    def _parse_referral_payload(payload: str | None) -> str | None:
+        if payload is None:
+            return None
+        match = re.fullmatch(r"ref_([A-Za-z0-9_-]{32})", payload.strip())
+        return match.group(1) if match else None
 
     async def delete(self, user_id: int) -> bool:
         async with self._uow() as repos:
@@ -106,6 +177,9 @@ class UserService:
     async def update(self, user_id: int, **fields) -> User | None:
         """Update a user while routing balance changes through the ledger."""
 
+        immutable_fields = {"referred_by_id", "referral_code"}.intersection(fields)
+        if immutable_fields:
+            raise InvalidOperationError("Referral attribution is immutable")
         requested_balance = fields.pop("balance", None)
         planned: list[str] = []
         async with self._uow() as repos:

@@ -15,6 +15,7 @@ from core.db.models.config import VPN_Config
 from core.db.models.ledger import LedgerEntry, LedgerKind
 from core.db.models.notification_outbox import NotificationOutbox
 from core.db.models.payment import ProviderPayment
+from core.db.models.referral_reward import ReferralReward
 from core.db.models.user import User
 from core.db.models.vpn_operation import VPNOperation
 from core.domain import VPNOperationKind, VPNState
@@ -60,6 +61,14 @@ class PaymentCreditResult:
     payment: ProviderPayment
     ledger_entry: LedgerEntry
     credited: bool
+
+
+@dataclass(frozen=True)
+class ReferralRewardResult:
+    user: User
+    reward: ReferralReward
+    ledger_entry: LedgerEntry
+    applied: bool
 
 
 class BillingRepo:
@@ -369,7 +378,17 @@ class BillingRepo:
         if not payload or len(payload) > 200:
             raise InvalidOperationError("Invalid payment payload")
 
-        existing = await self._get_provider_payment(provider, provider_payment_id)
+        # Periodic billing locks accounts in ascending ID order. Lock the payer
+        # and both immutable referral ancestors in that same order before a
+        # payment row is locked, otherwise billing (ancestor -> payer) and a
+        # capture (payer -> ancestor) can deadlock each other on PostgreSQL.
+        await self._lock_referral_payment_users(user_id)
+
+        existing = await self._get_provider_payment(
+            provider,
+            provider_payment_id,
+            for_update=True,
+        )
         if existing is not None:
             if intent_id is not None and existing.intent_id != intent_id:
                 raise InvalidOperationError(
@@ -511,6 +530,277 @@ class BillingRepo:
             ledger_entry=ledger_result.ledger_entry,
             credited=ledger_result.applied,
         )
+
+    async def apply_provider_referral_rewards(
+        self,
+        *,
+        payment: ProviderPayment,
+        level_rates_bps: tuple[int, int],
+        program_version: str,
+    ) -> list[ReferralRewardResult]:
+        """Credit the immutable two-level reward chain for one captured payment.
+
+        This primitive must run in the same Unit of Work as the first provider
+        credit. The payment/level uniqueness constraint and ledger idempotency
+        keys are a second line of defence against replay and concurrent capture.
+        """
+
+        if payment.status != "credited" or payment.ledger_entry_id is None:
+            raise InvalidOperationError("Referral rewards require a credited payment")
+        if payment.referral_settled_at is not None:
+            raise InvalidOperationError("Referral rewards are already settled")
+        if payment.currency != "RUB":
+            raise InvalidOperationError("Referral rewards require a RUB payment")
+        await self._validate_referral_source_payment(payment)
+        if len(level_rates_bps) != 2:
+            raise InvalidOperationError("Exactly two referral rates are required")
+        if any(
+            isinstance(rate, bool)
+            or not isinstance(rate, int)
+            or not 0 <= rate <= 1_000
+            for rate in level_rates_bps
+        ):
+            raise InvalidOperationError("Invalid referral reward rate")
+        if level_rates_bps[1] > level_rates_bps[0]:
+            raise InvalidOperationError("Level 2 referral rate cannot exceed level 1")
+        if sum(level_rates_bps) > 1_000:
+            raise InvalidOperationError("Combined referral rates cannot exceed 10%")
+        program_version = program_version.strip()
+        if not program_version or len(program_version) > 32:
+            raise InvalidOperationError("Invalid referral program version")
+
+        source_user = await self.session.get(User, payment.user_id)
+        if source_user is None:
+            raise InvalidOperationError("Referral payment owner is missing")
+
+        # Resolve the full chain before issuing anything. If legacy/corrupt data
+        # contains a self-reference or cycle, fail closed for the whole chain
+        # without preventing the payer's already-captured money from being used.
+        chain: list[User] = []
+        seen_user_ids = {source_user.id}
+        current = source_user
+        for _level in (1, 2):
+            if current.referred_by_id is None:
+                break
+            if current.referred_by_id in seen_user_ids:
+                await self._settle_referral_payment(
+                    payment,
+                    status="invalid_chain",
+                    program_version=program_version,
+                )
+                return []
+            beneficiary = await self.session.get(User, current.referred_by_id)
+            if beneficiary is None:
+                await self._settle_referral_payment(
+                    payment,
+                    status="invalid_chain",
+                    program_version=program_version,
+                )
+                return []
+            chain.append(beneficiary)
+            seen_user_ids.add(beneficiary.id)
+            current = beneficiary
+
+        results: list[ReferralRewardResult] = []
+        for level, (beneficiary, rate_bps) in enumerate(
+            zip(chain, level_rates_bps, strict=False), start=1
+        ):
+            if rate_bps == 0:
+                continue
+            reward_amount = to_money(
+                payment.amount * Decimal(rate_bps) / Decimal(10_000)
+            )
+            # Sub-cent rewards are not representable by the RUB ledger and must
+            # not produce zero-value audit rows.
+            if reward_amount == 0:
+                continue
+
+            existing = await self._get_referral_reward(payment.id, level)
+            if existing is not None:
+                results.append(
+                    await self._existing_referral_reward_result(
+                        existing,
+                        payment=payment,
+                        beneficiary=beneficiary,
+                        rate_bps=rate_bps,
+                        reward_amount=reward_amount,
+                        program_version=program_version,
+                    )
+                )
+                continue
+
+            kind = (
+                LedgerKind.REFERRAL_REWARD_L1
+                if level == 1
+                else LedgerKind.REFERRAL_REWARD_L2
+            )
+            idempotency_key = (
+                f"referral-reward:v1:provider-payment:{payment.id}:level:{level}"
+            )
+            try:
+                # If a direct repo caller races despite the capture guard, the
+                # savepoint rolls back both balance/ledger and the audit insert
+                # before the winning immutable row is loaded.
+                async with self.session.begin_nested():
+                    movement = await self.apply_balance_change(
+                        user_id=beneficiary.id,
+                        amount=reward_amount,
+                        kind=kind,
+                        idempotency_key=idempotency_key,
+                        allow_negative_balance=True,
+                        reference_type="referral_reward",
+                        reference_id=f"payment:{payment.id}:level:{level}",
+                        details={
+                            "source_payment_id": payment.id,
+                            "source_user_id": source_user.id,
+                            "beneficiary_user_id": beneficiary.id,
+                            "level": level,
+                            "rate_bps": rate_bps,
+                            "currency": payment.currency,
+                            "program_version": program_version,
+                            "retroactive": False,
+                        },
+                    )
+                    reward = ReferralReward(
+                        source_payment_id=payment.id,
+                        source_user_id=source_user.id,
+                        beneficiary_user_id=beneficiary.id,
+                        level=level,
+                        rate_bps=rate_bps,
+                        source_amount=payment.amount,
+                        reward_amount=reward_amount,
+                        currency=payment.currency,
+                        ledger_entry_id=movement.ledger_entry.id,
+                        program_version=program_version,
+                    )
+                    self.session.add(reward)
+                    await self.session.flush()
+            except IntegrityError:
+                existing = await self._get_referral_reward(payment.id, level)
+                if existing is None:
+                    raise
+                results.append(
+                    await self._existing_referral_reward_result(
+                        existing,
+                        payment=payment,
+                        beneficiary=beneficiary,
+                        rate_bps=rate_bps,
+                        reward_amount=reward_amount,
+                        program_version=program_version,
+                    )
+                )
+            else:
+                results.append(
+                    ReferralRewardResult(
+                        user=movement.user,
+                        reward=reward,
+                        ledger_entry=movement.ledger_entry,
+                        applied=movement.applied,
+                    )
+                )
+
+        status = (
+            "rewarded" if results else ("no_referrer" if not chain else "zero_reward")
+        )
+        await self._settle_referral_payment(
+            payment,
+            status=status,
+            program_version=program_version,
+        )
+        return results
+
+    async def claim_next_unsettled_referral_payment(
+        self,
+    ) -> ProviderPayment | None:
+        """Claim one credited payment that still needs referral settlement.
+
+        The initial candidate read is intentionally unlocked. We first lock its
+        immutable user chain in global user-ID order and only then lock/recheck
+        the payment row. Concurrent reconcilers may briefly choose the same
+        candidate, but the second one observes its settlement marker and moves
+        on without issuing a duplicate reward.
+        """
+
+        candidate = await self.session.scalar(
+            select(ProviderPayment)
+            .where(
+                ProviderPayment.status == "credited",
+                ProviderPayment.ledger_entry_id.is_not(None),
+                ProviderPayment.referral_settled_at.is_(None),
+            )
+            .order_by(ProviderPayment.id)
+            .limit(1)
+        )
+        if candidate is None:
+            return None
+
+        await self._lock_referral_payment_users(candidate.user_id)
+        return await self.session.scalar(
+            select(ProviderPayment)
+            .where(
+                ProviderPayment.id == candidate.id,
+                ProviderPayment.status == "credited",
+                ProviderPayment.ledger_entry_id.is_not(None),
+                ProviderPayment.referral_settled_at.is_(None),
+            )
+            .with_for_update()
+        )
+
+    async def list_referral_entitlement_candidate_ids(
+        self,
+        *,
+        limit: int = 100,
+    ) -> Sequence[int]:
+        """Find rewarded users whose positive balance should reactivate VPN."""
+
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 1000
+        ):
+            raise InvalidOperationError("Invalid referral reconciliation limit")
+        owner_ids = await self.session.scalars(
+            select(ReferralReward.beneficiary_user_id)
+            .join(User, User.id == ReferralReward.beneficiary_user_id)
+            .join(VPN_Config, VPN_Config.owner_id == User.id)
+            .where(
+                User.balance > 0,
+                VPN_Config.desired_state == VPNState.SUSPENDED.value,
+            )
+            .distinct()
+            .order_by(ReferralReward.beneficiary_user_id)
+            .limit(limit)
+        )
+        return owner_ids.all()
+
+    async def quarantine_invalid_referral_accounting(
+        self,
+        *,
+        payment_id: int,
+        program_version: str,
+    ) -> ProviderPayment:
+        """Close one claimed corrupt payment without blocking newer catch-up."""
+
+        payment = await self.session.scalar(
+            select(ProviderPayment)
+            .where(ProviderPayment.id == payment_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if payment is None:
+            raise InvalidOperationError(
+                "Referral payment disappeared during quarantine"
+            )
+        if payment.status != "credited" or payment.ledger_entry_id is None:
+            raise InvalidOperationError("Only credited payments can be quarantined")
+        if payment.referral_settled_at is not None:
+            return payment
+        await self._settle_referral_payment(
+            payment,
+            status="invalid_accounting",
+            program_version=program_version,
+        )
+        return payment
 
     async def charge_period(
         self,
@@ -826,14 +1116,146 @@ class BillingRepo:
         run.completed_at = datetime.now(timezone.utc)
         await self.session.flush()
 
-    async def _get_provider_payment(
-        self, provider: str, provider_payment_id: str
-    ) -> ProviderPayment | None:
-        return await self.session.scalar(
-            select(ProviderPayment).where(
-                ProviderPayment.provider == provider,
-                ProviderPayment.provider_payment_id == provider_payment_id,
+    async def _lock_referral_payment_users(self, user_id: int) -> Sequence[User]:
+        """Lock payer and at most two ancestors in global user-ID order."""
+
+        source_user = await self.session.get(User, user_id)
+        if source_user is None:
+            raise UserNotFoundError(f"User with ID {user_id} not found")
+
+        user_ids = [source_user.id]
+        seen_user_ids = {source_user.id}
+        current = source_user
+        for _level in (1, 2):
+            referrer_id = current.referred_by_id
+            if referrer_id is None or referrer_id in seen_user_ids:
+                break
+            beneficiary = await self.session.get(User, referrer_id)
+            if beneficiary is None:
+                break
+            user_ids.append(beneficiary.id)
+            seen_user_ids.add(beneficiary.id)
+            current = beneficiary
+
+        locked = await self.session.scalars(
+            select(User)
+            .where(User.id.in_(user_ids))
+            .order_by(User.id)
+            .with_for_update()
+        )
+        return locked.all()
+
+    async def _settle_referral_payment(
+        self,
+        payment: ProviderPayment,
+        *,
+        status: str,
+        program_version: str,
+    ) -> None:
+        payment.referral_settled_at = datetime.now(timezone.utc)
+        payment.referral_program_version = program_version
+        payment.referral_settlement_status = status
+        await self.session.flush()
+
+    async def _validate_referral_source_payment(
+        self,
+        payment: ProviderPayment,
+    ) -> None:
+        """Tie mutable payment metadata back to its immutable credit ledger."""
+
+        ledger_entry = await self.session.get(LedgerEntry, payment.ledger_entry_id)
+        details = dict(ledger_entry.details or {}) if ledger_entry is not None else {}
+        if (
+            ledger_entry is None
+            or ledger_entry.user_id != payment.user_id
+            or ledger_entry.kind != LedgerKind.PROVIDER_PAYMENT.value
+            or to_money(ledger_entry.amount) != to_money(payment.amount)
+            or ledger_entry.idempotency_key
+            != f"provider-payment:{payment.provider}:{payment.intent_id}"
+            or ledger_entry.reference_type != "provider_payment"
+            or ledger_entry.reference_id != str(payment.id)
+            or details.get("provider") != payment.provider
+            or details.get("provider_payment_id") != payment.provider_payment_id
+            or details.get("currency") != payment.currency
+        ):
+            raise InvalidOperationError(
+                "Provider payment referral source accounting is inconsistent"
             )
+
+    async def _get_provider_payment(
+        self,
+        provider: str,
+        provider_payment_id: str,
+        *,
+        for_update: bool = False,
+    ) -> ProviderPayment | None:
+        statement = select(ProviderPayment).where(
+            ProviderPayment.provider == provider,
+            ProviderPayment.provider_payment_id == provider_payment_id,
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return await self.session.scalar(statement)
+
+    async def _get_referral_reward(
+        self, source_payment_id: int, level: int
+    ) -> ReferralReward | None:
+        return await self.session.scalar(
+            select(ReferralReward).where(
+                ReferralReward.source_payment_id == source_payment_id,
+                ReferralReward.level == level,
+            )
+        )
+
+    async def _existing_referral_reward_result(
+        self,
+        reward: ReferralReward,
+        *,
+        payment: ProviderPayment,
+        beneficiary: User,
+        rate_bps: int,
+        reward_amount: Decimal,
+        program_version: str,
+    ) -> ReferralRewardResult:
+        if (
+            reward.source_user_id != payment.user_id
+            or reward.beneficiary_user_id != beneficiary.id
+            or reward.level not in (1, 2)
+            or reward.rate_bps != rate_bps
+            or to_money(reward.source_amount) != to_money(payment.amount)
+            or to_money(reward.reward_amount) != reward_amount
+            or reward.currency != payment.currency
+            or reward.program_version != program_version
+        ):
+            raise InvalidOperationError(
+                "Referral reward already exists with different accounting data"
+            )
+        ledger_entry = await self.session.get(LedgerEntry, reward.ledger_entry_id)
+        user = await self.session.get(User, beneficiary.id)
+        expected_kind = (
+            LedgerKind.REFERRAL_REWARD_L1.value
+            if reward.level == 1
+            else LedgerKind.REFERRAL_REWARD_L2.value
+        )
+        expected_key = (
+            f"referral-reward:v1:provider-payment:{payment.id}:level:{reward.level}"
+        )
+        if (
+            ledger_entry is None
+            or user is None
+            or ledger_entry.user_id != beneficiary.id
+            or ledger_entry.kind != expected_kind
+            or to_money(ledger_entry.amount) != reward_amount
+            or ledger_entry.idempotency_key != expected_key
+            or ledger_entry.reference_type != "referral_reward"
+            or ledger_entry.reference_id != f"payment:{payment.id}:level:{reward.level}"
+        ):
+            raise InvalidOperationError("Referral reward accounting is incomplete")
+        return ReferralRewardResult(
+            user=user,
+            reward=reward,
+            ledger_entry=ledger_entry,
+            applied=False,
         )
 
     async def _existing_payment_result(

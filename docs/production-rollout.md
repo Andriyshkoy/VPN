@@ -32,6 +32,18 @@ these profile gates.
    complete a verified TLS handshake.
 7. Confirm the active public certificate and `certbot.timer` before changing
    the application.
+8. Pin the referral policy explicitly in the production environment:
+
+   ```dotenv
+   REFERRAL_REWARDS_ENABLED=true
+   REFERRAL_LEVEL_1_RATE_BPS=500
+   REFERRAL_LEVEL_2_RATE_BPS=100
+   REFERRAL_PROGRAM_VERSION=v1-5pct-1pct
+   ```
+
+   Export the count and total amount of `credited` `provider_payment` rows
+   before migration. Those rows are the complete and only authoritative input
+   to the historical referral backfill.
 
 The root `Dockerfile` is the only backend build definition. Build all four
 targets from one commit and never combine an app layer with a separately tagged
@@ -94,7 +106,10 @@ docker compose -f docker-compose-prod.yml --profile hub run --rm --no-deps \
   --entrypoint alembic migrations check
 ```
 
-The sole current revision must be `c3a6f1e8b902`. Then start only the admin
+The sole current revision must be `f1a8c3d9e742`. Before starting any
+application process, reconcile `user.balance` against `sum(ledger_entry.amount)`,
+verify every user has one unique 32-character referral code, and review the
+count and total of `referral_reward` rows created by the backfill. Then start only the admin
 canary, leaving bot, worker, and scheduler off:
 
 ```bash
@@ -120,10 +135,11 @@ has been separately approved.
 
 ## Rollback
 
-Prefer a code-only rollback while retaining schema head. The minimum compatible
-fallback is an immutable image based on commit `3a52f53`; older production code
-writes balances without the immutable ledger and must never run after migration
-`4a9f0d6c2e31` has been applied.
+Prefer a code-only rollback while retaining schema head. After referral migration
+`f1a8c3d9e742`, the fallback image must understand the non-null invite code and
+referral accounting tables; pre-referral images cannot register users safely.
+Older production code also writes balances without the immutable ledger and
+must never run after migration `4a9f0d6c2e31` has been applied.
 
 Stop bot/worker/scheduler first. Do not downgrade the database while any new
 process is running. A database restore must use the post-key-rotation snapshot

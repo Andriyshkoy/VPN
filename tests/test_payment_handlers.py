@@ -7,7 +7,7 @@ import pytest
 from aiogram.exceptions import TelegramNetworkError
 
 from bot.handlers import payments
-from core.exceptions import InvalidOperationError
+from core.exceptions import InvalidOperationError, UserNotFoundError
 from core.services.billing import PaymentIntent
 from core.services.payments import TelegramPayService
 
@@ -254,6 +254,34 @@ async def test_pre_checkout_rejects_invoice_mismatch(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_pre_checkout_rejects_unknown_user_without_creating_payment(monkeypatch):
+    async def get_user(*args, **kwargs):
+        return None
+
+    validated = False
+
+    async def validate(**kwargs):
+        nonlocal validated
+        validated = True
+
+    monkeypatch.setattr(payments, "get_or_create_user", get_user)
+    monkeypatch.setattr(payments.billing_service, "validate_payment_intent", validate)
+    bot = DummyBot()
+    query = SimpleNamespace(
+        id="query-unknown",
+        from_user=SimpleNamespace(id=999, username="unknown"),
+        invoice_payload="topup:intent-id",
+        total_amount=10000,
+        currency="RUB",
+    )
+
+    await payments.process_pre_checkout_query(query, bot)
+
+    assert validated is False
+    assert bot.pre_checkout_answers[0][1]["ok"] is False
+
+
+@pytest.mark.asyncio
 async def test_pre_checkout_only_approves_first_claim(monkeypatch):
     claimed_id = None
 
@@ -342,3 +370,38 @@ async def test_successful_payment_passes_provider_ids_to_idempotent_core(monkeyp
     assert bot.messages[0]["text"] == (
         "✅ Платёж успешно завершён! Баланс пополнен на 12,34 ₽."
     )
+
+
+@pytest.mark.asyncio
+async def test_captured_payment_for_unknown_user_fails_without_fabricating_account(
+    monkeypatch,
+):
+    async def get_user(*args, **kwargs):
+        return None
+
+    recorded = False
+
+    async def record(**kwargs):
+        nonlocal recorded
+        recorded = True
+
+    class SuccessfulPayment:
+        total_amount = 1234
+        currency = "RUB"
+        invoice_payload = "topup:intent-id"
+        telegram_payment_charge_id = "telegram-charge"
+        provider_payment_charge_id = "provider-charge"
+
+    message = SimpleNamespace(
+        successful_payment=SuccessfulPayment(),
+        from_user=SimpleNamespace(id=999, username="unknown"),
+    )
+    bot = DummyBot()
+    monkeypatch.setattr(payments, "get_or_create_user", get_user)
+    monkeypatch.setattr(payments.billing_service, "record_telegram_payment", record)
+
+    with pytest.raises(UserNotFoundError, match="unknown account"):
+        await payments.successful_payment_handler(message, bot)
+
+    assert recorded is False
+    assert bot.messages == []

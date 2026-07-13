@@ -13,6 +13,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("ENCRYPTION_KEY", Fernet.generate_key().decode())
 
 import core.db as db
+import core.db.unit_of_work as db_uow
 from core.db import Base
 
 
@@ -24,6 +25,7 @@ def anyio_backend():
 @pytest_asyncio.fixture()
 async def engine():
     import core.db.models  # noqa
+
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -38,7 +40,7 @@ async def engine():
 @pytest_asyncio.fixture()
 def sessionmaker(engine, monkeypatch):
     maker = async_sessionmaker(engine, expire_on_commit=False)
-    monkeypatch.setattr(db.unit_of_work, "async_session", maker, raising=False)
+    monkeypatch.setattr(db_uow, "async_session", maker, raising=False)
     monkeypatch.setattr(db, "async_session", maker, raising=False)
     monkeypatch.setattr(db, "engine", engine, raising=False)
     return maker

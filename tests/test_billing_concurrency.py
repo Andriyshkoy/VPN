@@ -12,6 +12,8 @@ from core.db import Base
 from core.db.models.config import VPN_Config
 from core.db.models.ledger import LedgerEntry, LedgerKind
 from core.db.models.payment import ProviderPayment
+from core.db.models.referral_reward import ReferralReward
+from core.db.models.server import Server
 from core.db.models.user import User
 from core.db.models.vpn_operation import VPNOperation
 from core.db.repo.billing import BillingRepo
@@ -202,6 +204,190 @@ async def test_concurrent_paid_config_replay_creates_and_charges_once(monkeypatc
                 )
                 == 1
             )
+    finally:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.drop_all)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_provider_capture_credits_referral_chain_once(monkeypatch):
+    engine = create_async_engine(POSTGRES_TEST_URL, echo=False)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr("core.db.unit_of_work.async_session", maker)
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.drop_all)
+            await connection.run_sync(Base.metadata.create_all)
+
+        async with maker() as session, session.begin():
+            root = User(tg_id=9101, balance=Decimal("0.00"))
+            session.add(root)
+            await session.flush()
+            direct = User(
+                tg_id=9102,
+                balance=Decimal("0.00"),
+                referred_by_id=root.id,
+            )
+            session.add(direct)
+            await session.flush()
+            payer = User(
+                tg_id=9103,
+                balance=Decimal("0.00"),
+                referred_by_id=direct.id,
+            )
+            session.add(payer)
+            await session.flush()
+            root_id, direct_id, payer_id = root.id, direct.id, payer.id
+
+        billing = BillingService(uow, per_config_cost="1.00")
+        intent = await billing.create_payment_intent(
+            user_id=payer_id,
+            amount="500.00",
+            currency="RUB",
+        )
+
+        async def capture():
+            return await billing.record_provider_payment(
+                user_id=payer_id,
+                provider="telegram",
+                provider_payment_id="concurrent-referral-capture",
+                amount="500.00",
+                currency="RUB",
+                payload=intent.payload,
+                intent_id=intent.intent_id,
+            )
+
+        receipts = await asyncio.gather(capture(), capture())
+        assert sorted(receipt.credited for receipt in receipts) == [False, True]
+
+        async with maker() as session:
+            assert (await session.get(User, payer_id)).balance == Decimal("500.00")
+            assert (await session.get(User, direct_id)).balance == Decimal("25.00")
+            assert (await session.get(User, root_id)).balance == Decimal("5.00")
+            assert (
+                await session.scalar(select(func.count()).select_from(ReferralReward))
+                == 2
+            )
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(LedgerEntry)
+                    .where(
+                        LedgerEntry.kind.in_(
+                            (
+                                LedgerKind.REFERRAL_REWARD_L1.value,
+                                LedgerKind.REFERRAL_REWARD_L2.value,
+                            )
+                        )
+                    )
+                )
+                == 2
+            )
+    finally:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.drop_all)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_referral_capture_and_periodic_billing_use_deadlock_safe_lock_order(
+    monkeypatch,
+):
+    engine = create_async_engine(POSTGRES_TEST_URL, echo=False)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr("core.db.unit_of_work.async_session", maker)
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.drop_all)
+            await connection.run_sync(Base.metadata.create_all)
+
+        async with maker() as session, session.begin():
+            root = User(tg_id=9201, balance=Decimal("100.00"))
+            session.add(root)
+            await session.flush()
+            payer = User(
+                tg_id=9202,
+                balance=Decimal("100.00"),
+                referred_by_id=root.id,
+            )
+            server = Server(
+                name="lock-order",
+                ip="127.0.0.1",
+                port=16290,
+                host="vpn.test",
+                monthly_cost=Decimal("0.00"),
+                location="test",
+                api_key="secret",
+            )
+            session.add_all((payer, server))
+            await session.flush()
+            session.add_all(
+                (
+                    VPN_Config(
+                        name="lock-order-root",
+                        server_id=server.id,
+                        owner_id=root.id,
+                        display_name="Root",
+                    ),
+                    VPN_Config(
+                        name="lock-order-payer",
+                        server_id=server.id,
+                        owner_id=payer.id,
+                        display_name="Payer",
+                    ),
+                )
+            )
+            root_id, payer_id = root.id, payer.id
+
+        billing = BillingService(uow, per_config_cost="1.00")
+        intent = await billing.create_payment_intent(
+            user_id=payer_id,
+            amount="100.00",
+            currency="RUB",
+        )
+
+        root_charged = asyncio.Event()
+        release_billing = asyncio.Event()
+        original_apply = BillingRepo.apply_balance_change
+
+        async def coordinated_apply(self, **kwargs):
+            result = await original_apply(self, **kwargs)
+            if (
+                kwargs["kind"] == LedgerKind.PERIODIC_CHARGE
+                and kwargs["user_id"] == root_id
+            ):
+                root_charged.set()
+                await release_billing.wait()
+            return result
+
+        monkeypatch.setattr(BillingRepo, "apply_balance_change", coordinated_apply)
+
+        charge_task = asyncio.create_task(
+            billing.charge_all(period_key="lock-order-period")
+        )
+        await asyncio.wait_for(root_charged.wait(), timeout=2)
+        capture_task = asyncio.create_task(
+            billing.record_provider_payment(
+                user_id=payer_id,
+                provider="telegram",
+                provider_payment_id="lock-order-capture",
+                amount="100.00",
+                currency="RUB",
+                payload=intent.payload,
+                intent_id=intent.intent_id,
+            )
+        )
+        await asyncio.sleep(0.1)
+        release_billing.set()
+        await asyncio.wait_for(
+            asyncio.gather(charge_task, capture_task),
+            timeout=5,
+        )
+
+        async with maker() as session:
+            assert (await session.get(User, root_id)).balance == Decimal("104.00")
+            assert (await session.get(User, payer_id)).balance == Decimal("199.00")
     finally:
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.drop_all)

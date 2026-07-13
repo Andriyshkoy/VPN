@@ -35,6 +35,7 @@ class User:
     username: str | None
     created: datetime
     balance: Decimal
+    referral_code: str
 
     @classmethod
     def from_orm(cls, obj):
@@ -44,6 +45,7 @@ class User:
             username=obj.username or "Unknown",
             created=obj.created,
             balance=obj.balance,
+            referral_code=obj.referral_code,
         )
 
 

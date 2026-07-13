@@ -9,8 +9,11 @@ from core.config import settings
 from .billing_tasks import (
     charge_all_and_notify,
     publish_notification_outbox,
+    reconcile_referral_rewards,
     reconcile_vpn_operations,
 )
+
+REFERRAL_RECONCILE_INTERVAL = 300
 
 
 def main() -> None:
@@ -47,6 +50,21 @@ def main() -> None:
             func=reconcile_vpn_operations,
             id="reconcile_vpn_operations_job",
             interval=reconcile_interval,
+            repeat=None,
+        )
+
+    if "reconcile_referral_rewards_job" not in scheduler:
+        now = datetime.now(timezone.utc)
+        next_referral_reconcile = (
+            int(now.timestamp()) // REFERRAL_RECONCILE_INTERVAL + 1
+        ) * REFERRAL_RECONCILE_INTERVAL
+        scheduler.schedule(
+            scheduled_time=datetime.fromtimestamp(
+                next_referral_reconcile, tz=timezone.utc
+            ),
+            func=reconcile_referral_rewards,
+            id="reconcile_referral_rewards_job",
+            interval=REFERRAL_RECONCILE_INTERVAL,
             repeat=None,
         )
 

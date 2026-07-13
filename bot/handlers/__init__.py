@@ -5,24 +5,19 @@ from aiogram.types import FSInputFile
 
 from core.exceptions import ServiceError
 
+from ..middlewares import InviteOnlyAccessMiddleware
 from ..states import RenameConfig
 
 # Import modules so feature handlers are registered on the base router.
+from . import balance_history  # noqa: F401
 from . import common  # noqa: F401
 from . import configs  # noqa: F401
 from . import payments  # noqa: F401
 from . import referrals  # noqa: F401
 from . import fallback
-from .base import (
-    billing_service,
-    config_service,
-    get_or_create_user,
-)
+from .base import billing_service, config_service, get_or_create_user
 from .base import router as feature_router
-from .base import (
-    server_service,
-    setup_bot_commands,
-)
+from .base import server_service, setup_bot_commands, user_service
 
 # Re-export frequently used callables for tests.
 from .configs import (
@@ -41,6 +36,10 @@ from .privacy import router as privacy_router
 # handlers so a menu label cannot become a configuration name accidentally.
 fallback.register(feature_router)
 router = Router(name="telegram-bot")
+invite_access_middleware = InviteOnlyAccessMiddleware(user_service)
+router.message.outer_middleware(invite_access_middleware)
+router.callback_query.outer_middleware(invite_access_middleware)
+router.pre_checkout_query.outer_middleware(invite_access_middleware)
 router.include_router(payment_events_router)
 router.include_router(privacy_router)
 router.include_router(navigation_router)

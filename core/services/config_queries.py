@@ -13,10 +13,7 @@ from core.exceptions import (
     ServerNotFoundError,
 )
 
-from ._config_shared import (
-    _KIND_BY_TARGET,
-    _NON_TERMINAL_STATUSES,
-)
+from ._config_shared import _KIND_BY_TARGET, _NON_TERMINAL_STATUSES
 from .models import Config
 
 logger = logging.getLogger("core.services.config")
@@ -198,6 +195,20 @@ class ConfigQueriesEntitlementsMixin:
         planned: list[str] = []
         configs = await repos["configs"].list_owner_for_update(owner_id)
         for cfg in configs:
+            # Balance-based entitlement changes may only toggle the ordinary
+            # ACTIVE <-> SUSPENDED lifecycle. They must never resurrect a
+            # revoked, failed, or provisioning credential merely because the
+            # owner later receives money.
+            if (
+                kind == VPNOperationKind.UNSUSPEND.value
+                and cfg.desired_state != VPNState.SUSPENDED.value
+            ):
+                continue
+            if kind == VPNOperationKind.SUSPEND.value and cfg.desired_state not in {
+                VPNState.ACTIVE.value,
+                VPNState.SUSPENDED.value,
+            }:
+                continue
             try:
                 operation_id = await self._plan_transition_locked(
                     repos,

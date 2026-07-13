@@ -27,6 +27,15 @@ class Settings(BaseSettings):
     notification_visibility_timeout: int = Field(default=120, ge=30, le=3600)
     notification_dedupe_ttl_seconds: int = Field(default=86_400, ge=3600, le=604_800)
     payment_intent_ttl_seconds: int = Field(default=3600, ge=60, le=86_400)
+    # Referral rewards are issued as non-withdrawable service balance only for
+    # newly credited provider payments. Rates use basis points so policy values
+    # are exact (500 bps = 5%) and can be snapshotted in the audit trail.
+    referral_rewards_enabled: bool = True
+    referral_level_1_rate_bps: int = Field(default=500, ge=0, le=1_000)
+    referral_level_2_rate_bps: int = Field(default=100, ge=0, le=1_000)
+    referral_program_version: str = Field(
+        default="v1-5pct-1pct", min_length=1, max_length=32
+    )
     vpn_operation_max_attempts: int = Field(default=20, ge=1, le=1000)
     # Manager transport remains HTTP by default for backwards compatibility.
     # When TLS is enabled, an explicit CA is optional (system trust is used),
@@ -93,6 +102,28 @@ class Settings(BaseSettings):
                 "Telegram dead-update retention must be shorter than processed "
                 "update retention"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_referral_reward_settings(self) -> "Settings":
+        """Keep the two-level referral policy bounded and unambiguous."""
+
+        if self.referral_level_2_rate_bps > self.referral_level_1_rate_bps:
+            raise ValueError("Level 2 referral rate cannot exceed level 1")
+        if self.referral_level_1_rate_bps + self.referral_level_2_rate_bps > 1_000:
+            raise ValueError("Combined referral rates cannot exceed 10%")
+        if not self.referral_program_version.strip():
+            raise ValueError("Referral program version cannot be blank")
+        policy = (
+            self.referral_program_version,
+            self.referral_level_1_rate_bps,
+            self.referral_level_2_rate_bps,
+        )
+        if policy != ("v1-5pct-1pct", 500, 100):
+            # Unsettled captures are deliberately processed by the same fixed
+            # contract after a pause. A future rate change needs a versioned
+            # code/migration release rather than an in-place environment edit.
+            raise ValueError("Unsupported referral program policy")
         return self
 
     @field_validator("encryption_key")

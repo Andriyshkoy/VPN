@@ -12,6 +12,16 @@ from .base import BaseRepo
 class UserRepo(BaseRepo[User]):
     model = User
 
+    async def get_by_tg_id(self, tg_id: int) -> User | None:
+        """Return an existing Telegram account without creating one."""
+
+        return await self.get(tg_id=tg_id)
+
+    async def get_by_referral_code(self, referral_code: str) -> User | None:
+        """Resolve an opaque invitation code to its owner."""
+
+        return await self.get(referral_code=referral_code)
+
     async def get_for_update(self, user_id: int) -> User | None:
         """Lock an account while a dependent config/delete intent is staged."""
 
@@ -52,8 +62,12 @@ class UserRepo(BaseRepo[User]):
                 telegram_delivery_status_updated_at=observed_at,
             )
             .returning(self.model)
+            .execution_options(synchronize_session=False)
         )
-        return (await self.session.execute(stmt)).scalar_one_or_none()
+        user = (await self.session.execute(stmt)).scalar_one_or_none()
+        if user is not None:
+            await self.session.refresh(user)
+        return user
 
     async def get_or_create(self, tg_id: int, **kwargs) -> User:
         user, _ = await self.get_or_create_with_status(tg_id, **kwargs)
@@ -80,14 +94,6 @@ class UserRepo(BaseRepo[User]):
                 return await self.update(user.id, username=user.username), False
             return user, False
 
-        # If user does not exist, create a new one
-        if "ref_id" in kwargs and kwargs["ref_id"] is not None:
-            # If ref_id is provided, set referred_by_id to the user with that ID
-            ref_user = await self.get(tg_id=kwargs["ref_id"])
-            if ref_user:
-                kwargs["referred_by_id"] = ref_user.id
-            del kwargs["ref_id"]
-
         candidate = self.model(tg_id=tg_id, **kwargs)
         try:
             # The savepoint keeps the surrounding Unit of Work usable when a
@@ -106,6 +112,37 @@ class UserRepo(BaseRepo[User]):
                     False,
                 )
             return existing, False
+
+    async def get_or_create_invited(
+        self,
+        tg_id: int,
+        *,
+        referral_code: str,
+        username: str | None = None,
+    ) -> tuple[User | None, bool]:
+        """Create an account only when an opaque invitation resolves.
+
+        Referral attribution is written in the initial INSERT and never
+        patched later. This also makes concurrent duplicate `/start` updates
+        converge through the unique Telegram ID handled by
+        :meth:`get_or_create_with_status`.
+        """
+
+        existing = await self.get_by_tg_id(tg_id)
+        if existing is not None:
+            if username != existing.username:
+                existing = await self.update(existing.id, username=username)
+            return existing, False
+
+        inviter = await self.get_by_referral_code(referral_code)
+        if inviter is None:
+            return None, False
+
+        return await self.get_or_create_with_status(
+            tg_id,
+            username=username,
+            referred_by_id=inviter.id,
+        )
 
     async def search_by_username(self, query: str, limit: int = 20) -> Sequence[User]:
         """

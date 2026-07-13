@@ -7,7 +7,12 @@ from aiogram.types import CallbackQuery, Message
 from core.config import settings
 
 from ..instructions import GUIDE_MENU_TEXT, GUIDES
-from ..keyboards import guide_back_keyboard, guide_menu_keyboard, main_menu_keyboard
+from ..keyboards import (
+    balance_actions_keyboard,
+    guide_back_keyboard,
+    guide_menu_keyboard,
+    main_menu_keyboard,
+)
 from ..ui import format_money, safe_callback_answer, safe_edit_text
 from .base import get_or_create_user, router
 
@@ -19,11 +24,13 @@ async def cmd_start(
     command: CommandObject | None = None,
 ) -> None:
     ref_id = command.args if command and command.args else None
-    await get_or_create_user(
+    user = await get_or_create_user(
         message.from_user.id,
         message.from_user.username,
         ref_id=ref_id,
     )
+    if user is None:
+        return
     await message.answer(
         "👋 <b>Добро пожаловать!</b>\n\n"
         "Здесь можно управлять VPN без запоминания команд:\n"
@@ -84,12 +91,21 @@ async def show_guide(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback)
 
 
+def render_balance_summary(user) -> str:
+    text = "💰 <b>Ваш баланс</b>\n\n" f"Доступно: <b>{format_money(user.balance)} ₽</b>"
+    if settings.maintenance_mode or not settings.billing_enabled:
+        text += "\n\n⏸ Списания сейчас приостановлены."
+    return text
+
+
 async def cmd_balance(message: Message) -> None:
     user = await get_or_create_user(
         message.from_user.id,
         message.from_user.username,
     )
-    text = "💰 <b>Ваш баланс</b>\n\n" f"Доступно: <b>{format_money(user.balance)} ₽</b>"
-    if settings.maintenance_mode or not settings.billing_enabled:
-        text += "\n\n⏸ Списания сейчас приостановлены."
-    await message.answer(text, reply_markup=main_menu_keyboard())
+    if user is None:
+        return
+    await message.answer(
+        render_balance_summary(user),
+        reply_markup=balance_actions_keyboard(),
+    )

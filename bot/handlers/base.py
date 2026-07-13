@@ -25,8 +25,11 @@ async def get_or_create_user(
     username: str | None,
     ref_id: str | None = None,
 ):
-    ref_id = int(ref_id) if ref_id and ref_id.isdigit() else None
-    return await user_service.register(tg_id, username=username, ref_id=ref_id)
+    return await user_service.register_invited(
+        tg_id,
+        username=username,
+        referral_code=ref_id,
+    )
 
 
 async def setup_bot_commands(bot: Bot) -> None:

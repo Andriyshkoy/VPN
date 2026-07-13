@@ -11,15 +11,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Chat, Message, SuccessfulPayment, Update, User
 
 import bot.handlers as handlers
-from bot.handlers import (
-    base,
-    common,
-    configs,
-    navigation,
-    payments,
-    privacy,
-    referrals,
-)
+from bot.handlers import base, common, configs, navigation, payments, privacy, referrals
 from bot.instructions import GUIDE_MENU_TEXT, GUIDES
 from bot.keyboards import (
     GUIDE_LABELS,
@@ -32,6 +24,7 @@ from bot.keyboards import (
     main_menu_keyboard,
 )
 from bot.states import CreateConfig
+from core.services import ReferralOverview
 
 
 class DummyMessage:
@@ -111,13 +104,19 @@ async def test_start_registers_payload_and_installs_menu(monkeypatch):
 
     async def register(tg_id, username, ref_id=None):
         captured.update(tg_id=tg_id, username=username, ref_id=ref_id)
+        return SimpleNamespace(id=1)
 
     monkeypatch.setattr(common, "get_or_create_user", register)
-    message = DummyMessage("/start 42")
+    code = "A_b-" * 8
+    message = DummyMessage(f"/start ref_{code}")
 
-    await common.cmd_start(message, SimpleNamespace(args="42"))
+    await common.cmd_start(message, SimpleNamespace(args=f"ref_{code}"))
 
-    assert captured == {"tg_id": 101, "username": "alice", "ref_id": "42"}
+    assert captured == {
+        "tg_id": 101,
+        "username": "alice",
+        "ref_id": f"ref_{code}",
+    }
     assert message.calls[-1][1]["reply_markup"].is_persistent is True
     assert "запоминания команд" in message.calls[-1][0]
 
@@ -181,7 +180,15 @@ async def test_dispatcher_menu_button_wins_over_active_name_state(monkeypatch):
     async def show_balance(message):
         observed.append(message.text)
 
+    async def existing_user(tg_id, **kwargs):
+        return SimpleNamespace(id=7, tg_id=tg_id)
+
     monkeypatch.setattr(common, "cmd_balance", show_balance)
+    monkeypatch.setattr(
+        handlers.invite_access_middleware._user_service,
+        "find_by_tg_id",
+        existing_user,
+    )
     key = StorageKey(bot_id=bot.id, chat_id=202, user_id=101)
     await storage.set_state(key, CreateConfig.entering_name)
     update = Update(
@@ -234,10 +241,18 @@ async def test_successful_payment_wins_over_fsm_and_group_privacy(
     async def get_user(*args, **kwargs):
         return SimpleNamespace(id=7)
 
+    async def existing_user(tg_id, **kwargs):
+        return SimpleNamespace(id=7, tg_id=tg_id)
+
     async def record_payment(**kwargs):
         captured.append(kwargs)
 
     monkeypatch.setattr(payments, "get_or_create_user", get_user)
+    monkeypatch.setattr(
+        handlers.invite_access_middleware._user_service,
+        "find_by_tg_id",
+        existing_user,
+    )
     monkeypatch.setattr(
         payments.billing_service,
         "record_telegram_payment",
@@ -501,19 +516,55 @@ async def test_historical_manual_pause_callbacks_fail_closed(
 
 
 @pytest.mark.asyncio
-async def test_referrals_are_an_honest_placeholder_for_message_and_legacy_callback():
-    message = DummyMessage(MENU_REFERRALS)
-    await referrals.cmd_referrals(message)
+async def test_referrals_show_private_link_terms_stats_and_legacy_callback(monkeypatch):
+    async def get_user(*args, **kwargs):
+        return SimpleNamespace(id=7)
 
-    text = message.calls[-1][0]
-    assert text == referrals.REFERRALS_PLACEHOLDER
-    assert "пока не производятся" in text
-    assert "https://t.me/" not in text
+    async def overview(user_id):
+        assert user_id == 7
+        return ReferralOverview(
+            referral_code="A_b-" * 8,
+            level_1_count=3,
+            level_2_count=4,
+            level_1_earned=Decimal("25.00"),
+            level_2_earned=Decimal("2.00"),
+        )
+
+    async def start_link(bot, payload, *, encode):
+        assert payload == f"ref_{'A_b-' * 8}"
+        assert encode is False
+        return f"https://t.me/test_vpn_bot?start={payload}"
+
+    monkeypatch.setattr(referrals, "get_or_create_user", get_user)
+    monkeypatch.setattr(referrals.referral_service, "overview", overview)
+    monkeypatch.setattr(referrals, "create_start_link", start_link)
+
+    bot = object()
+    message = DummyMessage(MENU_REFERRALS)
+    await referrals.cmd_referrals(message, bot=bot)
+
+    text, kwargs = message.calls[-1]
+    assert "<b>5%</b>" in text
+    assert "<b>1%</b>" in text
+    assert "Первый уровень: <b>3</b>" in text
+    assert "Всего заработано: <b>27,00 ₽</b>" in text
+    assert "https://t.me/test_vpn_bot?start=ref_" in text
+    assert kwargs["disable_web_page_preview"] is True
+    buttons = [
+        button for row in kwargs["reply_markup"].inline_keyboard for button in row
+    ]
+    assert buttons[0].url.startswith("https://t.me/share/url?")
+    assert buttons[1].callback_data == "balance_history:0"
 
     callback = DummyCallback("refs:-1")
+    callback.bot = bot
     await referrals.legacy_referrals_callback(callback)
-    assert callback.message.edits[-1][0] == referrals.REFERRALS_PLACEHOLDER
+    assert "<b>5%</b>" in callback.message.edits[-1][0]
     assert callback.answers == [((), {})]
+
+    monkeypatch.setattr(referrals.settings, "referral_rewards_enabled", False)
+    paused = referrals.render_referral_program(await overview(7), "https://t.me/link")
+    assert "Новые начисления временно приостановлены" in paused
 
 
 @pytest.mark.asyncio

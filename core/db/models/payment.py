@@ -8,6 +8,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Numeric,
     String,
     UniqueConstraint,
@@ -29,10 +30,32 @@ class ProviderPayment(Base):
     __tablename__ = "provider_payment"
     __table_args__ = (
         CheckConstraint("amount > 0", name="ck_provider_payment_positive_amount"),
+        CheckConstraint(
+            "referral_settlement_status IS NULL OR "
+            "referral_settlement_status IN "
+            "('rewarded', 'no_referrer', 'zero_reward', 'invalid_chain', "
+            "'invalid_accounting')",
+            name="ck_provider_payment_referral_settlement_status",
+        ),
+        CheckConstraint(
+            "(referral_settled_at IS NULL AND referral_program_version IS NULL "
+            "AND referral_settlement_status IS NULL) OR "
+            "(status = 'credited' AND ledger_entry_id IS NOT NULL "
+            "AND referral_settled_at IS NOT NULL "
+            "AND referral_program_version IS NOT NULL "
+            "AND referral_settlement_status IS NOT NULL)",
+            name="ck_provider_payment_referral_settlement_complete",
+        ),
         UniqueConstraint(
             "provider",
             "provider_payment_id",
             name="uq_provider_payment_provider_charge",
+        ),
+        Index(
+            "ix_provider_payment_referral_settlement",
+            "status",
+            "referral_settled_at",
+            "id",
         ),
     )
 
@@ -70,4 +93,13 @@ class ProviderPayment(Base):
     )
     credited_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    referral_settled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    referral_program_version: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )
+    referral_settlement_status: Mapped[str | None] = mapped_column(
+        String(24), nullable=True
     )

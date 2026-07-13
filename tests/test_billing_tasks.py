@@ -84,3 +84,110 @@ async def test_charge_and_notify(monkeypatch, sessionmaker):
     await billing_tasks._charge_all_and_notify_async()
 
     assert sent and "сутки" in sent[0][1]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_referral_rewards(monkeypatch):
+    import billing_daemon.billing_tasks as billing_tasks
+
+    calls = []
+
+    class DummyBillingService:
+        def __init__(self, unit_of_work, *, per_config_cost):
+            calls.append((unit_of_work, per_config_cost))
+
+        async def reconcile_referral_rewards(self, *, limit):
+            calls.append(limit)
+
+    monkeypatch.setattr(billing_tasks, "BillingService", DummyBillingService)
+    monkeypatch.setattr(billing_tasks.settings, "maintenance_mode", False)
+    monkeypatch.setattr(billing_tasks.settings, "referral_rewards_enabled", True)
+
+    assert await billing_tasks._reconcile_referral_rewards_async(limit=37) is True
+    assert calls == [
+        (billing_tasks.uow, billing_tasks.settings.per_config_cost),
+        37,
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("maintenance_mode", "referral_rewards_enabled"),
+    [(True, True), (False, False), (True, False)],
+)
+async def test_reconcile_referral_rewards_respects_kill_switches(
+    monkeypatch, maintenance_mode, referral_rewards_enabled
+):
+    import billing_daemon.billing_tasks as billing_tasks
+
+    class UnexpectedBillingService:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("disabled referral reconciliation must not start")
+
+    monkeypatch.setattr(billing_tasks, "BillingService", UnexpectedBillingService)
+    monkeypatch.setattr(billing_tasks.settings, "maintenance_mode", maintenance_mode)
+    monkeypatch.setattr(
+        billing_tasks.settings,
+        "referral_rewards_enabled",
+        referral_rewards_enabled,
+    )
+
+    assert await billing_tasks._reconcile_referral_rewards_async() is False
+
+
+def test_reconcile_referral_rewards_is_observed(monkeypatch):
+    import billing_daemon.billing_tasks as billing_tasks
+
+    calls = []
+
+    async def dummy_reconcile():
+        return False
+
+    def dummy_observe(name, outcome, duration):
+        calls.append((name, outcome, duration))
+
+    monkeypatch.setattr(
+        billing_tasks, "_reconcile_referral_rewards_async", dummy_reconcile
+    )
+    monkeypatch.setattr(billing_tasks, "observe_background_job", dummy_observe)
+
+    billing_tasks.reconcile_referral_rewards()
+
+    assert len(calls) == 1
+    name, outcome, duration = calls[0]
+    assert name == "referral_reconcile"
+    assert outcome == "skipped"
+    assert duration >= 0
+
+
+def test_scheduler_registers_referral_reconciliation(monkeypatch):
+    import billing_daemon.scheduler as scheduler_module
+
+    scheduled = []
+
+    class DummyScheduler:
+        def __init__(self, **kwargs):
+            self.jobs = {}
+
+        def __contains__(self, job_id):
+            return job_id in self.jobs
+
+        def schedule(self, **kwargs):
+            self.jobs[kwargs["id"]] = kwargs
+            scheduled.append(kwargs)
+
+        def run(self):
+            return None
+
+    monkeypatch.setattr(scheduler_module.Redis, "from_url", lambda url: object())
+    monkeypatch.setattr(scheduler_module, "Queue", lambda *args, **kwargs: object())
+    monkeypatch.setattr(scheduler_module, "Scheduler", DummyScheduler)
+
+    scheduler_module.main()
+
+    referral_job = next(
+        job for job in scheduled if job["id"] == "reconcile_referral_rewards_job"
+    )
+    assert referral_job["func"] is scheduler_module.reconcile_referral_rewards
+    assert referral_job["interval"] == 300
+    assert referral_job["repeat"] is None

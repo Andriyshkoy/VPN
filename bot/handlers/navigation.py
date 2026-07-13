@@ -62,6 +62,14 @@ async def balance_navigation(message: Message, state: FSMContext) -> None:
     await cmd_balance(message)
 
 
+@router.message(Command("history"))
+async def balance_history_navigation(message: Message, state: FSMContext) -> None:
+    await _reset_state(state)
+    from .balance_history import cmd_balance_history
+
+    await cmd_balance_history(message)
+
+
 @router.message(Command("configs"))
 @router.message(F.text == MENU_CONFIGS)
 async def configs_navigation(message: Message, state: FSMContext) -> None:

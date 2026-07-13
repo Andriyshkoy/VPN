@@ -1,9 +1,19 @@
 from __future__ import annotations
 
+import secrets
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, String, Text, func
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Numeric,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.db import Base
@@ -11,8 +21,22 @@ from core.db import Base
 
 class User(Base):
 
+    __table_args__ = (
+        CheckConstraint(
+            "referred_by_id IS NULL OR referred_by_id <> id",
+            name="ck_user_not_self_referred",
+        ),
+    )
+
     tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     username: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    referral_code: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        unique=True,
+        index=True,
+        default=lambda: secrets.token_urlsafe(24),
+    )
 
     created: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), server_default=func.now()
@@ -45,7 +69,7 @@ class User(Base):
     referred_by_id: Mapped[int | None] = mapped_column(
         ForeignKey("user.id"), nullable=True, default=None, index=True
     )
-    referred_by: Mapped["User"] = relationship(
+    referred_by: Mapped["User | None"] = relationship(
         back_populates="referrals", remote_side="User.id"
     )
 
