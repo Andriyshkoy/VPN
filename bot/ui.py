@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from aiogram.exceptions import TelegramBadRequest
@@ -12,19 +12,22 @@ def format_money(value: Decimal | int | str) -> str:
     return f"{amount:,.2f}".replace(",", " ").replace(".", ",")
 
 
-def format_billing_interval(seconds: int) -> str:
-    if seconds == 60:
-        return "раз в минуту"
-    if seconds % 86_400 == 0:
-        days = seconds // 86_400
-        return "раз в день" if days == 1 else f"раз в {days} дн."
-    if seconds % 3_600 == 0:
-        hours = seconds // 3_600
-        return "раз в час" if hours == 1 else f"раз в {hours} ч."
-    if seconds % 60 == 0:
-        minutes = seconds // 60
-        return f"раз в {minutes} мин."
-    return f"раз в {seconds} сек."
+def format_whole_money(value: Decimal | int | str) -> str:
+    amount = Decimal(str(value))
+    return f"{amount:,.0f}".replace(",", " ")
+
+
+def estimate_monthly_cost(
+    per_period_cost: Decimal | int | str,
+    billing_interval_seconds: int,
+) -> Decimal:
+    """Return a user-facing whole-ruble estimate for a 30-day month."""
+
+    periods_per_month = Decimal(30 * 24 * 60 * 60) / Decimal(billing_interval_seconds)
+    return (Decimal(str(per_period_cost)) * periods_per_month).quantize(
+        Decimal("1"),
+        rounding=ROUND_HALF_UP,
+    )
 
 
 def safe_document_filename(value: str | None) -> str:

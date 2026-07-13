@@ -52,6 +52,7 @@ class AccountingService:
         limit: int = 8,
         offset: int = 0,
         snapshot_id: int | None = None,
+        direction: str | None = None,
     ) -> BalanceHistoryPage:
         if (
             isinstance(limit, bool)
@@ -71,6 +72,8 @@ class AccountingService:
             or not 0 <= snapshot_id <= 9_223_372_036_854_775_807
         ):
             raise InvalidOperationError("Invalid balance history snapshot")
+        if direction not in (None, "credit", "debit"):
+            raise InvalidOperationError("Invalid balance history direction")
 
         async with self._uow() as repos:
             session = repos["users"].session
@@ -90,6 +93,10 @@ class AccountingService:
                 LedgerEntry.user_id == user_id,
                 LedgerEntry.id <= snapshot_id,
             )
+            if direction == "credit":
+                history_scope += (LedgerEntry.amount > 0,)
+            elif direction == "debit":
+                history_scope += (LedgerEntry.amount < 0,)
 
             total = int(
                 await session.scalar(

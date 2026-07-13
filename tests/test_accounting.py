@@ -69,3 +69,49 @@ async def test_balance_history_validates_owner_and_pagination(sessionmaker):
         await accounting.list_balance_history(1, offset=-1)
     with pytest.raises(InvalidOperationError):
         await accounting.list_balance_history(1, offset=1_000_001)
+    with pytest.raises(InvalidOperationError):
+        await accounting.list_balance_history(1, direction="all")
+
+
+@pytest.mark.asyncio
+async def test_balance_history_filters_credits_and_debits_with_stable_snapshot(
+    sessionmaker,
+):
+    users = UserService(uow)
+    billing = BillingService(uow, per_config_cost="1.00")
+    accounting = AccountingService(uow)
+    user = await users.register(91_003, balance="10.00")
+
+    await billing.top_up(user.id, "5.00", idempotency_key="filter:credit:1")
+    await billing.withdraw(user.id, "2.00", idempotency_key="filter:debit:1")
+
+    credits = await accounting.list_balance_history(
+        user.id,
+        direction="credit",
+        limit=1,
+    )
+    debits = await accounting.list_balance_history(user.id, direction="debit")
+
+    assert credits.total == 2
+    assert [item.amount for item in credits.items] == [Decimal("5.00")]
+    assert debits.total == 1
+    assert [item.amount for item in debits.items] == [Decimal("-2.00")]
+
+    await billing.top_up(user.id, "3.00", idempotency_key="filter:credit:2")
+    stable_second_page = await accounting.list_balance_history(
+        user.id,
+        direction="credit",
+        limit=1,
+        offset=1,
+        snapshot_id=credits.snapshot_id,
+    )
+    refreshed = await accounting.list_balance_history(user.id, direction="credit")
+
+    assert stable_second_page.total == 2
+    assert [item.amount for item in stable_second_page.items] == [Decimal("10.00")]
+    assert refreshed.total == 3
+    assert [item.amount for item in refreshed.items] == [
+        Decimal("3.00"),
+        Decimal("5.00"),
+        Decimal("10.00"),
+    ]

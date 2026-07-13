@@ -54,9 +54,13 @@ def balance_actions_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="📒 История операций",
-                    callback_data="balance_history:0",
-                )
+                    text="➕ Пополнения",
+                    callback_data="balance_history:credit:0",
+                ),
+                InlineKeyboardButton(
+                    text="➖ Списания",
+                    callback_data="balance_history:debit:0",
+                ),
             ]
         ]
     )
@@ -68,28 +72,45 @@ def balance_history_keyboard(
     limit: int,
     total: int,
     snapshot_id: int,
+    direction: str | None = None,
 ) -> InlineKeyboardMarkup:
     """Bounded pagination for a user's private ledger history."""
+
+    callback_prefix = "balance_history"
+    if direction is not None:
+        callback_prefix += f":{direction}"
 
     navigation: list[InlineKeyboardButton] = []
     if offset > 0:
         navigation.append(
             InlineKeyboardButton(
                 text="⬅️ Новее",
-                callback_data=(
-                    f"balance_history:{snapshot_id}:{max(0, offset - limit)}"
-                ),
+                callback_data=f"{callback_prefix}:{snapshot_id}:"
+                f"{max(0, offset - limit)}",
             )
         )
     if offset + limit < total:
         navigation.append(
             InlineKeyboardButton(
                 text="Старее ➡️",
-                callback_data=f"balance_history:{snapshot_id}:{offset + limit}",
+                callback_data=f"{callback_prefix}:{snapshot_id}:{offset + limit}",
             )
         )
 
-    rows = [navigation] if navigation else []
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=("✅" if direction == "credit" else "➕") + " Пополнения",
+                callback_data="balance_history:credit:0",
+            ),
+            InlineKeyboardButton(
+                text=("✅" if direction == "debit" else "➖") + " Списания",
+                callback_data="balance_history:debit:0",
+            ),
+        ]
+    ]
+    if navigation:
+        rows.append(navigation)
     rows.append(
         [InlineKeyboardButton(text="💰 К балансу", callback_data="balance_summary")]
     )
@@ -102,9 +123,13 @@ def referral_program_keyboard(share_url: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="📨 Поделиться ссылкой", url=share_url)],
             [
                 InlineKeyboardButton(
-                    text="📒 История баланса",
-                    callback_data="balance_history:0",
-                )
+                    text="➕ Пополнения",
+                    callback_data="balance_history:credit:0",
+                ),
+                InlineKeyboardButton(
+                    text="➖ Списания",
+                    callback_data="balance_history:debit:0",
+                ),
             ],
         ]
     )

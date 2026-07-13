@@ -24,8 +24,9 @@ from core.exceptions import APIConnectionError, InsufficientBalanceError, Servic
 from ..keyboards import cancel_keyboard, main_menu_keyboard
 from ..states import CreateConfig, RenameConfig
 from ..ui import (
-    format_billing_interval,
+    estimate_monthly_cost,
     format_money,
+    format_whole_money,
     safe_callback_answer,
     safe_document_filename,
     safe_edit_text,
@@ -193,9 +194,10 @@ async def _begin_create_config(
         "➕ <b>Новая конфигурация</b>\n\n"
         "Выберите ближайший сервер.\n\n"
         f"Создание — <b>{format_money(settings.config_creation_cost)} ₽</b>.\n"
-        f"Обслуживание — <b>{format_money(settings.per_config_cost)} ₽</b> "
-        f"{format_billing_interval(settings.billing_interval)} за каждую "
-        "конфигурацию.",
+        "Стоимость VPN — "
+        f"<b>около {format_whole_money(estimate_monthly_cost(settings.per_config_cost, settings.billing_interval))} ₽ "
+        "в месяц</b> за каждую конфигурацию. Сумма списывается с баланса "
+        "постепенно — небольшими частями в течение месяца.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
     )
     await state.set_state(CreateConfig.choosing_server)
