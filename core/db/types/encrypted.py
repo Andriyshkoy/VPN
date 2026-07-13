@@ -8,6 +8,7 @@ from core.config import settings
 
 class EncryptedString(TypeDecorator):
     """Transparent AES-128-GCM (Fernet) field."""
+
     impl = LargeBinary
     cache_ok = True
 

@@ -1,8 +1,12 @@
+from __future__ import annotations
+
+import html
 import os
 import tempfile
-import uuid
+from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
-from aiogram.filters import Command
+from aiogram import F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
@@ -10,12 +14,22 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    Update,
 )
 
 from core.config import settings
-from core.exceptions import InsufficientBalanceError, ServiceError
+from core.domain import VPNOperationStatus, VPNState
+from core.exceptions import APIConnectionError, InsufficientBalanceError, ServiceError
 
+from ..keyboards import cancel_keyboard, main_menu_keyboard
 from ..states import CreateConfig, RenameConfig
+from ..ui import (
+    format_billing_interval,
+    format_money,
+    safe_callback_answer,
+    safe_document_filename,
+    safe_edit_text,
+)
 from .base import (
     billing_service,
     config_service,
@@ -39,244 +53,598 @@ __all__ = [
 ]
 
 
-@router.message(Command("configs"))
+def _config_states(config: Any) -> tuple[str, str]:
+    """Return control-plane states while supporting pre-refactor test doubles."""
+
+    legacy_state = (
+        VPNState.SUSPENDED.value
+        if getattr(config, "suspended", False)
+        else VPNState.ACTIVE.value
+    )
+    desired = getattr(config, "desired_state", legacy_state) or legacy_state
+    actual = getattr(config, "actual_state", legacy_state) or legacy_state
+    return str(desired), str(actual)
+
+
+def _config_status(config: Any) -> tuple[str, str]:
+    desired, actual = _config_states(config)
+    operation_status = getattr(config, "operation_status", None)
+    if operation_status in {
+        VPNOperationStatus.REJECTED.value,
+        VPNOperationStatus.EXHAUSTED.value,
+    }:
+        return "⚠️", "требуется проверка"
+    if desired == VPNState.REVOKED.value:
+        return "🗑", "удаляется"
+    if actual == VPNState.PROVISIONING.value:
+        if operation_status is None and getattr(config, "last_error", None):
+            return "⚠️", "требуется проверка"
+        if operation_status == VPNOperationStatus.FAILED.value:
+            return "⏳", "повторяем создание"
+        return "⏳", "создаётся"
+    if actual == VPNState.FAILED.value:
+        return "⚠️", "требуется проверка"
+    if desired != actual:
+        if desired == VPNState.ACTIVE.value:
+            return "⏳", "возобновляется"
+        if desired == VPNState.SUSPENDED.value:
+            return "⏳", "приостанавливается"
+        return "⏳", "обновляется"
+    if actual == VPNState.ACTIVE.value:
+        return "🟢", "активна"
+    if actual == VPNState.SUSPENDED.value:
+        return "⏸", "приостановлена"
+    return "⚠️", "требуется проверка"
+
+
+def _button_title(config: Any) -> str:
+    status, _ = _config_status(config)
+    title = " ".join(str(config.display_name).split()) or "Без названия"
+    return f"{status} {title[:48]}"
+
+
+def _configs_markup(configs: list[Any]) -> InlineKeyboardMarkup:
+    buttons = [
+        [
+            InlineKeyboardButton(
+                text="➕ Создать конфигурацию",
+                callback_data="cfg:create",
+            )
+        ]
+    ]
+    buttons.extend(
+        [
+            InlineKeyboardButton(
+                text=_button_title(config), callback_data=f"cfg:{config.id}"
+            )
+        ]
+        for config in configs
+    )
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+async def _configs_view(
+    tg_id: int,
+    username: str | None,
+) -> tuple[str, InlineKeyboardMarkup]:
+    user = await get_or_create_user(tg_id, username)
+    all_configs = await config_service.list(owner_id=user.id)
+    configs = [
+        config
+        for config in all_configs
+        if _config_states(config) != (VPNState.REVOKED.value, VPNState.REVOKED.value)
+    ]
+    if configs:
+        text = (
+            "🗂 <b>Мои конфигурации</b>\n\n"
+            "🟢 активна · ⏸ на паузе · ⏳ обрабатывается · ⚠️ нужна проверка\n"
+            "Выберите конфигурацию или создайте новую."
+        )
+    else:
+        text = (
+            "🗂 <b>Мои конфигурации</b>\n\n"
+            "У вас пока нет конфигураций. Создайте первую — бот сразу пришлёт "
+            "готовый <code>.ovpn</code>-файл."
+        )
+    return text, _configs_markup(configs)
+
+
 async def cmd_configs(message: Message) -> None:
-    user = await get_or_create_user(message.from_user.id, message.from_user.username)
-    active = await config_service.list_active(owner_id=user.id)
-    suspended = await config_service.list_suspended(owner_id=user.id)
-    configs = active + suspended
-    if not configs:
-        await message.answer("У вас нет конфигураций")
+    text, markup = await _configs_view(
+        message.from_user.id,
+        message.from_user.username,
+    )
+    await message.answer(text, reply_markup=markup)
+
+
+async def _begin_create_config(
+    target: Message,
+    state: FSMContext,
+    *,
+    tg_id: int,
+    username: str | None,
+) -> None:
+    await get_or_create_user(tg_id, username)
+    if settings.maintenance_mode or not settings.provisioning_enabled:
+        await target.answer(
+            "Создание конфигураций временно недоступно. Попробуйте позже.",
+            reply_markup=main_menu_keyboard(),
+        )
         return
-    buttons = []
-    for cfg in configs:
-        title = cfg.display_name
-        if cfg.suspended:
-            title += " (приостановлена)"
-        buttons.append([InlineKeyboardButton(text=title, callback_data=f"cfg:{cfg.id}")])
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.answer("Ваши конфигурации:", reply_markup=kb)
 
-
-@router.message(Command("create_config"))
-async def cmd_create_config(message: Message, state: FSMContext) -> None:
-    await get_or_create_user(message.from_user.id, message.from_user.username)
     servers = await server_service.list()
     if not servers:
-        await message.answer("Нет доступных серверов")
+        await target.answer(
+            "Сейчас нет доступных серверов. Попробуйте позже.",
+            reply_markup=main_menu_keyboard(),
+        )
         return
+
     buttons = [
-        [InlineKeyboardButton(text=" ".join([s.location, s.name]), callback_data=f"server:{s.id}")]
-        for s in servers
+        [
+            InlineKeyboardButton(
+                text=" ".join([server.location, server.name]),
+                callback_data=f"server:{server.id}",
+            )
+        ]
+        for server in servers
     ]
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.answer(
-        "Выберите сервер для новой конфигурации.\n\n"
-        "Стоимость создания конфигурации — 10 рублей (списывается сразу). "
-        "Ежемесячная плата за использование составляет 50 рублей и списывается постепенно.",
-        reply_markup=kb,
+    await target.answer(
+        "➕ <b>Новая конфигурация</b>\n\n"
+        "Выберите ближайший сервер.\n\n"
+        f"Создание — <b>{format_money(settings.config_creation_cost)} ₽</b>.\n"
+        f"Обслуживание — <b>{format_money(settings.per_config_cost)} ₽</b> "
+        f"{format_billing_interval(settings.billing_interval)} за каждую "
+        "конфигурацию.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
     )
     await state.set_state(CreateConfig.choosing_server)
 
 
-@router.callback_query(lambda c: c.data and c.data.startswith("server:"))
+async def cmd_create_config(message: Message, state: FSMContext) -> None:
+    await _begin_create_config(
+        message,
+        state,
+        tg_id=message.from_user.id,
+        username=message.from_user.username,
+    )
+
+
+@router.callback_query(F.data == "cfg:create")
+async def create_config_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await _begin_create_config(
+        callback.message,
+        state,
+        tg_id=callback.from_user.id,
+        username=callback.from_user.username,
+    )
+    await safe_callback_answer(callback)
+
+
+@router.callback_query(F.data == "cfg:list")
+async def list_configs_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    text, markup = await _configs_view(
+        callback.from_user.id,
+        callback.from_user.username,
+    )
+    await safe_edit_text(callback.message, text, reply_markup=markup)
+    await safe_callback_answer(callback)
+
+
+async def _callback_id(
+    callback: CallbackQuery,
+    prefix: str,
+) -> int | None:
+    try:
+        raw = callback.data.removeprefix(prefix)
+        value = int(raw)
+        if value <= 0 or callback.data != f"{prefix}{value}":
+            raise ValueError
+        return value
+    except (AttributeError, TypeError, ValueError):
+        await safe_callback_answer(
+            callback,
+            "Кнопка устарела. Откройте раздел заново.",
+            show_alert=True,
+        )
+        return None
+
+
+@router.callback_query(F.data.startswith("server:"))
 async def choose_server(callback: CallbackQuery, state: FSMContext) -> None:
-    server_id = int(callback.data.split(":", 1)[1])
+    server_id = await _callback_id(callback, "server:")
+    if server_id is None:
+        return
+    server = await server_service.get(server_id)
+    if server is None:
+        await safe_callback_answer(
+            callback,
+            "Сервер больше недоступен. Выберите другой.",
+            show_alert=True,
+        )
+        return
+
     await state.update_data(server_id=server_id)
     await callback.message.answer(
-        "📝 *Введите название для конфигурации*\n\n"
-        "Это имя будет использоваться для идентификации вашей конфигурации в VPN-клиенте, "
-        "а также будет отображаться в списке ваших конфигураций.\n\n"
-        "✏️ Вы всегда сможете изменить его позже."
+        "📝 <b>Введите название конфигурации</b>\n\n"
+        "Например: <i>Мой телефон</i> или <i>Ноутбук</i>. Это название будет "
+        "видно только вам, его можно изменить позже.",
+        reply_markup=cancel_keyboard(),
     )
     await state.set_state(CreateConfig.entering_name)
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
-@router.message(CreateConfig.entering_name)
-async def got_name(message: Message, state: FSMContext, bot) -> None:
+@router.message(CreateConfig.choosing_server, ~F.successful_payment)
+async def choose_server_message_hint(message: Message) -> None:
+    await message.answer(
+        "Выберите сервер кнопкой в сообщении выше. Чтобы выйти, откройте "
+        "другой раздел в меню.",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+@router.message(CreateConfig.entering_name, F.text, ~F.successful_payment)
+async def got_name(
+    message: Message,
+    state: FSMContext,
+    bot: Any,
+    event_update: Update,
+) -> None:
     data = await state.get_data()
     server_id = data.get("server_id")
     if not server_id:
-        await message.answer("Сервер не выбран")
+        await message.answer(
+            "Сервер не выбран. Начните создание заново.",
+            reply_markup=main_menu_keyboard(),
+        )
         await state.clear()
         return
+
+    display_name = (message.text or "").strip()
     user = await get_or_create_user(message.from_user.id, message.from_user.username)
-    unique_name = uuid.uuid4().hex
+    purchase_key = f"telegram:create-config:update:{event_update.update_id}"
+    unique_name = uuid5(NAMESPACE_URL, purchase_key).hex
     try:
-        cfg = await billing_service.create_paid_config(
+        config = await billing_service.create_paid_config(
             server_id=server_id,
             owner_id=user.id,
             name=unique_name,
-            display_name=message.text,
+            display_name=display_name,
             creation_cost=settings.config_creation_cost,
+            idempotency_key=purchase_key,
         )
     except InsufficientBalanceError:
-        await message.answer("Недостаточно средств. Пополните баланс")
+        await message.answer(
+            "Недостаточно средств. Сначала пополните баланс.",
+            reply_markup=main_menu_keyboard(),
+        )
         await state.clear()
         return
+    except APIConnectionError:
+        # The config/reservation intent is already durable. Let the inbox
+        # retry this exact update without charging or provisioning twice.
+        raise
     except ServiceError:
-        await message.answer("Произошла ошибка. Попробуйте позже")
+        await message.answer(
+            "Не удалось создать конфигурацию. Проверьте название и попробуйте "
+            "ещё раз позже.",
+            reply_markup=main_menu_keyboard(),
+        )
         await state.clear()
         return
-    try:
-        content = await config_service.download_config(cfg.id)
-    except ServiceError:
-        await message.answer("Произошла ошибка. Попробуйте позже")
-        await state.clear()
-        return
+
+    # Delivery belongs to the durable update attempt. Any Manager or Telegram
+    # failure must bubble up so this update is retried.
+    content = await config_service.download_config(config.id)
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
     try:
         await bot.send_document(
-            message.chat.id,
-            FSInputFile(tmp_path, filename=f"{message.text}.ovpn"),
+            message.from_user.id,
+            FSInputFile(tmp_path, filename=safe_document_filename(display_name)),
         )
     finally:
         try:
             os.remove(tmp_path)
         except OSError:
             pass
-    await message.answer("Конфигурация создана")
+
     await message.answer(
-        "Вы можете управлять конфигурацией через команду /configs или "
-        "Ознакомиться с инструкцией по подключению к VPN с помощью команды /how_to_use."
+        "✅ Конфигурация создана и готова к импорту.\n\n"
+        "Откройте <b>«Инструкции»</b>, если подключаете устройство впервые.",
+        reply_markup=main_menu_keyboard(),
     )
     await state.clear()
 
 
-@router.callback_query(lambda c: c.data and c.data.startswith("cfg:"))
-async def show_config(callback: CallbackQuery) -> None:
-    config_id = int(callback.data.split(":", 1)[1])
-    user = await get_or_create_user(callback.from_user.id, callback.from_user.username)
-    cfg = await config_service.get(config_id)
-    if not cfg or cfg.owner_id != user.id:
-        await callback.answer("Конфигурация не найдена", show_alert=True)
-        return
-    server = await server_service.get(cfg.server_id)
-    text = (
-        f"<b>{cfg.display_name}</b>\n"
-        f"Сервер: {server.name} ({server.location})\n"
-        f"Статус: {'приостановлена' if cfg.suspended else 'активна'}"
+@router.message(CreateConfig.entering_name, ~F.successful_payment)
+async def config_name_message_hint(message: Message) -> None:
+    await message.answer(
+        "Название нужно отправить текстом, например «Мой телефон».",
+        reply_markup=cancel_keyboard(),
     )
-    buttons = []
-    buttons.append([InlineKeyboardButton(text="Удалить", callback_data=f"del:{cfg.id}")])
-    buttons.append([InlineKeyboardButton(text="Скачать", callback_data=f"dl:{cfg.id}")])
-    buttons.append([InlineKeyboardButton(text="Переименовать", callback_data=f"rn:{cfg.id}")])
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
-    await callback.answer()
 
 
-@router.callback_query(lambda c: c.data and c.data.startswith("sus:"))
+async def _owned_config(
+    callback: CallbackQuery,
+    prefix: str,
+) -> tuple[Any, Any] | None:
+    config_id = await _callback_id(callback, prefix)
+    if config_id is None:
+        return None
+    user = await get_or_create_user(
+        callback.from_user.id,
+        callback.from_user.username,
+    )
+    config = await config_service.get(config_id)
+    if not config or config.owner_id != user.id:
+        await safe_callback_answer(
+            callback,
+            "Конфигурация не найдена.",
+            show_alert=True,
+        )
+        return None
+    return config, user
+
+
+async def _config_details(config: Any) -> tuple[str, InlineKeyboardMarkup]:
+    server = await server_service.get(config.server_id)
+    server_name = (
+        f"{html.escape(server.name)} ({html.escape(server.location)})"
+        if server
+        else "сервер недоступен"
+    )
+    desired, actual = _config_states(config)
+    status_icon, status_text = _config_status(config)
+    can_download = actual in {
+        VPNState.ACTIVE.value,
+        VPNState.SUSPENDED.value,
+    }
+    is_being_deleted = desired == VPNState.REVOKED.value
+
+    buttons: list[list[InlineKeyboardButton]] = []
+    if can_download and not is_being_deleted:
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text="⬇️ Скачать .ovpn", callback_data=f"dl:{config.id}"
+                )
+            ]
+        )
+    if not is_being_deleted:
+        buttons.extend(
+            [
+                [
+                    InlineKeyboardButton(
+                        text="✏️ Переименовать", callback_data=f"rn:{config.id}"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🗑 Удалить", callback_data=f"del:{config.id}"
+                    )
+                ],
+            ]
+        )
+    buttons.append([InlineKeyboardButton(text="⬅️ К списку", callback_data="cfg:list")])
+    markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+    status_note = ""
+    operation_status = getattr(config, "operation_status", None)
+    if operation_status in {
+        VPNOperationStatus.REJECTED.value,
+        VPNOperationStatus.EXHAUSTED.value,
+    } or (
+        actual == VPNState.PROVISIONING.value
+        and operation_status is None
+        and getattr(config, "last_error", None)
+    ):
+        status_note = (
+            "\n\nАвтоматическая обработка не завершилась. Мы сохранили "
+            "конфигурацию — обратитесь в поддержку, списывать её повторно не нужно."
+        )
+    elif actual == VPNState.PROVISIONING.value:
+        if operation_status == VPNOperationStatus.FAILED.value:
+            status_note = (
+                "\n\nСвязь с сервером временно прервалась. Повторная попытка "
+                "выполнится автоматически."
+            )
+        else:
+            status_note = "\n\nПодождите немного и откройте раздел ещё раз."
+    elif actual == VPNState.FAILED.value:
+        status_note = (
+            "\n\nАвтоматическая обработка не завершилась. Мы сохранили "
+            "конфигурацию — обратитесь в поддержку, списывать её повторно не нужно."
+        )
+    elif desired != actual:
+        status_note = "\n\nИзменение уже принято. Обновите этот экран чуть позже."
+    text = (
+        f"🗂 <b>{html.escape(config.display_name)}</b>\n\n"
+        f"Сервер: {server_name}\n"
+        f"Статус: {status_icon} {status_text}"
+        f"{status_note}"
+    )
+    return text, markup
+
+
+@router.callback_query(F.data.startswith("cfg:"))
+async def show_config(callback: CallbackQuery) -> None:
+    owned = await _owned_config(callback, "cfg:")
+    if owned is None:
+        return
+    config, _ = owned
+    text, markup = await _config_details(config)
+    await safe_edit_text(callback.message, text, reply_markup=markup)
+    await safe_callback_answer(callback)
+
+
+@router.callback_query(F.data.startswith("sus:"))
 async def suspend_config_cb(callback: CallbackQuery) -> None:
-    config_id = int(callback.data.split(":", 1)[1])
-    user = await get_or_create_user(callback.from_user.id, callback.from_user.username)
-    cfg = await config_service.get(config_id)
-    if not cfg or cfg.owner_id != user.id:
-        await callback.answer("Конфигурация не найдена", show_alert=True)
+    owned = await _owned_config(callback, "sus:")
+    if owned is None:
         return
-    try:
-        await config_service.suspend_config(config_id)
-        await callback.message.answer("Конфигурация приостановлена")
-    except ServiceError:
-        await callback.message.answer("Произошла ошибка. Попробуйте позже")
-    await callback.answer()
+    await safe_callback_answer(
+        callback,
+        "Ручная пауза временно недоступна. Для потерянного устройства удалите "
+        "конфигурацию.",
+        show_alert=True,
+    )
 
 
-@router.callback_query(lambda c: c.data and c.data.startswith("uns:"))
+@router.callback_query(F.data.startswith("uns:"))
 async def unsuspend_config_cb(callback: CallbackQuery) -> None:
-    config_id = int(callback.data.split(":", 1)[1])
-    user = await get_or_create_user(callback.from_user.id, callback.from_user.username)
-    if user.balance <= 0:
-        await callback.message.answer("Недостаточно средств. Пополните баланс")
-        await callback.answer()
+    owned = await _owned_config(callback, "uns:")
+    if owned is None:
         return
-    cfg = await config_service.get(config_id)
-    if not cfg or cfg.owner_id != user.id:
-        await callback.answer("Конфигурация не найдена", show_alert=True)
-        return
-    try:
-        await config_service.unsuspend_config(config_id)
-        await callback.message.answer("Конфигурация возобновлена")
-    except ServiceError:
-        await callback.message.answer("Произошла ошибка. Попробуйте позже")
-    await callback.answer()
+    await safe_callback_answer(
+        callback,
+        "Ручное возобновление временно недоступно. Конфигурации, остановленные "
+        "из-за баланса, включатся после пополнения.",
+        show_alert=True,
+    )
 
 
-@router.callback_query(lambda c: c.data and c.data.startswith("del:"))
+@router.callback_query(F.data.startswith("del:"))
 async def delete_config_cb(callback: CallbackQuery) -> None:
-    config_id = int(callback.data.split(":", 1)[1])
-    user = await get_or_create_user(callback.from_user.id, callback.from_user.username)
-    cfg = await config_service.get(config_id)
-    if not cfg or cfg.owner_id != user.id:
-        await callback.answer("Конфигурация не найдена", show_alert=True)
+    owned = await _owned_config(callback, "del:")
+    if owned is None:
         return
-    try:
-        await config_service.revoke_config(config_id)
-        await callback.message.answer("Конфигурация удалена")
-    except ServiceError:
-        await callback.message.answer("Произошла ошибка. Попробуйте позже")
-    await callback.answer()
+    config, _ = owned
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Да, удалить безвозвратно",
+                    callback_data=f"del_ok:{config.id}",
+                )
+            ],
+            [InlineKeyboardButton(text="Отмена", callback_data=f"cfg:{config.id}")],
+        ]
+    )
+    await safe_edit_text(
+        callback.message,
+        "🗑 <b>Удалить конфигурацию?</b>\n\n"
+        f"<b>{html.escape(config.display_name)}</b> перестанет подключаться. "
+        "Отменить удаление после подтверждения нельзя.",
+        reply_markup=markup,
+    )
+    await safe_callback_answer(callback)
 
 
-@router.callback_query(lambda c: c.data and c.data.startswith("dl:"))
-async def download_config_cb(callback: CallbackQuery, bot) -> None:
-    config_id = int(callback.data.split(":", 1)[1])
-    user = await get_or_create_user(callback.from_user.id, callback.from_user.username)
-    cfg = await config_service.get(config_id)
-    if not cfg or cfg.owner_id != user.id:
-        await callback.answer("Конфигурация не найдена", show_alert=True)
+@router.callback_query(F.data.startswith("del_ok:"))
+async def confirm_delete_config_cb(callback: CallbackQuery) -> None:
+    owned = await _owned_config(callback, "del_ok:")
+    if owned is None:
         return
+    config, _ = owned
     try:
-        content = await config_service.download_config(config_id)
+        await config_service.revoke_config(config.id)
     except ServiceError:
-        await callback.message.answer("Произошла ошибка. Попробуйте позже")
-        await callback.answer()
+        await callback.message.answer("Не удалось удалить конфигурацию.")
+        await safe_callback_answer(callback)
         return
+
+    text, markup = await _configs_view(
+        callback.from_user.id,
+        callback.from_user.username,
+    )
+    await safe_edit_text(
+        callback.message,
+        "✅ Конфигурация удалена.\n\n" + text,
+        reply_markup=markup,
+    )
+    await safe_callback_answer(callback)
+
+
+@router.callback_query(F.data.startswith("dl:"))
+async def download_config_cb(callback: CallbackQuery, bot: Any) -> None:
+    owned = await _owned_config(callback, "dl:")
+    if owned is None:
+        return
+    config, _ = owned
+    try:
+        content = await config_service.download_config(config.id)
+    except ServiceError:
+        await callback.message.answer("Не удалось скачать конфигурацию.")
+        await safe_callback_answer(callback)
+        return
+
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
     try:
         await bot.send_document(
-            callback.message.chat.id,
-            FSInputFile(tmp_path, filename=f"{cfg.display_name}.ovpn"),
+            callback.from_user.id,
+            FSInputFile(
+                tmp_path,
+                filename=safe_document_filename(config.display_name),
+            ),
         )
     finally:
         try:
             os.remove(tmp_path)
         except OSError:
             pass
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
-@router.callback_query(lambda c: c.data and c.data.startswith("rn:"))
+@router.callback_query(F.data.startswith("rn:"))
 async def rename_config_cb(callback: CallbackQuery, state: FSMContext) -> None:
-    config_id = int(callback.data.split(":", 1)[1])
-    await state.update_data(config_id=config_id)
-    await callback.message.answer("Введите новое название")
+    owned = await _owned_config(callback, "rn:")
+    if owned is None:
+        return
+    config, _ = owned
+    await state.update_data(config_id=config.id)
+    await callback.message.answer(
+        "Введите новое название конфигурации:",
+        reply_markup=cancel_keyboard(),
+    )
     await state.set_state(RenameConfig.entering_name)
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
-@router.message(RenameConfig.entering_name)
+@router.message(RenameConfig.entering_name, F.text, ~F.successful_payment)
 async def got_new_name(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     config_id = data.get("config_id")
     if not config_id:
-        await message.answer("Конфигурация не выбрана")
+        await message.answer(
+            "Конфигурация не выбрана. Начните заново.",
+            reply_markup=main_menu_keyboard(),
+        )
         await state.clear()
         return
+
     user = await get_or_create_user(message.from_user.id, message.from_user.username)
-    cfg = await config_service.get(config_id)
-    if not cfg or cfg.owner_id != user.id:
-        await message.answer("Конфигурация не найдена")
+    config = await config_service.get(config_id)
+    if not config or config.owner_id != user.id:
+        await message.answer(
+            "Конфигурация не найдена.",
+            reply_markup=main_menu_keyboard(),
+        )
         await state.clear()
         return
     try:
-        await config_service.rename_config(config_id, message.text)
-        await message.answer("Конфигурация переименована")
+        await config_service.rename_config(config_id, message.text or "")
+        await message.answer(
+            "✅ Конфигурация переименована.",
+            reply_markup=main_menu_keyboard(),
+        )
     except ServiceError:
-        await message.answer("Произошла ошибка. Попробуйте позже")
+        await message.answer(
+            "Не удалось переименовать конфигурацию. Название должно содержать "
+            "от 1 до 128 символов.",
+            reply_markup=main_menu_keyboard(),
+        )
     await state.clear()
+
+
+@router.message(RenameConfig.entering_name, ~F.successful_payment)
+async def rename_message_hint(message: Message) -> None:
+    await message.answer(
+        "Новое название нужно отправить текстом.",
+        reply_markup=cancel_keyboard(),
+    )

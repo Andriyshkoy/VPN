@@ -35,15 +35,17 @@ class User:
     username: str | None
     created: datetime
     balance: Decimal
+    referral_code: str
 
     @classmethod
     def from_orm(cls, obj):
         return cls(
             id=obj.id,
             tg_id=obj.tg_id,
-            username=obj.username or 'Unknown',
+            username=obj.username or "Unknown",
             created=obj.created,
             balance=obj.balance,
+            referral_code=obj.referral_code,
         )
 
 
@@ -57,9 +59,15 @@ class Config:
     created_at: datetime
     suspended: bool
     suspended_at: datetime | None
+    desired_state: str = "active"
+    actual_state: str = "active"
+    operation_id: str | None = None
+    last_error: str | None = None
+    operation_status: str | None = None
+    operation_attempts: int = 0
 
     @classmethod
-    def from_orm(cls, obj):
+    def from_orm(cls, obj, *, operation=None):
         return cls(
             id=obj.id,
             name=obj.name,
@@ -69,4 +77,14 @@ class Config:
             created_at=obj.created_at,
             suspended=obj.suspended,
             suspended_at=obj.suspended_at,
+            desired_state=getattr(obj, "desired_state", "active"),
+            actual_state=getattr(obj, "actual_state", "active"),
+            operation_id=getattr(obj, "operation_id", None),
+            last_error=getattr(obj, "last_error", None),
+            operation_status=(
+                getattr(operation, "status", None) if operation is not None else None
+            ),
+            operation_attempts=(
+                int(getattr(operation, "attempts", 0)) if operation is not None else 0
+            ),
         )

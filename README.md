@@ -1,152 +1,325 @@
-# <p align="center"><img src="https://img.shields.io/badge/andriyshkoy%20VPN-FF6F00?style=for-the-badge&logo=openvpn&logoColor=white" alt="andriyshkoy VPN"/></p>
+# VPN Hub
 
-> **A sleek, fully‑automated VPN management stack — now with extra flair.**
+VPN Hub is a Python 3.12 modular monolith that coordinates users, balances,
+Telegram payments, VPN client lifecycle operations, notifications, and a small
+administrative API. PostgreSQL is the source of truth; Redis is used for RQ,
+bot state, admin sessions, and notification delivery.
 
----
+The repository contains the hub/control plane. VPN credentials are created and
+revoked by a separate OpenVPN Manager API registered in the hub as a server.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white" />
-  <img src="https://img.shields.io/badge/FastAPI-0B4C5F?style=for-the-badge&logo=fastapi&logoColor=white" />
-  <img src="https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB" />
-  <img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" />
-  <img src="https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white" />
-  <img src="https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white" />
-</p>
+## Runtime components
 
-# VPN Service
+| Component | Location | Responsibility |
+| --- | --- | --- |
+| Admin API | `admin/` | Bearer-authenticated HTTP API for users, servers, configs, and balance operations |
+| Telegram bot | `bot/` | User registration, balance, payments, and VPN config flows |
+| Billing worker | `billing_daemon/rq_worker.py` | Executes RQ billing and reconciliation jobs |
+| Scheduler | `billing_daemon/scheduler.py` | Schedules stable billing periods and VPN reconciliation |
+| Core | `core/` | Domain rules, services, SQLAlchemy models/repositories, Manager adapter |
+| Migrations | `alembic/` | PostgreSQL schema migrations |
+| Admin frontend | `admin_frontend/` | Existing React/Vite admin interface |
+| Reverse proxy | `nginx/` | Serves the local frontend and proxies the API |
 
-This project implements a small VPN management system consisting of a Telegram bot, a simple admin API and a billing daemon. It can manage multiple VPN servers via a REST API, generate client configuration files and handle basic billing based on the number of active configs.
+All Python processes use the same core package and database. They are separate
+runtime processes, not independent microservices.
 
-## Technology stack 🧰
+## Critical backend behaviour
 
-<table>
-  <tr>
-    <td><a href="https://www.python.org/"><img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/python/python-original.svg" width="40"/></a></td>
-    <td><a href="https://fastapi.tiangolo.com/"><img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/fastapi/fastapi-original.svg" width="40"/></a></td>
-    <td><a href="https://github.com/aiogram/aiogram"><img src="https://avatars.githubusercontent.com/u/45650664?s=200&v=4" width="40"/></a></td>
-    <td><a href="https://www.sqlalchemy.org/"><img src="https://www.sqlalchemy.org/img/sqla_logo.png" width="40"/></a></td>
-    <td><a href="https://alembic.sqlalchemy.org/"><img src="https://alembic.sqlalchemy.org/en/latest/_static/alembic_logo.png" width="40"/></a></td>
-    <td><a href="https://pydantic.dev/"><img src="https://avatars.githubusercontent.com/u/50623616?s=200&v=4" width="40"/></a></td>
-    <td><a href="https://www.postgresql.org/"><img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/postgresql/postgresql-original.svg" width="40"/></a></td>
-  </tr>
-  <tr>
-    <td><a href="https://redis.io/"><img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/redis/redis-original.svg" width="40"/></a></td>
-    <td><a href="https://python-rq.org/"><img src="https://avatars.githubusercontent.com/u/1177768?s=200&v=4" width="40"/></a></td>
-    <td><a href="https://www.python-httpx.org/"><img src="https://avatars.githubusercontent.com/u/67855638?s=200&v=4" width="40"/></a></td>
-    <td><a href="https://react.dev/"><img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/react/react-original.svg" width="40"/></a></td>
-    <td><a href="https://vitejs.dev/"><img src="https://vitejs.dev/logo.svg" width="40"/></a></td>
-    <td><a href="https://nginx.org/"><img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/nginx/nginx-original.svg" width="40"/></a></td>
-    <td><a href="https://cryptography.io/"><img src="https://avatars.githubusercontent.com/u/1728152?s=200&v=4" width="40"/></a></td>
-  </tr>
-</table>
+### Accounting and payments
 
-* **Python 3.12** with `asyncio`
-* [**FastAPI**](https://fastapi.tiangolo.com/) for the admin API
-* [**Aiogram**](https://github.com/aiogram/aiogram) for the Telegram bot
-* [**SQLAlchemy**](https://www.sqlalchemy.org/) (async) with [**Alembic**](https://alembic.sqlalchemy.org/) for migrations
-* [**Pydantic**](https://docs.pydantic.dev/) for settings and API schemas
-* [**PostgreSQL**](https://www.postgresql.org/) as the database
-* [**Redis**](https://redis.io/) with [**RQ**](https://python-rq.org/) for background tasks
-* [**httpx**](https://www.python-httpx.org/) for talking to VPN servers
-* [**React**](https://react.dev/) + [**Vite**](https://vitejs.dev/) for the admin UI
-* [**Nginx**](https://nginx.org/) as a reverse proxy
-* [**Cryptography**](https://cryptography.io/) (Fernet) to store server API keys encrypted
-* `pytest` with `pytest-asyncio` for the tests
-* Docker and Docker Compose for deployment
+- Money is normalized to two-decimal `Decimal` values.
+- Every balance mutation is paired with a `ledger_entry` carrying a unique
+  idempotency key and the resulting balance. PostgreSQL rejects updates and
+  deletes of committed ledger rows.
+- `billing_run` claims a stable UTC billing period, preventing two workers from
+  charging the same or an overlapping wall-clock period twice.
+- Telegram invoices have persisted payment intents. Provider charge IDs are
+  unique, intents expire, and only RUB is accepted while balances have no
+  multi-currency denomination. Invoice delivery and pre-checkout are claimed
+  under a row lock, preventing replayed updates or concurrent checkout attempts
+  from creating duplicate charges.
+- Paid config creation reserves the creation cost and records compensating
+  refunds for definitive provisioning failures.
+- With referral settlement enabled, a live confirmed provider payment credits
+  at most two rewards in the same transaction: 5% to the direct inviter and 1%
+  to the inviter above them. A temporarily paused payment is caught up later.
+  Rewards are internal VPN balance, never compound, and have their own
+  immutable audit rows and ledger entries.
 
-## Features ✨
+The existing tariff is still controlled by `PER_CONFIG_COST` and
+`BILLING_INTERVAL`. Changing either value is a business decision: test it on a
+copy of production data before enabling billing.
 
-* 🌐 Manage multiple VPN servers through a unified REST API
-* 🤖 Telegram bot for users to register, pay via Telegram Pay and generate config files
-* 🖥️ Web-based admin panel with React for managing servers, users and configs
-* 💸 Billing daemon that charges users via Redis/RQ tasks, sends low-balance notifications and suspends unpaid configs
-* 📄 Config files are generated on demand and removed after sending
-* 🔐 Server API keys are stored encrypted using Fernet
-* 🚪 Nginx reverse proxy exposes the admin API and frontend on a single port
+### VPN lifecycle
 
-## Components 🧩
+`vpn_config` keeps both desired and observed state. Remote mutations are tracked
+in `vpn_operation` with an operation ID and retryable status instead of treating
+one HTTP response as the source of truth.
 
-### Telegram bot
+The scheduler periodically runs the reconciler. Workers atomically lease an
+operation and use a fencing token, so concurrent or expired workers cannot both
+commit a result. Retry backoff is bounded; operations that exhaust their retry
+budget require operator intervention. Existing client `.ovpn` files are not
+regenerated by these schema changes.
 
-Located in [`bot/`](bot). It allows users to register, view balance and create VPN configs. A simple FSM guides the user through choosing a server and entering a display name. Config files are sent as temporary files and removed afterwards.
+Manager 1.2 inventory can be audited read-only and conditionally cached with an
+ETag. Optional repair is revision-guarded, limited to explicit active/suspended
+configs and persists ordinary leased/fenced operations before remote calls.
+Unknown remote clients and destructive create/revoke drift are never repaired
+automatically. See [the control-plane guide](docs/vpn-control-plane.md).
 
-### Admin API
+### Notifications
 
-Located in [`admin/`](admin). It exposes a JSON REST API to manage servers, users and configs. Endpoints are protected either by an `X-API-Key` or by a login token obtained from `/login`. When running with Docker Compose the service listens on port 8000 and is proxied through Nginx at `http://localhost:14081/api`. Request bodies are validated with Pydantic models.
+Billing writes notifications to a PostgreSQL outbox in the same transaction as
+the charge. A dispatcher publishes them to Redis with a stable ID. The bot uses
+a singleton consumer lease, delayed retry/backoff, and writes terminal delivery
+status back to PostgreSQL; stale queued rows are republished. Redis also uses AOF
+persistence in the Compose stack.
 
-### Admin frontend
+### Incoming Telegram updates
 
-The React + Vite application in [`admin_frontend/`](admin_frontend) provides a web interface for the admin API. It is served through the Nginx container together with the API endpoints.
+Long polling no longer executes handlers directly from Telegram's response.
+Each complete response batch is first committed to `telegram_update_inbox`; only
+then does the poller advance the Telegram offset. A bounded processor pool
+leases rows with fencing tokens and feeds them into the aiogram dispatcher.
+Different user/chat ordering lanes can progress concurrently, while updates in
+the same conversation remain serialized. A fail-safe timeout cancels a stuck
+handler before its lease can expire, and heartbeat loss cancels the old handler
+instead of allowing it to continue after fencing. Payment email, name, phone,
+and shipping-address fields that handlers do not use are removed before an
+update enters durable storage.
 
-### Billing daemon
+Processing is deliberately at-least-once: a crash before the database ACK lets
+the lease expire and retries the update. Critical payment and VPN mutations must
+therefore remain idempotent. See [the update-ingress runbook](docs/telegram-update-ingress.md)
+for dead-letter recovery and the future webhook boundary.
 
-`billing_daemon/main.py` uses Redis and RQ to periodically charge users for their active configs. It also sends Telegram notifications when a user's balance falls below 10 and suspends configs when the balance becomes negative. The worker and scheduler are provided as separate Docker services.
+### Telegram user interface
 
-### Database
+The bot is invite-only. Existing database users are grandfathered; an unknown
+Telegram account is created only by a private `/start ref_<opaque-code>` deep
+link. Unknown messages are silently ignored, while payment protocol events
+fail closed without fabricating an account. Numeric Telegram IDs are not valid
+invites.
 
-Async SQLAlchemy models live under [`core/db`](core/db). Initialize the schema using the bot container:
+`/start` installs a persistent reply keyboard for balance, configs, top-up,
+installation guides, and the referral program. Historical commands stay
+available as compatibility aliases, while Telegram's visible command list is
+limited to `/start`, `/menu`, and `/help`. Navigation is routed before FSM text
+handlers and clears an unfinished create/rename flow, so a menu label can never
+become a configuration name accidentally.
+
+Config details use inline controls for download, rename, and a confirmed delete.
+Historical manual pause/resume callbacks fail closed until user intent can be
+stored independently from balance-based suspension. Installation help is split
+by platform and points to official OpenVPN clients. The referral screen shows
+only the account owner's opaque invite link, aggregate two-level counts, and
+earned totals; it never exposes another user's Telegram identity or individual
+deposit. The balance screen exposes a paginated private ledger history with the
+amount, reason, timestamp, and resulting balance for every recorded movement.
+See [the referral accounting guide](docs/referrals.md) for policy, backfill,
+and manual-refund boundaries.
+
+## Configuration
+
+Copy the example before using Docker Compose:
 
 ```bash
-docker compose run --rm bot python scripts/init_db.py
+cp .env.example .env
 ```
 
-## Configuration ⚙️
-
-All settings are read from environment variables (see `core/config.py`).
-Create a `.env` file (see `.env.example`) to provide them. Docker Compose
-derives `DATABASE_URL` automatically from the PostgreSQL credentials:
-
-* `DATABASE_URL` – database connection string
-* `ENCRYPTION_KEY` – Fernet key used to encrypt server API keys
-* `BOT_TOKEN` – Telegram bot token
-* `PER_CONFIG_COST` – how much to charge per active config (default `1.0`)
-* `CONFIG_CREATION_COST` – cost charged when a config is created (default `10.0`)
-* `BILLING_INTERVAL` – seconds between periodic charges
-* `ADMIN_USERNAME` – username for `/login`
-* `ADMIN_PASSWORD_HASH` – bcrypt hash of the login password
-* `REDIS_URL` – Redis connection string for token storage (default `redis://redis:6379/0`)
-
-A helper script `scripts/fernet_key_generator.py` can generate a new encryption key.
-
-## Development and tests 🧪
-
-Install dependencies from `requirements.txt` and run the test suite:
+Replace every placeholder. In particular, `ENCRYPTION_KEY` must be a valid
+Fernet key and must remain stable for as long as encrypted Manager API keys
+exist:
 
 ```bash
-pip install -r requirements.txt
+python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+python -c 'import bcrypt; print(bcrypt.hashpw(b"change-this-password", bcrypt.gensalt()).decode())'
+```
+
+Store the second command's output in `ADMIN_PASSWORD_HASH`.
+
+| Variable | Purpose | Example/default |
+| --- | --- | --- |
+| `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | Local PostgreSQL container | See `.env.example` |
+| `DATABASE_URL` | Async SQLAlchemy URL | `postgresql+asyncpg://vpn:vpn@db:5432/vpn` |
+| `ENCRYPTION_KEY` | Fernet key for Manager API keys | Required |
+| `BOT_TOKEN` | Telegram bot token | Required to run the bot |
+| `TELEGRAM_PAY_TOKEN` | Telegram payment provider token | Required for card payments |
+| `PER_CONFIG_COST` | Charge per active config per billing period | `1.00` |
+| `CONFIG_CREATION_COST` | One-time config creation charge | `10.00` |
+| `BILLING_INTERVAL` | Billing period in seconds, minimum 60 | `3600` |
+| `ADMIN_USERNAME` | `/login` username | `admin` |
+| `ADMIN_PASSWORD_HASH` | bcrypt password hash | Required for login |
+| `REDIS_URL` | Redis used by all backend processes | `redis://redis:6379/0` |
+| `PAYMENT_INTENT_TTL_SECONDS` | Lifetime of a pending invoice intent | `3600` |
+| `PAYMENTS_ENABLED` | Permit new provider invoices and Telegram pre-checkout | `true` |
+| `REFERRAL_REWARDS_ENABLED` | Credit rewards for newly confirmed provider payments | `true` |
+| `REFERRAL_LEVEL_1_RATE_BPS` | Direct inviter reward in basis points | `500` (5%) |
+| `REFERRAL_LEVEL_2_RATE_BPS` | Second-level reward in basis points | `100` (1%) |
+| `REFERRAL_PROGRAM_VERSION` | Immutable policy label stored with every reward | `v1-5pct-1pct` |
+| `VPN_OPERATION_MAX_ATTEMPTS` | Ambiguous Manager attempts before operator intervention | `20` |
+| `VPN_MANAGER_TLS_ENABLED`, `VPN_MANAGER_TLS_PORT` | Opt-in verified HTTPS/mTLS and parallel migration port | `false`, `16291` in `.env.example` |
+| `VPN_MANAGER_MTLS_REQUIRED` | Fail closed unless TLS, CA and Hub client identity paths are configured | `false` |
+| `VPN_MANAGER_CA_CERT_PATH` | Optional Manager server CA bundle | Empty/system trust |
+| `VPN_MANAGER_CLIENT_CERT_PATH`, `VPN_MANAGER_CLIENT_KEY_PATH` | Optional Hub mTLS identity, configured as a pair | Empty |
+| `VPN_DRIFT_REPAIR_ENABLED` | Permit explicitly reviewed active/suspended drift repair | `false` |
+| `TELEGRAM_UPDATE_POLL_TIMEOUT` | Telegram long-poll timeout in seconds | `30` |
+| `TELEGRAM_UPDATE_BATCH_SIZE` | Maximum updates persisted in one polling batch | `100` |
+| `TELEGRAM_UPDATE_PROCESSOR_COUNT` | Parallel processors; each chat/user lane remains serialized | `4` |
+| `TELEGRAM_UPDATE_LEASE_SECONDS` | Renewable handler-processing lease | `300` |
+| `TELEGRAM_UPDATE_HANDLER_TIMEOUT_SECONDS` | Fail-safe handler timeout; must be shorter than its lease | `240` |
+| `TELEGRAM_UPDATE_MAX_ATTEMPTS` | Handler failures before an update becomes `dead` | `20` |
+| `TELEGRAM_UPDATE_RETRY_MAX_SECONDS` | Maximum exponential retry delay | `300` |
+| `TELEGRAM_UPDATE_RETENTION_DAYS` | Retention for processed dedupe receipts; payload is scrubbed immediately | `30` |
+| `TELEGRAM_UPDATE_DEAD_RETENTION_DAYS` | Shorter retention for terminal dead-letter payloads | `7` |
+| `OBSERVABILITY_ENABLED` | Emit best-effort Manager/job StatsD metrics | `false` (`true` in local Compose) |
+| `STATSD_HOST`, `STATSD_PORT` | StatsD exporter destination | `statsd_exporter:9125` |
+| `VPN_HUB_SERVICE` | Bounded process label for cross-process metrics | `unknown` |
+| `READINESS_TIMEOUT_SECONDS` | Per-dependency readiness timeout | `2.0` |
+| `NOTIFICATION_VISIBILITY_TIMEOUT` | Time before an unacknowledged outbox row is republished | `120` |
+| `NOTIFICATION_DEDUPE_TTL_SECONDS` | Redis dedupe-marker lifetime | `86400` |
+| `VITE_ADMIN_API_URL` | Browser-visible API origin in local Compose | `http://localhost:14081` |
+| `SQL_ECHO` | SQLAlchemy statement logging | `false` |
+
+Settings are read at process startup. Restart the affected containers after
+changing `.env`.
+
+## Operational kill switches
+
+These switches live in backend settings and do not depend on either UI:
+
+| Variable | Effect when disabled/enabled |
+| --- | --- |
+| `MAINTENANCE_MODE=true` | Stops periodic billing and scheduled reconciliation; rejects new config provisioning and unsuspension. Admin, bot, and top-ups remain online. |
+| `BILLING_ENABLED=false` | Makes periodic billing jobs no-op. |
+| `PAYMENTS_ENABLED=false` | Rejects new top-ups, invoice delivery, and pre-checkout. Captured successful payments are still credited idempotently. |
+| `PROVISIONING_ENABLED=false` | Rejects new configs and unsuspension; suspension/revocation can still proceed. |
+| `NOTIFICATIONS_ENABLED=false` | Pauses bot delivery and prevents billing jobs from enqueueing new notices. Existing queued messages remain in Redis. |
+| `REFERRAL_REWARDS_ENABLED=false` | Keeps provider top-ups active but pauses reward settlement and its catch-up job. Credited payments remain queued and are settled idempotently after re-enabling; existing history and balances remain unchanged. |
+| `NOTIFICATION_MAX_ATTEMPTS` | Moves repeatedly failing Telegram deliveries to the failed queue after delayed exponential retries. |
+
+For incident maintenance, set at least `MAINTENANCE_MODE=true`,
+`BILLING_ENABLED=false`, and `PAYMENTS_ENABLED=false`, then recreate the backend
+containers so every process loads the same settings.
+
+## Local Docker workflow
+
+The local stack uses the multi-stage root `Dockerfile`. Alembic runs as a
+one-shot `migrations` service; application services start only after it exits
+successfully.
+
+Start the complete stack:
+
+```bash
+docker compose up --build
+```
+
+Open `http://localhost:14081`. The frontend talks to the API through the same
+Nginx endpoint. No `admin_frontend/.env` file is required by Compose; override
+`VITE_ADMIN_API_URL` in the root `.env` if the browser uses another origin.
+
+To test only the backend without a real Telegram token or the existing UI:
+
+```bash
+docker compose up --build db redis migrations admin rq_worker rq_scheduler
+```
+
+Run a migration explicitly:
+
+```bash
+docker compose run --rm migrations
+docker compose run --rm --entrypoint alembic migrations check
+```
+
+Do not use `Base.metadata.create_all()` or old `scripts/init_db.py` commands;
+Alembic owns the schema.
+
+Stop the local stack without deleting data:
+
+```bash
+docker compose down
+```
+
+Adding `-v` deletes local PostgreSQL and Redis volumes and should only be used
+when that data is disposable.
+
+## Observability
+
+Local Compose includes Prometheus and a StatsD exporter. Prometheus is bound to
+`http://127.0.0.1:19090`; backend services do not depend on either monitoring
+container. The admin backend exposes internal `/health`, `/ready`, and `/metrics`
+endpoints, while cross-process Manager/job latency and error signals travel over
+best-effort UDP.
+
+See [the observability guide](docs/observability.md) for metrics, validation and
+staged rollout, and [the alert runbooks](docs/runbooks/observability.md) before
+enabling any paging receiver.
+
+## Tests
+
+Install dependencies and run the suite:
+
+```bash
+python -m pip install -r requirements.txt
 pytest
 ```
 
-## Security notes 🔐
-
-* API keys of VPN servers are stored encrypted in the database using Fernet.
-* The admin API requires a login token obtained from the `/login` endpoint and should ideally be served over HTTPS.
-* Login tokens are stored in Redis with a 1 hour TTL.
-* Temporary configuration files created by the bot are placed in the system temp directory and removed immediately after sending.
-* Communication with VPN servers is performed over plain HTTP; ensure your environment is trusted or switch to HTTPS.
-
-## Deployment with Docker 🐳
-
-A `docker-compose.yml` file is included to run the full stack with PostgreSQL.
-Build the images and initialize the database first:
+SQLite covers fast unit and service tests. The locking test uses a real,
+disposable PostgreSQL database when `POSTGRES_TEST_URL` is supplied:
 
 ```bash
-docker compose build
-docker compose run --rm bot python scripts/init_db.py
+POSTGRES_TEST_URL=postgresql+asyncpg://vpn:vpn@localhost:5432/vpn_test \
+  pytest tests/test_billing_concurrency.py tests/test_vpn_lifecycle_concurrency.py \
+    tests/test_telegram_update_concurrency.py
 ```
 
-Then start all services in the background:
+Never point that variable at a database containing useful data: the test drops
+and recreates its schema.
 
-```bash
-docker compose up -d
+## Admin API
+
+`POST /login` returns a one-hour token stored in Redis. Send it as:
+
+```text
+Authorization: Bearer <token>
 ```
 
-Copy `.env.example` to `.env` and adjust the values (such as `BOT_TOKEN`,
-`ENCRYPTION_KEY`, `POSTGRES_USER` and `POSTGRES_PASSWORD`) for your production
-setup. Docker Compose will pick them up automatically and derive `DATABASE_URL`
-from them. The Nginx container exposes the stack on
-`http://localhost:14081` with the admin API available under `/api`.
+The API is exposed under `/api` through Nginx. Manager API keys are accepted on
+server create/update but are masked in API responses. See `admin/README.md` for
+the current endpoint list.
 
----
+## Security and deployment notes
 
-<p align="center">Made with ❤️ by <a href="https://github.com/andriyshkoy">andriyshkoy</a></p>
+GitHub Actions now separates validation from release. `CI` runs tests, real
+PostgreSQL concurrency checks, migration drift checks, frontend validation,
+Compose rendering, and all image builds on pull requests. `Release bot canary`
+is a manual `main`-only workflow that publishes digest-pinned images, validates
+a fresh restored production dump with the exact migrations image, and starts
+only the bot behind fail-closed money and VPN switches. See the
+[production rollout runbook](docs/production-rollout.md) for the release and
+rollback contract.
+
+- Build `admin`, `bot`, `billing`, and `migrations` only as targets of the root
+  multi-stage `Dockerfile`. Production uses explicit profiles, external data
+  volumes, and immutable image references; follow the
+  [production rollout runbook](docs/production-rollout.md).
+- Manager API keys are encrypted at rest. Legacy HTTP remains the default for
+  compatibility; verified HTTPS/mTLS is opt-in and documented in
+  [the control-plane guide](docs/vpn-control-plane.md).
+- Preserve `ENCRYPTION_KEY`, PostgreSQL, and Redis backups before migrations.
+- Referral migration `f1a8c3d9e742` generates opaque codes for every existing
+  user and backfills every persisted credited provider payment. Payments made
+  before `provider_payment` existed cannot be reconstructed from an aggregate
+  balance; use a verified provider export rather than guessing from
+  `opening_balance`.
+- Once the new ledger/lifecycle tables contain operational data, the migration
+  deliberately refuses a destructive schema downgrade. Roll application code
+  back only to an image compatible with the referral schema and without
+  downgrading the database.
+- `docker-compose-prod.yml` references prebuilt images and is not part of the
+  local workflow. Building or testing this repository does not publish images
+  or deploy anything.
+- Run and verify Alembic migrations against a restored production backup before
+  any future deployment.

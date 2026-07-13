@@ -1,183 +1,59 @@
 # VPN Admin API
 
-This is an administrative API for managing VPN servers, configurations, users, and billing.
+The FastAPI application is exposed through Nginx at `/api`; login is available
+at `/login`. Obtain a token with `POST /login` and send it on protected requests:
 
-## Authentication
-
-Authenticate by obtaining a token from `/login` and sending it in the
-`Authorization` header:
-
-```
-Authorization: Bearer your_token
+```text
+Authorization: Bearer <token>
 ```
 
-## API Endpoints
+Tokens are stored in Redis with a one-hour TTL.
 
-All list endpoints support `limit` and `offset` query parameters for pagination.
+## Endpoints
 
-### Server Management
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/login` | Authenticate and return `{"token": "..."}` |
+| `GET` | `/api/servers` | List servers (`limit`, `offset`, `host`, `location`) |
+| `POST` | `/api/servers` | Create a server |
+| `GET` | `/api/servers/{server_id}` | Get a server |
+| `PATCH` | `/api/servers/{server_id}` | Update supplied server fields |
+| `DELETE` | `/api/servers/{server_id}` | Delete a drained server |
+| `GET` | `/api/users` | List users (`limit`, `offset`, `username`, `tg_id`) |
+| `POST` | `/api/users` | Create/register a user |
+| `GET` | `/api/users/{user_id}` | Get a user |
+| `PATCH` | `/api/users/{user_id}` | Update supplied user fields |
+| `DELETE` | `/api/users/{user_id}` | Delete a user without configs or financial history |
+| `POST` | `/api/users/{user_id}/topup` | Add a positive amount through the ledger |
+| `POST` | `/api/users/{user_id}/withdraw` | Withdraw a positive amount through the ledger |
+| `GET` | `/api/configs` | List configs (`limit`, `offset`, `server_id`, `owner_id`, `suspended`) |
+| `GET` | `/api/configs/{config_id}` | Get a config |
 
-#### List all servers
-- **GET** `/servers`
-- **Query Parameters**:
-  - `limit` (int, optional): Maximum objects per request.
-  - `offset` (int, optional): Objects to skip from the beginning.
-  - `host` (string, optional): Filter by host.
-  - `location` (string, optional): Filter by location.
-- **Response**: Array of server objects
+Deletion endpoints keep the response shape `{"deleted": true|false}`. They
+return `false` when deletion would discard managed VPN credentials or immutable
+financial history.
 
-#### Create a server
-- **POST** `/servers`
-- **Body**:
-  ```json
-  {
-    "name": "server1",
-    "ip": "192.168.1.1",
-    "port": 22,
-    "host": "hostname",
-    "location": "US",
-    "api_key": "server_api_key",
-    "cost": 0
-  }
-  ```
-- **Response**: Created server object
+`topup` and `withdraw` accept an optional `Idempotency-Key` header. Reuse the
+same value when retrying one administrative balance operation. Attempts to
+change a Manager IP, port, or API key while that server still owns configs are
+rejected with HTTP 409 until the server is drained.
 
-#### Get server details
-- **GET** `/servers/{server_id}`
-- **Response**: Server object
-
-#### Update a server
-- **PUT** `/servers/{server_id}`
-- **Body**: Any of the server fields that need updating
-  ```json
-  {
-    "name": "updated-name",
-    "location": "CA"
-  }
-  ```
-- **Response**: Updated server object
-
-#### Delete a server
-- **DELETE** `/servers/{server_id}`
-- **Response**: `{"deleted": true}` or `{"deleted": false}`
-
-### Config Management
-
-#### List all configs
-- **GET** `/configs`
-- **Query Parameters**:
-  - `limit` (int, optional): Maximum objects per request.
-  - `offset` (int, optional): Objects to skip from the beginning.
-  - `server_id` (int, optional): Filter by server ID.
-  - `owner_id` (int, optional): Filter by owner ID.
-  - `suspended` (bool, optional): Filter by suspension status.
-- **Response**: Array of config objects
-
-#### Create a config
-- **POST** `/configs`
-- **Body**:
-  ```json
-  {
-    "server_id": 1,
-    "owner_id": 1,
-    "name": "config1",
-    "display_name": "User Config 1",
-    "use_password": false
-  }
-  ```
-- **Response**: Created config object
-
-#### Download a config
-- **GET** `/configs/{config_id}/download`
-- **Response**: `.ovpn` file download
-
-#### Delete a config
-- **DELETE** `/configs/{config_id}`
-- **Response**: `{"deleted": true}` or `{"deleted": false}`
-
-### User Management
-
-#### List all users
-- **GET** `/users`
-- **Query Parameters**:
-  - `limit` (int, optional): Maximum objects per request.
-  - `offset` (int, optional): Objects to skip from the beginning.
-  - `username` (string, optional): Filter by username.
-  - `tg_id` (int, optional): Filter by Telegram ID.
-- **Response**: Array of user objects
-
-#### Create a user
-- **POST** `/users`
-- **Body**:
-  ```json
-  {
-    "tg_id": 123456789,
-    "username": "newuser",
-    "balance": 0.0
-  }
-  ```
-- **Response**: Created user object
-
-#### View user details with configs
-- **GET** `/users/{user_id}`
-- **Response**: User object with associated configs
-  ```json
-  {
-    "user": { /* user details */ },
-    "configs": [ /* user configs */ ]
-  }
-  ```
-
-#### Top up user balance
-- **POST** `/users/{user_id}/topup`
-- **Body**:
-  ```json
-  {
-    "amount": 100.00
-  }
-  ```
-- **Response**: Updated user object
-
-#### Update a user
-- **PUT** `/users/{user_id}`
-- **Body**: Any of the user fields that need updating
-  ```json
-  {
-    "username": "updated_username",
-    "balance": 150.0
-  }
-  ```
-- **Response**: Updated user object
-
-#### Delete a user
-- **DELETE** `/users/{user_id}`
-- **Response**: `{"deleted": true}` or `{"deleted": false}`
+Server responses keep the `api_key` field for frontend compatibility, but its
+value is always `********`; decrypted Manager credentials are never returned.
 
 ## Examples
 
-### Creating a new server
-
 ```bash
-curl -X POST http://your-api-domain/servers \
+TOKEN=$(curl -sS http://localhost:14081/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"change-me"}' | jq -r .token)
+
+curl -sS http://localhost:14081/api/users \
+  -H "Authorization: Bearer $TOKEN"
+
+curl -sS http://localhost:14081/api/users/1/topup \
+  -X POST \
   -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "us-east", "ip": "10.0.0.1", "host": "host1.example.com", "location": "US East", "api_key": "server_key123"}'
-```
-
-### Creating a new config for a user
-
-```bash
-curl -X POST http://your-api-domain/configs \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"server_id": 1, "owner_id": 5, "name": "mobile-config", "display_name": "Mobile Device"}'
-```
-
-### Adding funds to a user account
-
-```bash
-curl -X POST http://your-api-domain/users/5/topup \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"amount": 50.00}'
+  -H 'Content-Type: application/json' \
+  -d '{"amount":100}'
 ```

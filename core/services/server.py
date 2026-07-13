@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Callable, Sequence
 
+from core.exceptions import InvalidOperationError
+
 from .models import Server
 
 
@@ -32,9 +34,7 @@ class ServerService:
             filters["host"] = host
 
         async with self._uow() as repos:
-            servers = await repos["servers"].list(
-                limit=limit, offset=offset, **filters
-            )
+            servers = await repos["servers"].list(limit=limit, offset=offset, **filters)
             return [Server.from_orm(s) for s in servers]
 
     async def create(
@@ -45,7 +45,7 @@ class ServerService:
         host: str,
         location: str,
         api_key: str,
-        cost: int
+        cost: int,
     ) -> Server:
         async with self._uow() as repos:
             server = await repos["servers"].create(
@@ -61,11 +61,33 @@ class ServerService:
 
     async def delete(self, server_id: int) -> bool:
         async with self._uow() as repos:
+            server = await repos["servers"].get_for_update(server_id)
+            if server is None:
+                return False
+            configs = await repos["configs"].list(server_id=server_id, limit=1)
+            if configs:
+                # A server must be drained and its remote clients revoked
+                # before the local control-plane record can disappear.
+                return False
             deleted = await repos["servers"].delete(id=server_id)
             return bool(deleted)
 
     async def update(self, server_id: int, **fields) -> Server | None:
         """Update a server and return the updated object, or ``None`` if missing."""
         async with self._uow() as repos:
+            current = await repos["servers"].get_for_update(server_id)
+            if current is None:
+                return None
+            endpoint_fields = {"ip", "port", "api_key"}
+            endpoint_changed = any(
+                key in fields and fields[key] != getattr(current, key)
+                for key in endpoint_fields
+            )
+            if endpoint_changed:
+                configs = await repos["configs"].list(server_id=server_id, limit=1)
+                if configs:
+                    raise InvalidOperationError(
+                        "Drain all VPN configs before changing the Manager endpoint"
+                    )
             srv = await repos["servers"].update(server_id, **fields)
             return Server.from_orm(srv) if srv else None

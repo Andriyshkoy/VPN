@@ -1,62 +1,124 @@
-from aiogram import F
-from aiogram.filters import Command
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Message,
-)
+from __future__ import annotations
 
-from .base import REFERRALS_PER_PAGE, get_or_create_user, router, user_service
+from decimal import Decimal
+from html import escape
+from urllib.parse import quote
 
-__all__ = ["cmd_referrals", "paginate_referrals"]
+from aiogram import Bot, F
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.utils.deep_linking import create_start_link
+
+from core.config import settings
+from core.db.unit_of_work import uow
+from core.services import ReferralOverview, ReferralService
+
+from ..keyboards import referral_program_keyboard
+from ..ui import format_money, safe_callback_answer, safe_edit_text
+from .base import get_or_create_user, router
+
+__all__ = ["cmd_referrals", "legacy_referrals_callback"]
+
+referral_service = ReferralService(uow)
 
 
-async def _send_referrals(target: Message | CallbackQuery, user_id: int, tg_id: int, page: int = 0) -> None:
-    total = await user_service.count_referrals(user_id)
-    offset = page * REFERRALS_PER_PAGE
-    referrals = await user_service.get_referrals(user_id, limit=REFERRALS_PER_PAGE, offset=offset)
+def _format_percent(rate_bps: int) -> str:
+    value = Decimal(rate_bps) / Decimal(100)
+    return f"{value.normalize():f}".replace(".", ",")
 
-    text = (
-        "📊 <b>Ваши рефералы</b>\n\n"
-        "Приглашайте друзей и получайте бонусы!\n"
-        f"Ваша реферальная ссылка (Нажмите чтобы скопировать):\n\n<code>https://t.me/andriyshkoy_vpn_bot?start={tg_id}</code>\n\n"
+
+def render_referral_program(overview: ReferralOverview, invite_link: str) -> str:
+    level_1_rate = _format_percent(settings.referral_level_1_rate_bps)
+    level_2_rate = _format_percent(settings.referral_level_2_rate_bps)
+    status = (
+        "Приглашайте друзей и получайте VPN-бонусы с их пополнений:\n"
+        if settings.referral_rewards_enabled
+        else (
+            "⏸ <b>Новые начисления временно приостановлены.</b> "
+            "Ссылка и уже начисленные бонусы продолжают работать.\n\n"
+            "Условия после возобновления:\n"
+        )
+    )
+    return (
+        "🎁 <b>Реферальная программа</b>\n\n"
+        f"{status}"
+        f"• <b>{level_1_rate}%</b> — с каждого пополнения приглашённого вами "
+        "пользователя;\n"
+        f"• <b>{level_2_rate}%</b> — с пополнений пользователей второго уровня.\n\n"
+        "Бонус сразу поступает на внутренний баланс и расходуется на VPN. "
+        "Вывести его деньгами нельзя.\n\n"
+        "<b>Ваша статистика</b>\n"
+        f"Первый уровень: <b>{overview.level_1_count}</b>\n"
+        f"Второй уровень: <b>{overview.level_2_count}</b>\n"
+        f"Начислено за первый уровень: "
+        f"<b>{format_money(overview.level_1_earned)} ₽</b>\n"
+        f"Начислено за второй уровень: "
+        f"<b>{format_money(overview.level_2_earned)} ₽</b>\n"
+        f"Всего заработано: <b>{format_money(overview.total_earned)} ₽</b>\n\n"
+        "<b>Ваша пригласительная ссылка</b>\n"
+        f"<code>{escape(invite_link)}</code>"
     )
 
-    if not referrals:
-        text += "У вас нет рефералов."
-        markup = None
-    else:
-        text += f"Всего: {total}\n\n"
-        for ref in referrals:
-            name = f"@{ref.username}" if ref.username else f"ID: {ref.tg_id}"
-            text += f"• {name}\n"
 
-        buttons = []
-        if page > 0:
-            buttons.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"refs:{page-1}"))
-        if offset + REFERRALS_PER_PAGE < total:
-            buttons.append(InlineKeyboardButton(text="Вперёд ➡️", callback_data=f"refs:{page+1}"))
-        markup = InlineKeyboardMarkup(inline_keyboard=[buttons]) if buttons else None
+async def _referral_screen(
+    *,
+    tg_id: int,
+    username: str | None,
+    bot: Bot,
+) -> tuple[str, InlineKeyboardMarkup] | None:
+    user = await get_or_create_user(tg_id, username)
+    if user is None:
+        return None
+    overview = await referral_service.overview(user.id)
+    invite_link = await create_start_link(
+        bot,
+        f"ref_{overview.referral_code}",
+        encode=False,
+    )
+    share_url = (
+        "https://t.me/share/url?"
+        f"url={quote(invite_link, safe='')}"
+        "&text="
+        f"{quote('Подключайся к моему VPN по приглашению 👇', safe='')}"
+    )
+    return (
+        render_referral_program(overview, invite_link),
+        referral_program_keyboard(share_url),
+    )
 
-    send_method = target.answer if isinstance(target, Message) else target.message.edit_text
-    await send_method(text, reply_markup=markup, parse_mode="HTML")
-    if isinstance(target, CallbackQuery):
-        await target.answer()
 
-
-@router.message(Command("referrals"))
-async def cmd_referrals(message: Message) -> None:
-    user = await get_or_create_user(message.from_user.id, message.from_user.username)
-    await _send_referrals(message, user.id, message.from_user.id, page=0)
+async def cmd_referrals(message: Message, bot: Bot | None = None) -> None:
+    screen = await _referral_screen(
+        tg_id=message.from_user.id,
+        username=message.from_user.username,
+        bot=bot or message.bot,
+    )
+    if screen is None:
+        return
+    text, markup = screen
+    await message.answer(
+        text,
+        reply_markup=markup,
+        disable_web_page_preview=True,
+    )
 
 
 @router.callback_query(F.data.startswith("refs:"))
-async def paginate_referrals(callback: CallbackQuery) -> None:
-    try:
-        page = int(callback.data.split(":", 1)[1])
-    except (IndexError, ValueError):
-        await callback.answer("Некорректные данные", show_alert=True)
+async def legacy_referrals_callback(callback: CallbackQuery) -> None:
+    """Keep already-sent referral buttons useful after the rollout."""
+
+    screen = await _referral_screen(
+        tg_id=callback.from_user.id,
+        username=callback.from_user.username,
+        bot=callback.bot,
+    )
+    if screen is None:
+        await safe_callback_answer(callback)
         return
-    user = await get_or_create_user(callback.from_user.id, callback.from_user.username)
-    await _send_referrals(callback, user.id, callback.from_user.id, page=page)
+    text, markup = screen
+    await safe_edit_text(
+        callback.message,
+        text,
+        reply_markup=markup,
+        disable_web_page_preview=True,
+    )
+    await safe_callback_answer(callback)

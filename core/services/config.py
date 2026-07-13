@@ -1,168 +1,86 @@
 from __future__ import annotations
 
-from typing import Callable, Sequence
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 
-from core.exceptions import (
-    ConfigNotFoundError,
-    InsufficientBalanceError,
-    ServerNotFoundError,
-    UserNotFoundError,
-)
+from core.config import settings
+from core.exceptions import InvalidOperationError
 
+from ._config_shared import _ConfigContext as _ConfigContext  # noqa: F401
 from .api_gateway import APIGateway
-from .models import Config
+from .config_executor import ConfigLeasedExecutorMixin
+from .config_provisioning import ConfigProvisioningMixin
+from .config_queries import ConfigQueriesEntitlementsMixin
+from .models import Config as Config  # noqa: F401
 
 
-class ConfigService:
-    """High‑level operations on *VPN client configurations*."""
+class ConfigService(
+    ConfigProvisioningMixin,
+    ConfigQueriesEntitlementsMixin,
+    ConfigLeasedExecutorMixin,
+):
+    """Stable facade for VPN configuration application workflows.
 
-    def __init__(self, uow: Callable) -> None:
+    The focused mixins own provisioning, queries/entitlements, and leased
+    execution. This facade keeps construction and adapter wiring in the legacy
+    module so existing imports and ``core.services.config.APIGateway`` patches
+    continue to work.
+    """
+
+    def __init__(
+        self,
+        uow: Callable,
+        *,
+        clock: Callable[[], datetime] | None = None,
+        lease_seconds: int = 120,
+        retry_base_seconds: int = 5,
+        retry_max_seconds: int = 300,
+    ) -> None:
         self._uow = uow
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+        if lease_seconds <= 0:
+            raise ValueError("VPN operation lease must be positive")
+        if retry_base_seconds <= 0 or retry_max_seconds < retry_base_seconds:
+            raise ValueError("Invalid VPN operation retry backoff")
+        self._lease_for = timedelta(seconds=lease_seconds)
+        self._retry_base_seconds = retry_base_seconds
+        self._retry_max_seconds = retry_max_seconds
 
-    # ---------- CRUD wrappers ----------
-
-    async def create_config(
-        self,
-        *,
-        server_id: int,
-        owner_id: int,
-        name: str,
-        display_name: str,
-        use_password: bool = False,
-    ) -> Config:
-        async with self._uow() as repos:
-            server = await repos["servers"].get(id=server_id)
-            if not server:
-                raise ServerNotFoundError(f"Server {server_id} not found")
-
-            user = await repos["users"].get(id=owner_id)
-            if not user:
-                raise UserNotFoundError(f"User {owner_id} not found")
-            if user.balance <= 0:
-                raise InsufficientBalanceError("Insufficient balance")
-
-            async with APIGateway(server.ip, server.port, server.api_key) as api:
-                await api.create_client(name, use_password=use_password)
-
-            cfg = await repos["configs"].create(
-                server_id,
-                owner_id,
-                name,
-                display_name,
+    @staticmethod
+    def _validate_display_name(value: str) -> str:
+        if not isinstance(value, str):
+            raise InvalidOperationError("Configuration display name must be text")
+        value = value.strip()
+        if not value or len(value) > 128:
+            raise InvalidOperationError(
+                "Configuration display name must contain 1 to 128 characters"
             )
-            return Config.from_orm(cfg)
+        return value
 
-    async def download_config(self, config_id: int) -> bytes:
-        async with self._uow() as repos:
-            cfg = await repos["configs"].get(id=config_id, joined_load=["server"])
-            if not cfg:
-                raise ConfigNotFoundError(f"Config with ID {config_id} not found")
-            async with APIGateway(cfg.server.ip, cfg.server.port, cfg.server.api_key) as api:
-                return await api.download_config(cfg.name)
+    @staticmethod
+    def _ensure_provisioning_enabled() -> None:
+        if settings.maintenance_mode or not settings.provisioning_enabled:
+            raise InvalidOperationError("VPN provisioning is temporarily disabled")
 
-    async def revoke_config(self, config_id: int) -> None:
-        async with self._uow() as repos:
-            cfg = await repos["configs"].get(id=config_id, joined_load=["server"])
-            if not cfg:
-                raise ConfigNotFoundError(f"Config with ID {config_id} not found")
-            async with APIGateway(cfg.server.ip, cfg.server.port, cfg.server.api_key) as api:
-                await api.revoke_client(cfg.name)
-            await repos["configs"].delete(id=config_id)
+    @staticmethod
+    def _create_gateway(ip: str, port: int, api_key: str):
+        """Resolve the legacy patch point each time a Manager is contacted."""
 
-    async def suspend_config(self, config_id: int) -> Config:
-        async with self._uow() as repos:
-            cfg = await repos["configs"].get(id=config_id, joined_load=["server"])
-            if not cfg:
-                raise ConfigNotFoundError(f"Config with ID {config_id} not found")
-            async with APIGateway(cfg.server.ip, cfg.server.port, cfg.server.api_key) as api:
-                await api.suspend_client(cfg.name)
-            cfg = await repos["configs"].suspend(config_id)
-            return Config.from_orm(cfg)
+        return APIGateway(ip, port, api_key)
 
-    async def unsuspend_config(self, config_id: int) -> Config:
-        async with self._uow() as repos:
-            cfg = await repos["configs"].get(id=config_id, joined_load=["server"])
-            if not cfg:
-                raise ConfigNotFoundError(f"Config with ID {config_id} not found")
-            async with APIGateway(cfg.server.ip, cfg.server.port, cfg.server.api_key) as api:
-                await api.unsuspend_client(cfg.name)
-            cfg = await repos["configs"].unsuspend(config_id)
-            return Config.from_orm(cfg)
+    def _now(self) -> datetime:
+        return self._as_utc(self._clock())
 
-    async def rename_config(self, config_id: int, new_name: str) -> Config:
-        async with self._uow() as repos:
-            cfg = await repos["configs"].get(id=config_id)
-            if not cfg:
-                raise ConfigNotFoundError(f"Config with ID {config_id} not found")
-            cfg = await repos["configs"].update_display_name(config_id, new_name)
-            return Config.from_orm(cfg)
+    @staticmethod
+    def _as_utc(value: datetime) -> datetime:
+        return (
+            value.replace(tzinfo=timezone.utc)
+            if value.tzinfo is None
+            else value.astimezone(timezone.utc)
+        )
 
-    async def get(self, config_id: int) -> Config | None:
-        """Return a single config by ID or ``None`` if missing."""
-        async with self._uow() as repos:
-            cfg = await repos["configs"].get(id=config_id)
-            return Config.from_orm(cfg) if cfg else None
-
-    async def suspend_all(self, owner_id: int) -> int:
-        """Suspend all active configs for a user and return count."""
-        async with self._uow() as repos:
-            configs = await repos["configs"].get_active(owner_id=owner_id)
-        count = 0
-        for cfg in configs:
-            await self.suspend_config(cfg.id)
-            count += 1
-        return count
-
-    async def unsuspend_all(self, owner_id: int) -> int:
-        """Unsuspend all configs for a user and return count."""
-        async with self._uow() as repos:
-            configs = await repos["configs"].get_suspended(owner_id=owner_id)
-        count = 0
-        for cfg in configs:
-            await self.unsuspend_config(cfg.id)
-            count += 1
-        return count
-
-    async def list_active(self, *, owner_id: int | None = None) -> Sequence[Config]:
-        async with self._uow() as repos:
-            configs = await repos["configs"].get_active(owner_id=owner_id)
-            return [Config.from_orm(c) for c in configs]
-
-    async def list_suspended(
-        self, *, owner_id: int | None = None
-    ) -> Sequence[Config]:
-        async with self._uow() as repos:
-            configs = await repos["configs"].get_suspended(owner_id=owner_id)
-            return [Config.from_orm(c) for c in configs]
-
-    async def list(
-        self,
-        *,
-        limit: int | None = None,
-        offset: int = 0,
-        server_id: int | None = None,
-        owner_id: int | None = None,
-        suspended: bool | None = None,
-    ) -> Sequence[Config]:
-        """Return configs filtered by the provided parameters."""
-        filters: dict[str, object] = {}
-        if server_id is not None:
-            filters["server_id"] = server_id
-        if owner_id is not None:
-            filters["owner_id"] = owner_id
-        if suspended is not None:
-            filters["suspended"] = suspended
-
-        async with self._uow() as repos:
-            configs = await repos["configs"].list(
-                limit=limit, offset=offset, **filters
-            )
-            return [Config.from_orm(c) for c in configs]
-
-    async def list_blocked(self, server_id: int) -> Sequence[str]:
-        async with self._uow() as repos:
-            server = await repos["servers"].get(id=server_id)
-            if not server:
-                raise ServerNotFoundError(f"Server {server_id} not found")
-            async with APIGateway(server.ip, server.port, server.api_key) as api:
-                return await api.list_blocked()
+    @staticmethod
+    def _aware(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        return ConfigService._as_utc(value)

@@ -2,13 +2,20 @@ from typing import Sequence
 
 from sqlalchemy import select, update
 
-from core.db.models import Server
+from core.db.models import Server, VPN_Config
 
 from .base import BaseRepo
 
 
 class ServerRepo(BaseRepo[Server]):
     model = Server
+
+    async def get_for_update(self, server_id: int) -> Server | None:
+        """Lock a Manager target while configs or endpoint changes are staged."""
+
+        return await self.session.scalar(
+            select(self.model).where(self.model.id == server_id).with_for_update()
+        )
 
     async def search_by_name(self, query: str, limit: int = 20) -> Sequence[Server]:
         """
@@ -22,14 +29,14 @@ class ServerRepo(BaseRepo[Server]):
             Sequence of matching server objects
         """
         stmt = (
-            select(self.model)
-            .where(self.model.name.ilike(f"%{query}%"))
-            .limit(limit)
+            select(self.model).where(self.model.name.ilike(f"%{query}%")).limit(limit)
         )
         servers = await self.session.scalars(stmt)
         return servers.all()
 
-    async def search_by_location(self, location: str, limit: int = 20) -> Sequence[Server]:
+    async def search_by_location(
+        self, location: str, limit: int = 20
+    ) -> Sequence[Server]:
         """
         Search servers by location using a case-insensitive partial match.
 
@@ -48,8 +55,16 @@ class ServerRepo(BaseRepo[Server]):
         servers = await self.session.scalars(stmt)
         return servers.all()
 
-    async def create(self, name: str, ip: str, port: int,
-                     host: str, location: str, api_key: str, cost: int) -> Server:
+    async def create(
+        self,
+        name: str,
+        ip: str,
+        port: int,
+        host: str,
+        location: str,
+        api_key: str,
+        cost: int,
+    ) -> Server:
         """
         Create a new server entry.
 
@@ -99,9 +114,14 @@ class ServerRepo(BaseRepo[Server]):
         return result.scalar_one_or_none()
 
     async def delete(self, **filters) -> int:
-        """Delete a server and cascade delete its VPN configs."""
-        server = await self.get(**filters, joined_load=["vpn_configs"])
+        """Delete only a drained server with no managed VPN configs."""
+        server = await self.get(**filters)
         if not server:
+            return 0
+        config_id = await self.session.scalar(
+            select(VPN_Config.id).where(VPN_Config.server_id == server.id).limit(1)
+        )
+        if config_id is not None:
             return 0
         await self.session.delete(server)
         await self.session.flush()

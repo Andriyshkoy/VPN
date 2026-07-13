@@ -16,6 +16,7 @@ Money = Annotated[float, Field(ge=0)]
 # Server
 # --------------------------------------------------------------------------- #
 
+
 class ServerBase(BaseModel):
     name: Optional[str] = None
     ip: Optional[str] = None
@@ -44,6 +45,7 @@ class ServerUpdate(ServerBase):
 # Config
 # --------------------------------------------------------------------------- #
 
+
 class ConfigCreate(BaseModel):
     server_id: PositiveInt
     owner_id: PositiveInt
@@ -55,6 +57,7 @@ class ConfigCreate(BaseModel):
 # --------------------------------------------------------------------------- #
 # User
 # --------------------------------------------------------------------------- #
+
 
 class TopUp(BaseModel):
     amount: PositiveFloat  # пополнять можно только > 0
@@ -78,6 +81,7 @@ class UserUpdate(UserBase):
 # --------------------------------------------------------------------------- #
 # List parameters
 # --------------------------------------------------------------------------- #
+
 
 class Pagination(BaseModel):
     """limit/offset вынесены сюда, чтобы не повторяться в *ListParams."""
@@ -109,6 +113,7 @@ class ConfigListParams(Pagination):
 # --------------------------------------------------------------------------- #
 # Login
 # --------------------------------------------------------------------------- #
+
 
 class Login(BaseModel):
     username: str

@@ -14,15 +14,21 @@ class DummyMessage:
         self.from_user = types.SimpleNamespace(id=1, username="user")
         self.chat = types.SimpleNamespace(id=123)
         self.answers = []
-    async def answer(self, text):
+        self.answer_kwargs = []
+
+    async def answer(self, text, **kwargs):
         self.answers.append(text)
+        self.answer_kwargs.append(kwargs)
+
 
 class DummyState:
     def __init__(self):
         self.data = {"server_id": 1}
         self.cleared = False
+
     async def get_data(self):
         return self.data
+
     async def clear(self):
         self.cleared = True
 
@@ -46,17 +52,33 @@ class DummyStateRename:
     async def clear(self):
         self.cleared = True
 
+
 class DummyBot:
     def __init__(self):
         self.sent = None
+
     async def send_document(self, chat_id, file):
         self.chat_id = chat_id
         self.sent = file
+
+
+class FlakyDocumentBot(DummyBot):
+    def __init__(self):
+        super().__init__()
+        self.attempts = 0
+
+    async def send_document(self, chat_id, file):
+        self.attempts += 1
+        if self.attempts == 1:
+            raise RuntimeError("telegram delivery interrupted")
+        await super().send_document(chat_id, file)
+
 
 class DummyFSInputFile:
     def __init__(self, path, filename=None):
         self.path = path
         self.filename = filename
+
 
 @pytest.mark.asyncio
 async def test_tempfile_used(monkeypatch):
@@ -66,26 +88,50 @@ async def test_tempfile_used(monkeypatch):
 
     async def fake_get_user(tg_id, username=None):
         return types.SimpleNamespace(id=1)
-    async def fake_create_config(server_id, owner_id, name, display_name, creation_cost):
+
+    calls = []
+
+    async def fake_create_config(
+        server_id,
+        owner_id,
+        name,
+        display_name,
+        creation_cost,
+        idempotency_key,
+    ):
+        calls.append((name, idempotency_key))
         return types.SimpleNamespace(id=5)
+
     async def fake_download_config(cfg_id):
         return b"data"
 
     monkeypatch.setattr(handlers, "get_or_create_user", fake_get_user)
     monkeypatch.setattr(handlers_base, "get_or_create_user", fake_get_user)
-    monkeypatch.setattr(handlers.billing_service, "create_paid_config", fake_create_config)
+    monkeypatch.setattr(
+        handlers.billing_service, "create_paid_config", fake_create_config
+    )
     monkeypatch.setattr(handlers.configs, "get_or_create_user", fake_get_user)
-    monkeypatch.setattr(handlers.config_service, "download_config", fake_download_config)
+    monkeypatch.setattr(
+        handlers.config_service, "download_config", fake_download_config
+    )
     monkeypatch.setattr(handlers, "FSInputFile", DummyFSInputFile)
 
-    await handlers.got_name(msg, state, bot)
+    update = types.SimpleNamespace(update_id=4242)
+    await handlers.got_name(msg, state, bot, update)
 
     sent_path = bot.sent.path
     tmp_dir = tempfile.gettempdir()
     assert os.path.commonpath([sent_path, tmp_dir]) == tmp_dir
     assert not os.path.exists(sent_path)
+    assert bot.chat_id == msg.from_user.id
     assert state.cleared
-    assert msg.answers[-2] == "Конфигурация создана"
+    assert "Конфигурация создана" in msg.answers[-1]
+    assert calls == [
+        (
+            "dab03c52c3cb5cf2b03aaf00efc74d67",
+            "telegram:create-config:update:4242",
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -102,13 +148,65 @@ async def test_service_error(monkeypatch):
 
     monkeypatch.setattr(handlers, "get_or_create_user", fake_get_user)
     monkeypatch.setattr(handlers_base, "get_or_create_user", fake_get_user)
-    monkeypatch.setattr(handlers.billing_service, "create_paid_config", fake_create_config)
+    monkeypatch.setattr(
+        handlers.billing_service, "create_paid_config", fake_create_config
+    )
 
     monkeypatch.setattr(handlers.configs, "get_or_create_user", fake_get_user)
-    await handlers.got_name(msg, state, bot)
+    await handlers.got_name(
+        msg,
+        state,
+        bot,
+        types.SimpleNamespace(update_id=4243),
+    )
 
     assert state.cleared
-    assert msg.answers[-1] == "Произошла ошибка. Попробуйте позже"
+    assert "Не удалось создать конфигурацию" in msg.answers[-1]
+
+
+@pytest.mark.asyncio
+async def test_paid_config_delivery_replay_reuses_purchase_identity(monkeypatch):
+    msg = DummyMessage("my vpn")
+    state = DummyState()
+    bot = FlakyDocumentBot()
+    calls = []
+
+    async def fake_get_user(tg_id, username=None):
+        return types.SimpleNamespace(id=1)
+
+    async def fake_create_config(**kwargs):
+        calls.append((kwargs["name"], kwargs["idempotency_key"]))
+        return types.SimpleNamespace(id=5)
+
+    async def fake_download_config(cfg_id):
+        return b"data"
+
+    monkeypatch.setattr(handlers, "get_or_create_user", fake_get_user)
+    monkeypatch.setattr(handlers_base, "get_or_create_user", fake_get_user)
+    monkeypatch.setattr(handlers.configs, "get_or_create_user", fake_get_user)
+    monkeypatch.setattr(
+        handlers.billing_service,
+        "create_paid_config",
+        fake_create_config,
+    )
+    monkeypatch.setattr(
+        handlers.config_service,
+        "download_config",
+        fake_download_config,
+    )
+    monkeypatch.setattr(handlers, "FSInputFile", DummyFSInputFile)
+    update = types.SimpleNamespace(update_id=9001)
+
+    with pytest.raises(RuntimeError, match="delivery interrupted"):
+        await handlers.got_name(msg, state, bot, update)
+    assert state.cleared is False
+
+    await handlers.got_name(msg, state, bot, update)
+
+    assert state.cleared is True
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert calls[0][1] == "telegram:create-config:update:9001"
 
 
 class DummyMessageReply:
@@ -117,6 +215,9 @@ class DummyMessageReply:
         self.answers = []
 
     async def answer(self, text, reply_markup=None, **_):
+        self.answers.append((text, reply_markup))
+
+    async def edit_text(self, text, reply_markup=None, **_):
         self.answers.append((text, reply_markup))
 
 
@@ -150,6 +251,7 @@ async def test_show_config_contains_download(monkeypatch):
     monkeypatch.setattr(handlers, "get_or_create_user", fake_get_user)
     monkeypatch.setattr(handlers_base, "get_or_create_user", fake_get_user)
     monkeypatch.setattr(handlers.configs, "get_or_create_user", fake_get_user)
+
     async def fake_get(*a, **kw):
         return cfg
 
@@ -163,8 +265,10 @@ async def test_show_config_contains_download(monkeypatch):
 
     markup = cb.message.answers[0][1]
     button_texts = [b.text for row in markup.inline_keyboard for b in row]
-    assert "Скачать" in button_texts
-    assert "Переименовать" in button_texts
+    assert any("Скачать" in text for text in button_texts)
+    assert any("Переименовать" in text for text in button_texts)
+    assert not any("Приостановить" in text for text in button_texts)
+    assert not any("Возобновить" in text for text in button_texts)
 
 
 class DummyCallbackDownload:
@@ -190,8 +294,10 @@ async def test_download_tempfile_used(monkeypatch):
 
     monkeypatch.setattr(handlers, "get_or_create_user", fake_get_user)
     monkeypatch.setattr(handlers_base, "get_or_create_user", fake_get_user)
+
     async def fake_get_config(*a, **kw):
         return cfg
+
     monkeypatch.setattr(handlers.configs, "get_or_create_user", fake_get_user)
 
     async def fake_download(*a, **kw):
@@ -207,6 +313,7 @@ async def test_download_tempfile_used(monkeypatch):
     tmp_dir = tempfile.gettempdir()
     assert os.path.commonpath([sent_path, tmp_dir]) == tmp_dir
     assert not os.path.exists(sent_path)
+    assert bot.chat_id == cb.from_user.id
 
 
 @pytest.mark.asyncio
@@ -214,11 +321,20 @@ async def test_rename_callback_sets_state(monkeypatch):
     cb = DummyCallback("rn:3")
     state = DummyStateRename()
 
+    async def fake_get_user(*a, **kw):
+        return types.SimpleNamespace(id=1)
+
+    async def fake_get_config(*a, **kw):
+        return types.SimpleNamespace(id=3, owner_id=1)
+
+    monkeypatch.setattr(handlers.configs, "get_or_create_user", fake_get_user)
+    monkeypatch.setattr(handlers.config_service, "get", fake_get_config)
+
     await handlers.rename_config_cb(cb, state)
 
     assert state.data["config_id"] == 3
     assert state.state == handlers.RenameConfig.entering_name
-    assert cb.message.answers[-1][0] == "Введите новое название"
+    assert "Введите новое название" in cb.message.answers[-1][0]
 
 
 @pytest.mark.asyncio
@@ -250,4 +366,4 @@ async def test_got_new_name(monkeypatch):
 
     assert called["args"] == (5, "new")
     assert state.cleared
-    assert msg.answers[-1] == "Конфигурация переименована"
+    assert "Конфигурация переименована" in msg.answers[-1]

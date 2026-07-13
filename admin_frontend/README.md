@@ -10,16 +10,20 @@ Install dependencies:
 npm install
 ```
 
-Create a `.env` file based on `.env.example`:
+For standalone Vite development, create a `.env` file based on `.env.example`:
 
 ```bash
 cp .env.example .env
-# edit .env and specify the API URL
+# edit .env if the Nginx/API origin differs
 ```
 
 Environment variables used by the app:
 
-- `VITE_ADMIN_API_URL` – base URL of the Admin API
+- `VITE_ADMIN_API_URL` – browser-visible Nginx/API origin. The example uses
+  `http://localhost:14081`, matching the root Docker Compose stack.
+
+The root Compose file injects this variable directly, so
+`admin_frontend/.env` is not required when the frontend runs in Compose.
 
 ## Development
 

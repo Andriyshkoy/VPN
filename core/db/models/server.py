@@ -25,5 +25,5 @@ class Server(Base):
     vpn_configs: Mapped[list["VPN_Config"]] = relationship(  # noqa F821 # type: ignore
         "VPN_Config",
         back_populates="server",
-        cascade="all, delete-orphan",
+        passive_deletes=True,
     )

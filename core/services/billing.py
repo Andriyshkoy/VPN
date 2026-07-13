@@ -1,105 +1,107 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Callable
 
-from core.exceptions import InsufficientBalanceError, UserNotFoundError
+from core.config import settings
+from core.db.repo.billing import BillingRepo, to_money
+from core.exceptions import InvalidOperationError
 
+from .billing_components import (
+    BalanceOperations,
+    PaidProvisioningOperations,
+    PeriodicBillingOperations,
+    ProviderPaymentOperations,
+)
+from .billing_contracts import PaymentIntent, PaymentReceipt
 from .config import ConfigService
 from .models import User
 
+__all__ = ["BillingService", "PaymentIntent", "PaymentReceipt"]
 
-class BillingService:
-    """Service that handles manual top-ups and periodic charges."""
 
-    def __init__(self, uow: Callable, *, per_config_cost: float) -> None:
-        """
-        Initialize the billing service.
-        :param uow: Unit of Work factory to manage database transactions.
-        :param per_config_cost: Cost charged for each active configuration.
-        """
+class BillingService(
+    BalanceOperations,
+    ProviderPaymentOperations,
+    PeriodicBillingOperations,
+    PaidProvisioningOperations,
+):
+    """Stable facade over focused financial application components.
+
+    Existing bot/admin imports deliberately keep using ``BillingService`` while
+    the individual use-case groups live in separate modules and can evolve or be
+    tested independently.
+    """
+
+    def __init__(
+        self,
+        uow: Callable,
+        *,
+        per_config_cost: Decimal | int | float | str,
+        billing_period_seconds: int | None = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self._uow = uow
-        self._cost = Decimal(per_config_cost)
+        self._cost = to_money(per_config_cost)
+        if self._cost < 0:
+            raise InvalidOperationError("Configuration cost cannot be negative")
+        self._period_seconds = billing_period_seconds or settings.billing_interval
+        if self._period_seconds <= 0:
+            raise InvalidOperationError("Billing period must be positive")
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._config_service = ConfigService(uow)
 
-    async def top_up(self, user_id: int, amount: float) -> User:
-        """Increase user's balance by ``amount`` and return the updated user."""
-        async with self._uow() as repos:
-            user = await repos["users"].get(id=user_id)
-            if not user:
-                raise UserNotFoundError(f"User with ID {user_id} not found")
-            new_balance = user.balance + Decimal(amount)
-            user = await repos["users"].update(user_id, balance=new_balance)
+    @staticmethod
+    def _billing_repo(repos) -> BillingRepo:
+        if "billing" in repos:
+            return repos["billing"]
+        return BillingRepo(repos["users"].session)
 
-        if new_balance > 0:
-            await self._config_service.unsuspend_all(user_id)
-
-        return User.from_orm(user)
-
-    async def charge_all(self) -> dict[User, Decimal]:
-        """Charge all users for their active configurations.
-
-        Returns a mapping of updated users to the amount charged."""
-        async with self._uow() as repos:
-            db_users = await repos["users"].list()
-
-        charged: dict[User, Decimal] = {}
-        for db_user in db_users:
-            async with self._uow() as repos:
-                configs = await repos["configs"].get_active(owner_id=db_user.id)
-                charge = Decimal(len(configs)) * self._cost
-                if not charge:
-                    continue
-                new_balance = db_user.balance - charge
-                updated = await repos["users"].update(db_user.id, balance=new_balance)
-
-            if new_balance <= 0:
-                await self._config_service.suspend_all(db_user.id)
-
-            charged[User.from_orm(updated)] = charge
-        return charged
-
-    async def withdraw(self, user_id: int, amount: float) -> User:
-        """Deduct ``amount`` from user's balance and return updated user."""
-        async with self._uow() as repos:
-            user = await repos["users"].get(id=user_id)
-            if not user:
-                raise UserNotFoundError(f"User with ID {user_id} not found")
-            if user.balance < Decimal(amount):
-                raise InsufficientBalanceError("Insufficient balance")
-            new_balance = user.balance - Decimal(amount)
-            user = await repos["users"].update(user_id, balance=new_balance)
-
-        if new_balance <= 0:
-            await self._config_service.suspend_all(user_id)
-
-        return User.from_orm(user)
-
-    async def create_paid_config(
-        self,
-        *,
-        server_id: int,
-        owner_id: int,
-        name: str,
-        display_name: str,
-        creation_cost: float,
-        use_password: bool = False,
-    ) -> "Config":  # type: ignore[valid-type] # noqa
-        """Create config and charge ``creation_cost`` on success."""
-        async with self._uow() as repos:
-            user = await repos["users"].get(id=owner_id)
-            if not user:
-                raise UserNotFoundError(f"User with ID {owner_id} not found")
-            if user.balance <= Decimal(creation_cost):
-                raise InsufficientBalanceError("Insufficient balance")
-
-        cfg = await self._config_service.create_config(
-            server_id=server_id,
-            owner_id=owner_id,
-            name=name,
-            display_name=display_name,
-            use_password=use_password,
+    def _billing_period(self, value: datetime) -> tuple[datetime, datetime, str]:
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        else:
+            value = value.astimezone(timezone.utc)
+        epoch = int(value.timestamp())
+        start_epoch = epoch - epoch % self._period_seconds
+        start = datetime.fromtimestamp(start_epoch, tz=timezone.utc)
+        end = datetime.fromtimestamp(
+            start_epoch + self._period_seconds, tz=timezone.utc
         )
+        return start, end, f"v1:{self._period_seconds}:{start_epoch}"
 
-        await self.withdraw(owner_id, creation_cost)
-        return cfg
+    @staticmethod
+    def _positive_money(value: Decimal | int | float | str) -> Decimal:
+        amount = to_money(value)
+        if amount <= 0:
+            raise InvalidOperationError("Amount must be positive")
+        return amount
+
+    @staticmethod
+    def _billing_notification(user: User, charge: Decimal) -> str | None:
+        balance = user.balance
+        if balance <= 0:
+            return (
+                "🔌 Похоже, баланс закончился, и VPN поставлен на паузу.\n"
+                "Как только пополните счёт — всё снова заработает. 😉"
+            )
+
+        week_high = charge * 24 * 7
+        week_low = charge * (24 * 7 - 1)
+        day_high = charge * 24
+        day_low = charge * 23
+        if week_low < balance <= week_high:
+            return (
+                "🔔 Напоминаем: вашего баланса примерно хватит на неделю.\n"
+                "Чтобы избежать перебоев в работе VPN, рекомендуем пополнить "
+                "счёт заранее.\n"
+                f"💰 Текущий баланс: {user.balance:.2f} руб."
+            )
+        if day_low < balance <= day_high:
+            return (
+                "⚠️ Баланса хватит примерно на сутки.\n"
+                "Пожалуйста, пополните счёт, чтобы не потерять доступ к VPN.\n"
+                f"💰 Текущий баланс: {user.balance:.2f} руб."
+            )
+        return None

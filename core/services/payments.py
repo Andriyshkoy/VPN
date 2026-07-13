@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 
 from aiogram import Bot
 from aiogram.types import LabeledPrice
+
+from core.config import settings
+from core.db.repo.billing import to_money
+from core.exceptions import InvalidOperationError
 
 
 class TelegramPayService:
@@ -16,13 +21,16 @@ class TelegramPayService:
     async def send_invoice(
         self,
         chat_id: int,
-        amount: float,
+        amount: Decimal | int | float | str,
         *,
         title: str = "Пополнение баланса",
         description: str = "Оплата через Telegram Pay",
         payload: str = "topup",
         currency: str = "RUB",
     ) -> None:
+        if not settings.payments_enabled:
+            raise InvalidOperationError("Provider payments are temporarily disabled")
+        normalized_amount = to_money(amount)
         receipt_data = {
             "receipt": {
                 "items": [
@@ -30,8 +38,8 @@ class TelegramPayService:
                         "description": title[:128],
                         "quantity": "1",
                         "amount": {
-                            "value": f"{amount:.2f}",
-                            "currency": currency
+                            "value": f"{normalized_amount:.2f}",
+                            "currency": currency,
                         },
                         "vat_code": 1,
                     }
@@ -41,7 +49,9 @@ class TelegramPayService:
 
         provider_data = json.dumps(receipt_data, ensure_ascii=False)
 
-        prices = [LabeledPrice(label=title, amount=int(amount * 100))]
+        prices = [
+            LabeledPrice(label=title, amount=int(normalized_amount * Decimal(100)))
+        ]
         await self._bot.send_invoice(
             chat_id=chat_id,
             title=title,
@@ -51,8 +61,9 @@ class TelegramPayService:
             currency=currency,
             prices=prices,
             provider_data=provider_data,
+            start_parameter="topup",
             send_email_to_provider=True,
-            need_email=True
+            need_email=True,
         )
 
 

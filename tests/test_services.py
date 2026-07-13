@@ -1,33 +1,43 @@
-import pytest
 from decimal import Decimal
 
+import pytest
+
 from core.db.unit_of_work import uow
-from core.exceptions import InsufficientBalanceError
+from core.exceptions import InsufficientBalanceError, InvalidOperationError
 from core.services import BillingService, ConfigService, ServerService, UserService
 
 
 class DummyGateway:
     async def __aenter__(self):
         return self
+
     async def __aexit__(self, exc_type, exc, tb):
         pass
+
     async def create_client(self, name, use_password=False):
         pass
+
     async def download_config(self, name):
         return b"data"
+
     async def revoke_client(self, name):
         pass
+
     async def suspend_client(self, name):
         pass
+
     async def unsuspend_client(self, name):
         pass
+
     async def list_blocked(self):
         return []
 
 
 @pytest.mark.asyncio
 async def test_create_requires_balance(monkeypatch, sessionmaker):
-    monkeypatch.setattr("core.services.config.APIGateway", lambda *a, **kw: DummyGateway())
+    monkeypatch.setattr(
+        "core.services.config.APIGateway", lambda *a, **kw: DummyGateway()
+    )
 
     server_svc = ServerService(uow)
     user_svc = UserService(uow)
@@ -57,7 +67,9 @@ async def test_create_requires_balance(monkeypatch, sessionmaker):
 
 @pytest.mark.asyncio
 async def test_services_workflow(monkeypatch, sessionmaker):
-    monkeypatch.setattr("core.services.config.APIGateway", lambda *a, **kw: DummyGateway())
+    monkeypatch.setattr(
+        "core.services.config.APIGateway", lambda *a, **kw: DummyGateway()
+    )
 
     server_svc = ServerService(uow)
     user_svc = UserService(uow)
@@ -96,20 +108,24 @@ async def test_services_workflow(monkeypatch, sessionmaker):
     active = await config_svc.list_active(owner_id=user.id)
     assert len(active) == 1 and active[0].id == cfg.id
 
-    # delete user -> config suspended but kept
-    await user_svc.delete(user.id)
-    sus2 = await config_svc.list_suspended(owner_id=user.id)
-    assert len(sus2) == 1 and sus2[0].id == cfg.id
-
-    # delete server -> config removed
-    await server_svc.delete(server.id)
+    # Destructive deletes fail closed until remote credentials are revoked.
+    assert await user_svc.delete(user.id) is False
+    assert await server_svc.delete(server.id) is False
     async with uow() as repos:
-        assert await repos["configs"].get(id=cfg.id) is None
+        assert await repos["configs"].get(id=cfg.id) is not None
+
+    await config_svc.revoke_config(cfg.id)
+    # Financial history is retained; deletion becomes an explicit future
+    # anonymization/soft-delete use case instead of a destructive hard delete.
+    assert await user_svc.delete(user.id) is False
+    assert await server_svc.delete(server.id) is True
 
 
 @pytest.mark.asyncio
 async def test_billing(monkeypatch, sessionmaker):
-    monkeypatch.setattr("core.services.config.APIGateway", lambda *a, **kw: DummyGateway())
+    monkeypatch.setattr(
+        "core.services.config.APIGateway", lambda *a, **kw: DummyGateway()
+    )
 
     server_svc = ServerService(uow)
     user_svc = UserService(uow)
@@ -152,7 +168,9 @@ async def test_billing(monkeypatch, sessionmaker):
 
 @pytest.mark.asyncio
 async def test_charge_all_returns_dict(monkeypatch, sessionmaker):
-    monkeypatch.setattr("core.services.config.APIGateway", lambda *a, **kw: DummyGateway())
+    monkeypatch.setattr(
+        "core.services.config.APIGateway", lambda *a, **kw: DummyGateway()
+    )
 
     server_svc = ServerService(uow)
     user_svc = UserService(uow)
@@ -186,7 +204,9 @@ async def test_charge_all_returns_dict(monkeypatch, sessionmaker):
 
 @pytest.mark.asyncio
 async def test_billing_suspend_unsuspend(monkeypatch, sessionmaker):
-    monkeypatch.setattr("core.services.config.APIGateway", lambda *a, **kw: DummyGateway())
+    monkeypatch.setattr(
+        "core.services.config.APIGateway", lambda *a, **kw: DummyGateway()
+    )
 
     server_svc = ServerService(uow)
     user_svc = UserService(uow)
@@ -227,7 +247,9 @@ async def test_billing_suspend_unsuspend(monkeypatch, sessionmaker):
 
 @pytest.mark.asyncio
 async def test_server_update_and_user_with_configs(monkeypatch, sessionmaker):
-    monkeypatch.setattr("core.services.config.APIGateway", lambda *a, **kw: DummyGateway())
+    monkeypatch.setattr(
+        "core.services.config.APIGateway", lambda *a, **kw: DummyGateway()
+    )
 
     server_svc = ServerService(uow)
     user_svc = UserService(uow)
@@ -236,7 +258,13 @@ async def test_server_update_and_user_with_configs(monkeypatch, sessionmaker):
 
     user = await user_svc.register(200)
     server = await server_svc.create(
-        name="srv4", ip="1.1.1.1", port=22, host="host", location="US", api_key="k", cost=1
+        name="srv4",
+        ip="1.1.1.1",
+        port=22,
+        host="host",
+        location="US",
+        api_key="k",
+        cost=1,
     )
 
     await billing.top_up(user.id, 20)
@@ -250,6 +278,11 @@ async def test_server_update_and_user_with_configs(monkeypatch, sessionmaker):
         display_name="d4",
         creation_cost=10,
     )
+
+    with pytest.raises(InvalidOperationError, match="Drain all VPN configs"):
+        await server_svc.update(server.id, ip="2.2.2.2")
+    metadata_update = await server_svc.update(server.id, location="EU")
+    assert metadata_update.location == "EU"
 
     user_data, configs = await user_svc.get_with_configs(user.id)
 

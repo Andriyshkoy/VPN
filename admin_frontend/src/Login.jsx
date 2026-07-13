@@ -19,7 +19,7 @@ export default function Login({ onLogin }) {
       localStorage.setItem('authToken', data.token)
       localStorage.setItem('loggedIn', 'true')
       onLogin()
-    } catch (err) {
+    } catch {
       setError('Invalid credentials')
     }
   }
