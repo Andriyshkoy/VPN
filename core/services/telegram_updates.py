@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import hmac
 from dataclasses import dataclass
@@ -169,9 +170,20 @@ class TelegramUpdateService:
             or update_id < 0
         ):
             raise ValueError("Telegram update_id must be a non-negative integer")
-        # Copy the top-level object so callers cannot mutate it while the
-        # transaction is being flushed.
-        copied = dict(payload)
+        # The inbox needs the update for replay, but handlers never use receipt
+        # email/name/phone/address fields. Keep that PII out of durable storage.
+        copied = copy.deepcopy(payload)
+        message = copied.get("message")
+        if isinstance(message, dict):
+            payment = message.get("successful_payment")
+            if isinstance(payment, dict):
+                payment.pop("order_info", None)
+        pre_checkout = copied.get("pre_checkout_query")
+        if isinstance(pre_checkout, dict):
+            pre_checkout.pop("order_info", None)
+        shipping_query = copied.get("shipping_query")
+        if isinstance(shipping_query, dict):
+            shipping_query.pop("shipping_address", None)
         return update_id, copied, TelegramUpdateService._ordering_key(copied, update_id)
 
     @staticmethod

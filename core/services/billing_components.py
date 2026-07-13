@@ -130,6 +130,7 @@ class ProviderPaymentOperations:
         self,
         *,
         user_id: int,
+        claim_id: str,
         payload: str,
         amount: Decimal | int | float | str,
         currency: str,
@@ -138,6 +139,7 @@ class ProviderPaymentOperations:
         async with self._uow() as repos:
             payment = await self._billing_repo(repos).validate_payment_intent(
                 user_id=user_id,
+                claim_id=claim_id,
                 payload=payload,
                 amount=amount,
                 currency=currency,
@@ -149,6 +151,22 @@ class ProviderPaymentOperations:
                 provider=payment.provider,
                 amount=payment.amount,
                 currency=payment.currency,
+            )
+
+    async def claim_payment_invoice_delivery(
+        self,
+        *,
+        user_id: int,
+        intent_id: str,
+        provider: str = "telegram",
+    ) -> bool:
+        """Claim the at-most-once provider invoice delivery for an intent."""
+
+        async with self._uow() as repos:
+            return await self._billing_repo(repos).claim_invoice_delivery_attempt(
+                user_id=user_id,
+                intent_id=intent_id,
+                provider=provider,
             )
 
     async def record_provider_payment(

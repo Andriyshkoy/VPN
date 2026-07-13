@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
@@ -399,6 +400,63 @@ async def test_processor_acks_only_after_existing_dispatcher_succeeds(sessionmak
         row = await repos.telegram_updates.get(update_id=55)
         assert row.status == TelegramUpdateStatus.PROCESSED.value
         assert row.payload == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event",
+    [
+        {
+            "message": {
+                "message_id": 1,
+                "successful_payment": {
+                    "currency": "RUB",
+                    "total_amount": 10000,
+                    "invoice_payload": "topup:intent",
+                    "telegram_payment_charge_id": "telegram-charge",
+                    "provider_payment_charge_id": "provider-charge",
+                    "order_info": {
+                        "email": "private@example.com",
+                        "name": "Private Name",
+                    },
+                },
+            }
+        },
+        {
+            "pre_checkout_query": {
+                "id": "checkout",
+                "currency": "RUB",
+                "total_amount": 10000,
+                "invoice_payload": "topup:intent",
+                "order_info": {"email": "private@example.com"},
+            }
+        },
+        {
+            "shipping_query": {
+                "id": "shipping",
+                "invoice_payload": "payload",
+                "shipping_address": {"city": "Private City"},
+            }
+        },
+    ],
+)
+async def test_inbox_redacts_payment_contact_data_before_persistence(
+    sessionmaker,
+    event,
+):
+    service = TelegramUpdateService(uow)
+    payload = {"update_id": 56, **event}
+    original = deepcopy(payload)
+
+    await service.ingest(payload)
+
+    async with uow() as repos:
+        row = await repos.telegram_updates.get(update_id=56)
+        serialized = str(row.payload)
+    assert "private@example.com" not in serialized
+    assert "Private Name" not in serialized
+    assert "Private City" not in serialized
+    assert payload == original
 
 
 @pytest.mark.asyncio

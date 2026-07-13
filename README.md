@@ -36,7 +36,9 @@ runtime processes, not independent microservices.
   charging the same or an overlapping wall-clock period twice.
 - Telegram invoices have persisted payment intents. Provider charge IDs are
   unique, intents expire, and only RUB is accepted while balances have no
-  multi-currency denomination.
+  multi-currency denomination. Invoice delivery and pre-checkout are claimed
+  under a row lock, preventing replayed updates or concurrent checkout attempts
+  from creating duplicate charges.
 - Paid config creation reserves the creation cost and records compensating
   refunds for definitive provisioning failures.
 
@@ -74,17 +76,36 @@ persistence in the Compose stack.
 
 Long polling no longer executes handlers directly from Telegram's response.
 Each complete response batch is first committed to `telegram_update_inbox`; only
-then does the poller advance the Telegram offset. A separate sequential
-processor leases rows with a fencing token and feeds them into the existing
-aiogram dispatcher, preserving the current handlers, texts, and buttons.
-Processing remains sequential by default. A fail-safe timeout cancels a stuck
+then does the poller advance the Telegram offset. A bounded processor pool
+leases rows with fencing tokens and feeds them into the aiogram dispatcher.
+Different user/chat ordering lanes can progress concurrently, while updates in
+the same conversation remain serialized. A fail-safe timeout cancels a stuck
 handler before its lease can expire, and heartbeat loss cancels the old handler
-instead of allowing it to continue after fencing.
+instead of allowing it to continue after fencing. Payment email, name, phone,
+and shipping-address fields that handlers do not use are removed before an
+update enters durable storage.
 
 Processing is deliberately at-least-once: a crash before the database ACK lets
 the lease expire and retries the update. Critical payment and VPN mutations must
 therefore remain idempotent. See [the update-ingress runbook](docs/telegram-update-ingress.md)
 for dead-letter recovery and the future webhook boundary.
+
+### Telegram user interface
+
+`/start` installs a persistent reply keyboard for balance, configs, top-up,
+installation guides, and the future referral program. Historical commands stay
+available as compatibility aliases, while Telegram's visible command list is
+limited to `/start`, `/menu`, and `/help`. Navigation is routed before FSM text
+handlers and clears an unfinished create/rename flow, so a menu label can never
+become a configuration name accidentally.
+
+Config details use inline controls for download, rename, and a confirmed delete.
+Historical manual pause/resume callbacks fail closed until user intent can be
+stored independently from balance-based suspension. Installation help is split
+by platform and points to official OpenVPN clients. The referral screen
+intentionally remains a placeholder until qualification, anti-abuse, and
+idempotent ledger rewards exist; it does not publish invite links or referral
+PII.
 
 ## Configuration
 

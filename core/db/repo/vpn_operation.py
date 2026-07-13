@@ -264,6 +264,22 @@ class VPNOperationRepo(BaseRepo[VPNOperation]):
 
         return await self.list_due(limit=limit)
 
+    async def list_by_operation_ids(
+        self,
+        operation_ids: Sequence[str],
+    ) -> Sequence[VPNOperation]:
+        """Load current operation snapshots for control-plane presentation."""
+
+        ids = tuple(dict.fromkeys(operation_ids))
+        if not ids:
+            return []
+        stmt = (
+            select(self.model)
+            .where(self.model.operation_id.in_(ids))
+            .order_by(self.model.id)
+        )
+        return (await self.session.scalars(stmt)).all()
+
     def _owned_running(self, operation_id: str, lease_token: str) -> tuple:
         return (
             self.model.operation_id == operation_id,

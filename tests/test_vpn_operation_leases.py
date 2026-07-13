@@ -211,6 +211,12 @@ async def test_retry_budget_moves_operation_to_exhausted(monkeypatch, sessionmak
     now[0] += timedelta(hours=1)
     assert await service.reconcile() == {}
 
+    gateway.behavior = "success"
+    await service.revoke_config(cfg.id)
+
+    assert await service.get(cfg.id) is None
+    assert gateway.calls[-1][0] == "revoke"
+
 
 @pytest.mark.asyncio
 async def test_opposite_entitlement_supersedes_ambiguous_suspend(

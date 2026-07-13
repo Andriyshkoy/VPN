@@ -82,7 +82,14 @@ class ConfigQueriesEntitlementsMixin:
     async def get(self, config_id: int) -> Config | None:
         async with self._uow() as repos:
             cfg = await repos["configs"].get(id=config_id)
-            return Config.from_orm(cfg) if cfg else None
+            if cfg is None:
+                return None
+            operation = None
+            if cfg.operation_id:
+                operation = await repos["vpn_operations"].get(
+                    operation_id=cfg.operation_id
+                )
+            return Config.from_orm(cfg, operation=operation)
 
     async def suspend_all(self, owner_id: int) -> int:
         return await self._apply_entitlement(
@@ -102,7 +109,7 @@ class ConfigQueriesEntitlementsMixin:
     async def list_active(self, *, owner_id: int | None = None) -> Sequence[Config]:
         async with self._uow() as repos:
             configs = await repos["configs"].get_active(owner_id=owner_id)
-            return [Config.from_orm(c) for c in configs]
+            return await self._with_operation_snapshots(repos, configs)
 
     async def list_suspended(
         self,
@@ -111,7 +118,7 @@ class ConfigQueriesEntitlementsMixin:
     ) -> Sequence[Config]:
         async with self._uow() as repos:
             configs = await repos["configs"].get_suspended(owner_id=owner_id)
-            return [Config.from_orm(c) for c in configs]
+            return await self._with_operation_snapshots(repos, configs)
 
     async def list(
         self,
@@ -135,7 +142,20 @@ class ConfigQueriesEntitlementsMixin:
                 offset=offset,
                 **filters,
             )
-            return [Config.from_orm(c) for c in configs]
+            return await self._with_operation_snapshots(repos, configs)
+
+    @staticmethod
+    async def _with_operation_snapshots(repos, configs) -> list[Config]:
+        operation_ids = [cfg.operation_id for cfg in configs if cfg.operation_id]
+        operations = await repos["vpn_operations"].list_by_operation_ids(operation_ids)
+        by_id = {operation.operation_id: operation for operation in operations}
+        return [
+            Config.from_orm(
+                cfg,
+                operation=by_id.get(cfg.operation_id),
+            )
+            for cfg in configs
+        ]
 
     async def list_blocked(self, server_id: int) -> Sequence[str]:
         async with self._uow() as repos:
@@ -385,6 +405,17 @@ class ConfigQueriesEntitlementsMixin:
         if cfg.actual_state == desired_state and not force:
             return None
         if cfg.actual_state == VPNState.PROVISIONING.value:
+            if kind == VPNOperationKind.REVOKE.value:
+                # A terminal/missing provision may have succeeded remotely
+                # before its response was lost. Revoke is the safe cleanup:
+                # the Manager path is idempotent and treats not-found as done.
+                return await self._create_transition_locked(
+                    repos,
+                    cfg,
+                    desired_state=desired_state,
+                    kind=kind,
+                    now=now,
+                )
             raise InvalidOperationError("Provisioning operation is missing or terminal")
         return await self._create_transition_locked(
             repos,

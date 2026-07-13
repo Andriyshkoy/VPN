@@ -251,10 +251,52 @@ class BillingRepo:
                 )
             return existing
 
+    async def claim_invoice_delivery_attempt(
+        self,
+        *,
+        user_id: int,
+        intent_id: str,
+        provider: str = "telegram",
+    ) -> bool:
+        """Atomically claim the one external invoice-send attempt for an intent.
+
+        The marker is deliberately persisted before calling the provider.  A
+        provider timeout is ambiguous: the invoice may already have reached the
+        user, so replaying the same durable update must not send it again.
+        """
+
+        provider = self._provider(provider)
+        if not intent_id or len(intent_id) > 36:
+            raise InvalidOperationError("Invalid payment intent ID")
+
+        payment = await self.session.scalar(
+            select(ProviderPayment)
+            .where(ProviderPayment.intent_id == intent_id)
+            .with_for_update()
+        )
+        if payment is None or payment.user_id != user_id:
+            raise InvalidOperationError("Payment intent not found")
+        if payment.provider != provider:
+            raise InvalidOperationError("Payment provider mismatch")
+        if payment.status != "pending":
+            return False
+        self._ensure_intent_active(payment)
+
+        raw_data = dict(payment.raw_data or {})
+        if raw_data.get("invoice_delivery_attempted_at"):
+            return False
+        raw_data["invoice_delivery_attempted_at"] = datetime.now(
+            timezone.utc
+        ).isoformat()
+        payment.raw_data = raw_data
+        await self.session.flush()
+        return True
+
     async def validate_payment_intent(
         self,
         *,
         user_id: int,
+        claim_id: str,
         payload: str,
         amount: Decimal | int | float | str,
         currency: str,
@@ -265,6 +307,9 @@ class BillingRepo:
         normalized_amount = self._positive_amount(amount)
         currency = self._currency(currency)
         provider = self._provider(provider)
+        if not isinstance(claim_id, str) or not claim_id.strip() or len(claim_id) > 160:
+            raise InvalidOperationError("Invalid payment checkout claim ID")
+        claim_id = claim_id.strip()
         if not payload.startswith("topup:") or len(payload) > 200:
             raise InvalidOperationError("Payment intent not found")
 
@@ -275,6 +320,7 @@ class BillingRepo:
                 ProviderPayment.payload == payload,
             )
             .order_by(ProviderPayment.id.desc())
+            .with_for_update()
         )
         if payment is None or payment.status != "pending":
             raise InvalidOperationError("Payment intent not found")
@@ -289,6 +335,17 @@ class BillingRepo:
             payload=payload,
             require_payload=True,
         )
+
+        raw_data = dict(payment.raw_data or {})
+        existing_claim_id = raw_data.get("checkout_claim_id")
+        if existing_claim_id == claim_id:
+            return payment
+        if existing_claim_id or raw_data.get("checkout_claimed_at"):
+            raise InvalidOperationError("Payment intent checkout was already claimed")
+        raw_data["checkout_claim_id"] = claim_id
+        raw_data["checkout_claimed_at"] = datetime.now(timezone.utc).isoformat()
+        payment.raw_data = raw_data
+        await self.session.flush()
         return payment
 
     async def record_provider_payment(
@@ -354,13 +411,36 @@ class BillingRepo:
                     currency=currency,
                     payload=payload,
                 )
-            self._ensure_intent_active(payment)
             if payment.provider != provider:
                 raise InvalidOperationError("Payment provider mismatch")
+            internal_data = dict(payment.raw_data or {})
+            if not internal_data.get("checkout_claim_id"):
+                if internal_data.get(
+                    "invoice_delivery_attempted_at"
+                ) or internal_data.get("checkout_claimed_at"):
+                    raise InvalidOperationError(
+                        "Payment intent checkout was not claimed"
+                    )
+                # Intents created by the pre-claim release have no delivery or
+                # checkout markers. Telegram may already have captured one
+                # during a rolling restart, so trusted confirmations remain
+                # creditable instead of stranding the user's money.
+                internal_data["legacy_checkout_accepted_at"] = datetime.now(
+                    timezone.utc
+                ).isoformat()
+            # Expiry is the admission deadline for pre-checkout, not a reason
+            # to discard money Telegram has already captured. Checkout claims
+            # cover new invoices; the marker-free branch above covers rollout.
             try:
                 async with self.session.begin_nested():
                     payment.provider_payment_id = provider_payment_id
-                    payment.raw_data = raw_data or {}
+                    # Preserve the delivery/checkout claims after capture for
+                    # auditability. Provider metadata cannot overwrite the
+                    # internally persisted idempotency markers.
+                    payment.raw_data = {
+                        **(raw_data or {}),
+                        **internal_data,
+                    }
                     await self.session.flush()
             except IntegrityError:
                 other = await self._get_provider_payment(provider, provider_payment_id)

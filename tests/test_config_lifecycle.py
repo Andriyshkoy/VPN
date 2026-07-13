@@ -164,6 +164,11 @@ async def test_provision_failure_is_recoverable(
     assert row.actual_state == actual_state
     assert row.last_error
     assert operation.status == operation_status
+    presented = await service.get(row.id)
+    assert presented.operation_status == operation_status
+    assert presented.operation_attempts == operation.attempts
+    listed = await service.list(owner_id=user.id)
+    assert listed[0].operation_status == operation_status
 
 
 @pytest.mark.asyncio

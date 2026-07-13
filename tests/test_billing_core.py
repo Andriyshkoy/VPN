@@ -169,14 +169,32 @@ async def test_telegram_payment_is_credited_once_and_validates_intent(sessionmak
     )
     validated = await billing.validate_payment_intent(
         user_id=user.id,
+        claim_id="checkout-1",
         payload=intent.payload,
         amount="12.34",
         currency="RUB",
     )
     assert validated == intent
+    replay = await billing.validate_payment_intent(
+        user_id=user.id,
+        claim_id="checkout-1",
+        payload=intent.payload,
+        amount="12.34",
+        currency="RUB",
+    )
+    assert replay == intent
+    with pytest.raises(InvalidOperationError, match="already claimed"):
+        await billing.validate_payment_intent(
+            user_id=user.id,
+            claim_id="checkout-2",
+            payload=intent.payload,
+            amount="12.34",
+            currency="RUB",
+        )
     with pytest.raises(InvalidOperationError):
         await billing.validate_payment_intent(
             user_id=user.id,
+            claim_id="checkout-1",
             payload=intent.payload,
             amount="99.99",
             currency="RUB",
@@ -202,6 +220,11 @@ async def test_telegram_payment_is_credited_once_and_validates_intent(sessionmak
     assert first.credited is True
     assert duplicate.credited is False
     assert duplicate.user.balance == Decimal("12.34")
+    async with uow() as repos:
+        payment = await repos["users"].session.scalar(
+            select(ProviderPayment).where(ProviderPayment.intent_id == intent.intent_id)
+        )
+    assert payment.raw_data["checkout_claim_id"] == "checkout-1"
     with pytest.raises(InvalidOperationError):
         await billing.record_telegram_payment(
             user_id=user.id,
@@ -220,6 +243,95 @@ async def test_telegram_payment_is_credited_once_and_validates_intent(sessionmak
             payload=intent.payload,
             intent_id=intent.intent_id,
         )
+
+
+@pytest.mark.asyncio
+async def test_unclaimed_payment_intent_cannot_be_captured(sessionmaker):
+    user = await UserService(uow).register(110)
+    billing = BillingService(uow, per_config_cost="1.00")
+    intent = await billing.create_payment_intent(
+        user_id=user.id,
+        amount="12.34",
+        currency="RUB",
+    )
+    await billing.claim_payment_invoice_delivery(
+        user_id=user.id,
+        intent_id=intent.intent_id,
+    )
+
+    with pytest.raises(InvalidOperationError, match="checkout was not claimed"):
+        await billing.record_telegram_payment(
+            user_id=user.id,
+            telegram_payment_charge_id="unclaimed-charge",
+            total_amount_minor=1234,
+            currency="RUB",
+            payload=intent.payload,
+            intent_id=intent.intent_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_pre_claim_release_payment_confirmation_remains_creditable(sessionmaker):
+    user = await UserService(uow).register(112)
+    billing = BillingService(uow, per_config_cost="1.00")
+    intent = await billing.create_payment_intent(
+        user_id=user.id,
+        amount="12.34",
+        currency="RUB",
+    )
+
+    receipt = await billing.record_telegram_payment(
+        user_id=user.id,
+        telegram_payment_charge_id="legacy-release-charge",
+        total_amount_minor=1234,
+        currency="RUB",
+        payload=intent.payload,
+        intent_id=intent.intent_id,
+    )
+
+    assert receipt.credited is True
+    async with uow() as repos:
+        payment = await repos["users"].session.scalar(
+            select(ProviderPayment).where(ProviderPayment.intent_id == intent.intent_id)
+        )
+    assert payment.raw_data["legacy_checkout_accepted_at"]
+
+
+@pytest.mark.asyncio
+async def test_approved_payment_is_credited_when_confirmation_arrives_after_expiry(
+    sessionmaker,
+):
+    user = await UserService(uow).register(111)
+    billing = BillingService(uow, per_config_cost="1.00")
+    intent = await billing.create_payment_intent(
+        user_id=user.id,
+        amount="12.34",
+        currency="RUB",
+    )
+    await billing.validate_payment_intent(
+        user_id=user.id,
+        claim_id="checkout-before-expiry",
+        payload=intent.payload,
+        amount=intent.amount,
+        currency=intent.currency,
+    )
+    async with uow() as repos:
+        payment = await repos["users"].session.scalar(
+            select(ProviderPayment).where(ProviderPayment.intent_id == intent.intent_id)
+        )
+        payment.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+
+    receipt = await billing.record_telegram_payment(
+        user_id=user.id,
+        telegram_payment_charge_id="delayed-successful-payment",
+        total_amount_minor=1234,
+        currency="RUB",
+        payload=intent.payload,
+        intent_id=intent.intent_id,
+    )
+
+    assert receipt.credited is True
+    assert receipt.user.balance == Decimal("12.34")
 
 
 @pytest.mark.asyncio
@@ -256,6 +368,60 @@ async def test_payment_intent_replay_returns_one_stable_invoice(sessionmaker):
 
 
 @pytest.mark.asyncio
+async def test_invoice_delivery_repo_claim_persists_once(sessionmaker):
+    user = await UserService(uow).register(108)
+    billing = BillingService(uow, per_config_cost="1.00")
+    intent = await billing.create_payment_intent(
+        user_id=user.id,
+        amount="100.00",
+        currency="RUB",
+    )
+
+    async with uow() as repos:
+        first = await repos["billing"].claim_invoice_delivery_attempt(
+            user_id=user.id,
+            intent_id=intent.intent_id,
+            provider="telegram",
+        )
+    async with uow() as repos:
+        replay = await repos["billing"].claim_invoice_delivery_attempt(
+            user_id=user.id,
+            intent_id=intent.intent_id,
+            provider="telegram",
+        )
+        payment = await repos["users"].session.scalar(
+            select(ProviderPayment).where(ProviderPayment.intent_id == intent.intent_id)
+        )
+
+    assert first is True
+    assert replay is False
+    assert payment.raw_data["invoice_delivery_attempted_at"]
+
+
+@pytest.mark.asyncio
+async def test_billing_service_claims_invoice_delivery_once(sessionmaker):
+    user = await UserService(uow).register(109)
+    billing = BillingService(uow, per_config_cost="1.00")
+    intent = await billing.create_payment_intent(
+        user_id=user.id,
+        amount="100.00",
+        currency="RUB",
+    )
+
+    first = await billing.claim_payment_invoice_delivery(
+        user_id=user.id,
+        intent_id=intent.intent_id,
+    )
+    replay = await billing.claim_payment_invoice_delivery(
+        user_id=user.id,
+        intent_id=intent.intent_id,
+    )
+
+    assert first is True
+    assert replay is False
+
+
+@pytest.mark.asyncio
 async def test_payment_currency_and_intent_expiry_are_enforced(sessionmaker):
     user = await UserService(uow).register(106)
     billing = BillingService(uow, per_config_cost="1.00")
@@ -281,6 +447,7 @@ async def test_payment_currency_and_intent_expiry_are_enforced(sessionmaker):
     with pytest.raises(InvalidOperationError, match="expired"):
         await billing.validate_payment_intent(
             user_id=user.id,
+            claim_id="expired-checkout",
             payload=intent.payload,
             amount="10.00",
             currency="RUB",

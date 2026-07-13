@@ -57,6 +57,7 @@ class TelegramPayService:
             currency=currency,
             prices=prices,
             provider_data=provider_data,
+            start_parameter="topup",
             send_email_to_provider=True,
             need_email=True,
         )

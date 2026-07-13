@@ -16,7 +16,9 @@ from core.db.models.user import User
 from core.db.models.vpn_operation import VPNOperation
 from core.db.repo.billing import BillingRepo
 from core.db.unit_of_work import uow
+from core.exceptions import InvalidOperationError
 from core.services import BillingService, ServerService, UserService
+from core.services.billing import PaymentIntent
 
 POSTGRES_TEST_URL = os.getenv("POSTGRES_TEST_URL")
 pytestmark = pytest.mark.skipif(
@@ -147,6 +149,38 @@ async def test_concurrent_paid_config_replay_creates_and_charges_once(monkeypatc
 
         first_invoice, second_invoice = await asyncio.gather(invoice(), invoice())
         assert first_invoice.intent_id == second_invoice.intent_id
+
+        async def claim_invoice_delivery():
+            return await billing.claim_payment_invoice_delivery(
+                user_id=user.id,
+                intent_id=first_invoice.intent_id,
+            )
+
+        claims = await asyncio.gather(
+            claim_invoice_delivery(),
+            claim_invoice_delivery(),
+        )
+        assert sorted(claims) == [False, True]
+
+        async def claim_checkout(claim_id: str):
+            return await billing.validate_payment_intent(
+                user_id=user.id,
+                claim_id=claim_id,
+                payload=first_invoice.payload,
+                amount=first_invoice.amount,
+                currency=first_invoice.currency,
+            )
+
+        checkout_claims = await asyncio.gather(
+            claim_checkout("checkout-a"),
+            claim_checkout("checkout-b"),
+            return_exceptions=True,
+        )
+        assert sum(isinstance(result, PaymentIntent) for result in checkout_claims) == 1
+        assert (
+            sum(isinstance(result, InvalidOperationError) for result in checkout_claims)
+            == 1
+        )
         async with maker() as session:
             assert (await session.get(User, user.id)).balance == Decimal("10.00")
             assert (

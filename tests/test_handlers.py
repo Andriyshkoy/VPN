@@ -14,9 +14,11 @@ class DummyMessage:
         self.from_user = types.SimpleNamespace(id=1, username="user")
         self.chat = types.SimpleNamespace(id=123)
         self.answers = []
+        self.answer_kwargs = []
 
-    async def answer(self, text):
+    async def answer(self, text, **kwargs):
         self.answers.append(text)
+        self.answer_kwargs.append(kwargs)
 
 
 class DummyState:
@@ -121,8 +123,9 @@ async def test_tempfile_used(monkeypatch):
     tmp_dir = tempfile.gettempdir()
     assert os.path.commonpath([sent_path, tmp_dir]) == tmp_dir
     assert not os.path.exists(sent_path)
+    assert bot.chat_id == msg.from_user.id
     assert state.cleared
-    assert msg.answers[-2] == "Конфигурация создана"
+    assert "Конфигурация создана" in msg.answers[-1]
     assert calls == [
         (
             "dab03c52c3cb5cf2b03aaf00efc74d67",
@@ -158,7 +161,7 @@ async def test_service_error(monkeypatch):
     )
 
     assert state.cleared
-    assert msg.answers[-1] == "Произошла ошибка. Попробуйте позже"
+    assert "Не удалось создать конфигурацию" in msg.answers[-1]
 
 
 @pytest.mark.asyncio
@@ -214,6 +217,9 @@ class DummyMessageReply:
     async def answer(self, text, reply_markup=None, **_):
         self.answers.append((text, reply_markup))
 
+    async def edit_text(self, text, reply_markup=None, **_):
+        self.answers.append((text, reply_markup))
+
 
 class DummyCallback:
     def __init__(self, data="cfg:1"):
@@ -259,8 +265,10 @@ async def test_show_config_contains_download(monkeypatch):
 
     markup = cb.message.answers[0][1]
     button_texts = [b.text for row in markup.inline_keyboard for b in row]
-    assert "Скачать" in button_texts
-    assert "Переименовать" in button_texts
+    assert any("Скачать" in text for text in button_texts)
+    assert any("Переименовать" in text for text in button_texts)
+    assert not any("Приостановить" in text for text in button_texts)
+    assert not any("Возобновить" in text for text in button_texts)
 
 
 class DummyCallbackDownload:
@@ -305,6 +313,7 @@ async def test_download_tempfile_used(monkeypatch):
     tmp_dir = tempfile.gettempdir()
     assert os.path.commonpath([sent_path, tmp_dir]) == tmp_dir
     assert not os.path.exists(sent_path)
+    assert bot.chat_id == cb.from_user.id
 
 
 @pytest.mark.asyncio
@@ -312,11 +321,20 @@ async def test_rename_callback_sets_state(monkeypatch):
     cb = DummyCallback("rn:3")
     state = DummyStateRename()
 
+    async def fake_get_user(*a, **kw):
+        return types.SimpleNamespace(id=1)
+
+    async def fake_get_config(*a, **kw):
+        return types.SimpleNamespace(id=3, owner_id=1)
+
+    monkeypatch.setattr(handlers.configs, "get_or_create_user", fake_get_user)
+    monkeypatch.setattr(handlers.config_service, "get", fake_get_config)
+
     await handlers.rename_config_cb(cb, state)
 
     assert state.data["config_id"] == 3
     assert state.state == handlers.RenameConfig.entering_name
-    assert cb.message.answers[-1][0] == "Введите новое название"
+    assert "Введите новое название" in cb.message.answers[-1][0]
 
 
 @pytest.mark.asyncio
@@ -348,4 +366,4 @@ async def test_got_new_name(monkeypatch):
 
     assert called["args"] == (5, "new")
     assert state.cleared
-    assert msg.answers[-1] == "Конфигурация переименована"
+    assert "Конфигурация переименована" in msg.answers[-1]
