@@ -14,6 +14,7 @@ from .billing_tasks import (
 )
 
 REFERRAL_RECONCILE_INTERVAL = 300
+SCHEDULER_POLL_INTERVAL = 30
 
 
 def main() -> None:
@@ -21,7 +22,7 @@ def main() -> None:
     scheduler = Scheduler(
         queue=Queue("billing", connection=redis_conn),
         connection=redis_conn,
-        interval=settings.billing_interval,
+        interval=SCHEDULER_POLL_INTERVAL,
     )
 
     if "charge_all_job" not in scheduler:

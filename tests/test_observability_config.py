@@ -101,6 +101,10 @@ def test_production_release_is_explicit_segmented_and_volume_safe():
         assert "unreleased" not in service
         assert f"image: ${{{image_variable}:?{image_variable} is required}}" in service
     assert "env_file:" not in _service_block(compose, "admin_frontend")
+    nginx = _service_block(compose, "nginx")
+    assert '      - "127.0.0.1:14081:80"' in nginx
+    assert '      - "14081:80"' not in nginx
+    assert '      - "0.0.0.0:14081:80"' not in nginx
 
     release_policy = _top_level_block(compose, "x-release-policy-environment")
     for flag in (

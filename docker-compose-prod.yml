@@ -283,7 +283,9 @@ services:
     depends_on:
       - admin_frontend
     ports:
-      - "14081:80"
+      # The host Nginx terminates TLS for admin.vpn.andriyshkoy.ru. Keep the
+      # application proxy off the public interfaces so :14081 cannot bypass it.
+      - "127.0.0.1:14081:80"
     networks: [edge]
     restart: unless-stopped
 
