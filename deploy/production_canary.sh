@@ -486,7 +486,7 @@ log "testing exact bot image against restored data and live Manager mTLS"
 PREFLIGHT_MANAGER_LOG="$BACKUP_DIR/preflight-manager-smoke.log"
 : > "$PREFLIGHT_MANAGER_LOG"
 chmod 0600 "$PREFLIGHT_MANAGER_LOG"
-if ! docker run --rm \
+if ! docker run --rm -i \
     --network "$PREFLIGHT_NETWORK" \
     --read-only \
     --cap-drop ALL \
@@ -511,7 +511,7 @@ log "testing production Telegram identity before live migration"
 PREFLIGHT_TELEGRAM_LOG="$BACKUP_DIR/preflight-telegram-smoke.log"
 : > "$PREFLIGHT_TELEGRAM_LOG"
 chmod 0600 "$PREFLIGHT_TELEGRAM_LOG"
-if ! docker run --rm \
+if ! docker run --rm -i \
     --network "$PREFLIGHT_NETWORK" \
     --read-only \
     --cap-drop ALL \

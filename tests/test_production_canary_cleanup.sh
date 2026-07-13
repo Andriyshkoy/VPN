@@ -10,6 +10,13 @@ trap 'rm -f "$EVENTS_FILE"' EXIT
 # shellcheck source=../deploy/production_canary.sh
 source "$REPO_ROOT/deploy/production_canary.sh"
 
+interactive_smoke_count="$(
+    grep -Fc \
+        'if ! docker run --rm -i' \
+        "$REPO_ROOT/deploy/production_canary.sh"
+)"
+[[ "$interactive_smoke_count" == "2" ]]
+
 status=0
 if (
     cleanup_preflight() {
