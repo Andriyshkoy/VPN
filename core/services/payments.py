@@ -6,7 +6,9 @@ from decimal import Decimal
 from aiogram import Bot
 from aiogram.types import LabeledPrice
 
+from core.config import settings
 from core.db.repo.billing import to_money
+from core.exceptions import InvalidOperationError
 
 
 class TelegramPayService:
@@ -26,6 +28,8 @@ class TelegramPayService:
         payload: str = "topup",
         currency: str = "RUB",
     ) -> None:
+        if not settings.payments_enabled:
+            raise InvalidOperationError("Provider payments are temporarily disabled")
         normalized_amount = to_money(amount)
         receipt_data = {
             "receipt": {

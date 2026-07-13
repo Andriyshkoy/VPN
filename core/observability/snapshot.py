@@ -258,6 +258,7 @@ async def render_prometheus_metrics(
         "gauge",
         [
             ({"feature": "billing"}, int(settings.billing_enabled)),
+            ({"feature": "payments"}, int(settings.payments_enabled)),
             ({"feature": "provisioning"}, int(settings.provisioning_enabled)),
             ({"feature": "notifications"}, int(settings.notifications_enabled)),
             ({"feature": "maintenance"}, int(settings.maintenance_mode)),

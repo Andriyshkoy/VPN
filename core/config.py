@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     # so a broken bot/admin frontend cannot re-enable critical background work.
     maintenance_mode: bool = False
     billing_enabled: bool = True
+    payments_enabled: bool = True
     provisioning_enabled: bool = True
     notifications_enabled: bool = True
     notification_max_attempts: int = Field(default=10, ge=1, le=100)

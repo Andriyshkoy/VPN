@@ -67,7 +67,13 @@ class BaseRepo(Generic[T]):
         Returns:
             Sequence of objects matching the criteria
         """
-        stmt = select(self.model).filter_by(**filters).offset(offset).limit(limit).order_by(self.model.id)
+        stmt = (
+            select(self.model)
+            .filter_by(**filters)
+            .offset(offset)
+            .limit(limit)
+            .order_by(self.model.id)
+        )
         res = await self.session.scalars(stmt)
         return res.all()
 

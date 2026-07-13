@@ -51,6 +51,73 @@ async def test_telegram_invoice_disables_payment_from_forwarded_copy():
 
 
 @pytest.mark.asyncio
+async def test_telegram_invoice_service_respects_payment_kill_switch(monkeypatch):
+    sent = False
+
+    class InvoiceBot:
+        async def send_invoice(self, **kwargs):
+            nonlocal sent
+            sent = True
+
+    monkeypatch.setattr(payments.settings, "payments_enabled", False)
+
+    with pytest.raises(InvalidOperationError, match="temporarily disabled"):
+        await TelegramPayService(InvoiceBot(), "provider-token").send_invoice(
+            123,
+            Decimal("100.00"),
+            payload="topup:intent-id",
+        )
+
+    assert sent is False
+
+
+@pytest.mark.asyncio
+async def test_payment_kill_switch_blocks_topup_ui_and_stale_callbacks(monkeypatch):
+    class RecordingMessage:
+        from_user = SimpleNamespace(id=123, username="alice")
+
+        def __init__(self):
+            self.answers = []
+
+        async def answer(self, text, **kwargs):
+            self.answers.append((text, kwargs))
+
+    class RecordingCallback(DummyCallback):
+        def __init__(self, data):
+            self.data = data
+            self.answers = []
+
+        async def answer(self, *args, **kwargs):
+            self.answers.append((args, kwargs))
+
+    async def unexpected_user_lookup(*args, **kwargs):
+        raise AssertionError("disabled payment flow must not access the account")
+
+    monkeypatch.setattr(payments.settings, "payments_enabled", False)
+    monkeypatch.setattr(payments, "get_or_create_user", unexpected_user_lookup)
+
+    message = RecordingMessage()
+    await payments.cmd_topup(message)
+    telegram_callback = RecordingCallback("pay:telegram")
+    await payments.pay_telegram(telegram_callback)
+    amount_callback = RecordingCallback("topup:100")
+    await payments.got_topup_amount(
+        amount_callback,
+        DummyBot(),
+        SimpleNamespace(update_id=7001),
+    )
+
+    assert message.answers[0][0] == payments.PAYMENTS_DISABLED_TEXT
+    assert message.answers[0][1]["reply_markup"] is not None
+    assert telegram_callback.answers == [
+        ((payments.PAYMENTS_DISABLED_TEXT,), {"show_alert": True})
+    ]
+    assert amount_callback.answers == [
+        ((payments.PAYMENTS_DISABLED_TEXT,), {"show_alert": True})
+    ]
+
+
+@pytest.mark.asyncio
 async def test_topup_invoice_uses_persisted_intent_without_ui_change(monkeypatch):
     user = SimpleNamespace(id=7)
     intent = PaymentIntent(
@@ -254,6 +321,35 @@ async def test_pre_checkout_rejects_invoice_mismatch(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_pre_checkout_rejects_when_payments_are_disabled(monkeypatch):
+    async def unexpected_user_lookup(*args, **kwargs):
+        raise AssertionError("disabled pre-checkout must not access the account")
+
+    monkeypatch.setattr(payments.settings, "payments_enabled", False)
+    monkeypatch.setattr(payments, "get_or_create_user", unexpected_user_lookup)
+    bot = DummyBot()
+    query = SimpleNamespace(
+        id="query-disabled",
+        from_user=SimpleNamespace(id=123, username="alice"),
+        invoice_payload="topup:intent-id",
+        total_amount=10000,
+        currency="RUB",
+    )
+
+    await payments.process_pre_checkout_query(query, bot)
+
+    assert bot.pre_checkout_answers == [
+        (
+            "query-disabled",
+            {
+                "ok": False,
+                "error_message": payments.PAYMENTS_DISABLED_PRECHECKOUT_TEXT,
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_pre_checkout_rejects_unknown_user_without_creating_payment(monkeypatch):
     async def get_user(*args, **kwargs):
         return None
@@ -356,6 +452,7 @@ async def test_successful_payment_passes_provider_ids_to_idempotent_core(monkeyp
         from_user=SimpleNamespace(id=123, username="alice"),
     )
     bot = DummyBot()
+    monkeypatch.setattr(payments.settings, "payments_enabled", False)
     monkeypatch.setattr(payments, "get_or_create_user", get_user)
     monkeypatch.setattr(payments.billing_service, "record_telegram_payment", record)
 

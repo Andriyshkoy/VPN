@@ -9,11 +9,13 @@ these profile gates.
 
 1. Preserve and validate a database dump created after the current Manager API
    key rotation. Keep the earlier pre-rotation dump only as forensic history.
-2. Set all six `VPN_*_IMAGE` values to immutable commit tags or registry
-   digests. `unreleased` is a non-runnable guard; `latest` is forbidden.
+2. Set all six `VPN_*_IMAGE` values to registry digests. Production Compose
+   refuses to render when any image variable is missing; `latest`,
+   `unreleased`, and tag-only releases are forbidden.
 3. Keep `MAINTENANCE_MODE=true`, `BILLING_ENABLED=false`,
-   `PROVISIONING_ENABLED=false`, and `NOTIFICATIONS_ENABLED=false` for the
-   initial canary.
+   `PAYMENTS_ENABLED=false`, `PROVISIONING_ENABLED=false`, and
+   `NOTIFICATIONS_ENABLED=false` for the initial canary. Successful-payment
+   updates for invoices captured before the switch remain creditable.
 4. Set `REDIS_PASSWORD` from a URL-safe generator such as
    `openssl rand -hex 32`. Production Compose injects that same value into the
    backend `REDIS_URL`; do not use unescaped `@`, `/`, `:`, or `%` characters.
@@ -28,8 +30,8 @@ these profile gates.
    ```
 
 6. Verify the mTLS directory is `root:10001 0750`, the client key is
-   `root:10001 0640`, and the exact admin image running as `10001:10001` can
-   complete a verified TLS handshake.
+   `root:10001 0640`, and the exact bot image running as `10001:10001` can
+   complete a verified TLS inventory read.
 7. Confirm the active public certificate and `certbot.timer` before changing
    the application.
 8. Pin the referral policy explicitly in the production environment:
@@ -56,6 +58,38 @@ for target in admin bot billing migrations; do
 done
 ```
 
+## GitHub Actions release path
+
+`.github/workflows/ci.yml` runs on every pull request and `main` push. It checks
+backend formatting, the complete unit/concurrency suite against PostgreSQL,
+fresh Alembic upgrades and autogenerate drift, frontend lint/build, production
+Compose rendering, and all six Docker build targets. Actions are pinned by
+commit SHA and PR jobs receive no production secrets.
+
+`.github/workflows/release.yml` is manual-only and accepts only the current
+`main` revision plus the exact confirmation `DEPLOY_BOT_CANARY`. It publishes
+all images with a full commit tag, records the registry digests, enters the
+serialized `production` environment, and uploads only reviewed deployment
+files. Application secrets, the Telegram token, the Fernet key, and database
+credentials remain solely in `/opt/vpn/.env` on the server.
+
+The guarded remote script performs these gates before bot traffic:
+
+1. Stops and verifies the absence of old writers.
+2. Creates and validates both a cold volume backup (when PostgreSQL is stopped)
+   and a fresh custom-format `pg_dump`.
+3. Restores that dump into disposable PostgreSQL 16 and applies the exact
+   digest-pinned migrations image.
+4. Runs `alembic check`, accounting invariants, count/balance comparisons, and
+   a live read-only Manager mTLS inventory test.
+5. Migrates the live database and starts only the bot. Billing, payments,
+   provisioning, notifications, worker, scheduler, admin, UI, and monitoring
+   remain off during this canary.
+
+Any failure after the schema upgrade stops the bot and preserves the upgraded
+database for a fix-forward release; it never starts an incompatible old image
+or automatically restores over newly accepted Telegram updates.
+
 ## Volumes and Compose identity
 
 The file pins the project name to `vpn` and declares external volumes. Existing
@@ -75,10 +109,12 @@ against project-name and teardown mistakes.
 Render and inspect the release without starting anything:
 
 ```bash
-docker compose -f docker-compose-prod.yml --profile hub \
+docker compose --env-file .env --env-file release.env \
+  -f docker-compose-prod.yml --profile hub \
   --profile bot --profile worker --profile billing-scheduler \
   --profile monitoring config --quiet
-docker compose -f docker-compose-prod.yml config --images
+docker compose --env-file .env --env-file release.env \
+  -f docker-compose-prod.yml config --images
 ```
 
 Reject any backend/UI image ending in `:latest` or `:unreleased`.
@@ -88,7 +124,8 @@ Reject any backend/UI image ending in `:latest` or `:unreleased`.
 Start only the data services and prove the mounted database identity:
 
 ```bash
-docker compose -f docker-compose-prod.yml up -d db redis
+docker compose --env-file .env --env-file release.env \
+  -f docker-compose-prod.yml up -d db redis
 docker inspect vpn-db-1 --format '{{range .Mounts}}{{println .Destination .Name}}{{end}}'
 ```
 
@@ -99,22 +136,29 @@ Run the exact release migration container explicitly; do not rely on a reused
 exited one-shot container:
 
 ```bash
-docker compose -f docker-compose-prod.yml --profile hub run --rm --no-deps migrations
-docker compose -f docker-compose-prod.yml --profile hub run --rm --no-deps \
+docker compose --env-file .env --env-file release.env \
+  -f docker-compose-prod.yml --profile bot run --rm --no-deps migrations
+docker compose --env-file .env --env-file release.env \
+  -f docker-compose-prod.yml --profile bot run --rm --no-deps \
   --entrypoint alembic migrations current
-docker compose -f docker-compose-prod.yml --profile hub run --rm --no-deps \
+docker compose --env-file .env --env-file release.env \
+  -f docker-compose-prod.yml --profile bot run --rm --no-deps \
   --entrypoint alembic migrations check
 ```
 
 The sole current revision must be `f1a8c3d9e742`. Before starting any
 application process, reconcile `user.balance` against `sum(ledger_entry.amount)`,
 verify every user has one unique 32-character referral code, and review the
-count and total of `referral_reward` rows created by the backfill. Then start only the admin
-canary, leaving bot, worker, and scheduler off:
+count and total of `referral_reward` rows created by the backfill. For the
+initial rollout, perform the read-only Manager smoke test and start only the
+bot canary, leaving admin, worker, and scheduler off:
 
 ```bash
-docker compose -f docker-compose-prod.yml --profile hub up -d --no-deps admin
-docker compose -f docker-compose-prod.yml --profile hub ps admin
+docker compose --env-file .env --env-file release.env \
+  -f docker-compose-prod.yml --profile bot run --rm --no-deps \
+  --entrypoint python bot - < releases/RELEASE_SHA/manager_smoke.py
+docker compose --env-file .env --env-file release.env \
+  -f docker-compose-prod.yml --profile bot up -d --no-deps bot
 ```
 
 Readiness requires PostgreSQL at the exact schema head, Redis, and valid Manager
@@ -124,8 +168,8 @@ TLS material. Run a read-only drift audit and review aggregated findings; keep
 After explicit approval, start components one at a time:
 
 ```bash
-docker compose -f docker-compose-prod.yml --profile bot up -d --no-deps bot
-docker compose -f docker-compose-prod.yml --profile worker up -d --no-deps rq_worker
+docker compose --env-file .env --env-file release.env \
+  -f docker-compose-prod.yml --profile worker up -d --no-deps rq_worker
 ```
 
 Observe the durable Telegram inbox, payment intents, VPN operations, ledger,

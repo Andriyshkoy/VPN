@@ -230,6 +230,7 @@ async def test_database_metrics_report_backlog_age_and_outbox_lag(sessionmaker):
     payload = await render_prometheus_metrics(redis_is_ready=False, now=now)
 
     assert 'vpn_hub_dependency_ready{dependency="redis"} 0' in payload
+    assert 'vpn_hub_feature_enabled{feature="payments"} 1' in payload
     assert 'vpn_hub_vpn_operations{status="failed"} 1' in payload
     assert "vpn_hub_vpn_operation_oldest_backlog_age_seconds 1200" in payload
     assert 'vpn_hub_notification_outbox{status="pending"} 1' in payload
@@ -308,6 +309,7 @@ async def test_observability_routes_are_public_and_readiness_is_explicit(monkeyp
     assert health.status_code == 200
     assert readiness.status_code == 503
     assert readiness.json()["dependencies"] == {"database": True, "redis": False}
+    assert readiness.json()["payments_enabled"] is True
 
 
 def _write_certificate(

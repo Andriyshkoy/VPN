@@ -16,7 +16,7 @@ from aiogram.types import (
 from sqlalchemy.exc import SQLAlchemyError
 
 from core.config import settings
-from core.exceptions import UserNotFoundError
+from core.exceptions import InvalidOperationError, UserNotFoundError
 from core.services import TelegramPayService
 
 from ..keyboards import main_menu_keyboard
@@ -25,6 +25,14 @@ from .base import AVAILABLE_AMOUNTS, billing_service, get_or_create_user, router
 
 logger = logging.getLogger(__name__)
 payment_events_router = Router(name="telegram-payment-events")
+
+PAYMENTS_DISABLED_TEXT = (
+    "💳 Пополнение баланса временно приостановлено. "
+    "Уже оплаченные счета будут зачислены автоматически. Попробуйте позже."
+)
+PAYMENTS_DISABLED_PRECHECKOUT_TEXT = (
+    "Приём новых платежей временно приостановлен. Попробуйте позже."
+)
 
 __all__ = [
     "cmd_topup",
@@ -47,6 +55,12 @@ def _top_up_keyboard() -> InlineKeyboardMarkup:
 
 
 async def cmd_topup(message: Message) -> None:
+    if not settings.payments_enabled:
+        await message.answer(
+            PAYMENTS_DISABLED_TEXT,
+            reply_markup=main_menu_keyboard(),
+        )
+        return
     await get_or_create_user(message.from_user.id, message.from_user.username)
     await message.answer(
         "💳 <b>Пополнение баланса</b>\n\n"
@@ -67,6 +81,13 @@ async def pay_crypto(callback: CallbackQuery) -> None:
 
 @router.callback_query(lambda c: c.data == "pay:telegram")
 async def pay_telegram(callback: CallbackQuery) -> None:
+    if not settings.payments_enabled:
+        await safe_callback_answer(
+            callback,
+            PAYMENTS_DISABLED_TEXT,
+            show_alert=True,
+        )
+        return
     await callback.message.answer(
         "Выберите сумму пополнения:",
         reply_markup=_top_up_keyboard(),
@@ -76,6 +97,13 @@ async def pay_telegram(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("topup:"))
 async def got_topup_amount(callback: CallbackQuery, bot, event_update: Update) -> None:
+    if not settings.payments_enabled:
+        await safe_callback_answer(
+            callback,
+            PAYMENTS_DISABLED_TEXT,
+            show_alert=True,
+        )
+        return
     try:
         amount = Decimal(callback.data.split(":", 1)[1])
         allowed_amounts = {Decimal(str(value)) for value in AVAILABLE_AMOUNTS}
@@ -119,6 +147,13 @@ async def got_topup_amount(callback: CallbackQuery, bot, event_update: Update) -
             payload=intent.payload,
             currency=intent.currency,
         )
+    except InvalidOperationError:
+        await safe_callback_answer(
+            callback,
+            PAYMENTS_DISABLED_TEXT,
+            show_alert=True,
+        )
+        return
     except TelegramAPIError:
         logger.warning(
             "Telegram invoice delivery failed after its attempt was claimed",
@@ -142,6 +177,13 @@ async def got_topup_amount(callback: CallbackQuery, bot, event_update: Update) -
 
 @payment_events_router.pre_checkout_query()
 async def process_pre_checkout_query(pcq: PreCheckoutQuery, bot) -> None:
+    if not settings.payments_enabled:
+        await bot.answer_pre_checkout_query(
+            pcq.id,
+            ok=False,
+            error_message=PAYMENTS_DISABLED_PRECHECKOUT_TEXT,
+        )
+        return
     try:
         user = await get_or_create_user(pcq.from_user.id, pcq.from_user.username)
         if user is None:

@@ -154,6 +154,7 @@ Store the second command's output in `ADMIN_PASSWORD_HASH`.
 | `ADMIN_PASSWORD_HASH` | bcrypt password hash | Required for login |
 | `REDIS_URL` | Redis used by all backend processes | `redis://redis:6379/0` |
 | `PAYMENT_INTENT_TTL_SECONDS` | Lifetime of a pending invoice intent | `3600` |
+| `PAYMENTS_ENABLED` | Permit new provider invoices and Telegram pre-checkout | `true` |
 | `REFERRAL_REWARDS_ENABLED` | Credit rewards for newly confirmed provider payments | `true` |
 | `REFERRAL_LEVEL_1_RATE_BPS` | Direct inviter reward in basis points | `500` (5%) |
 | `REFERRAL_LEVEL_2_RATE_BPS` | Second-level reward in basis points | `100` (1%) |
@@ -193,14 +194,15 @@ These switches live in backend settings and do not depend on either UI:
 | --- | --- |
 | `MAINTENANCE_MODE=true` | Stops periodic billing and scheduled reconciliation; rejects new config provisioning and unsuspension. Admin, bot, and top-ups remain online. |
 | `BILLING_ENABLED=false` | Makes periodic billing jobs no-op. |
+| `PAYMENTS_ENABLED=false` | Rejects new top-ups, invoice delivery, and pre-checkout. Captured successful payments are still credited idempotently. |
 | `PROVISIONING_ENABLED=false` | Rejects new configs and unsuspension; suspension/revocation can still proceed. |
 | `NOTIFICATIONS_ENABLED=false` | Pauses bot delivery and prevents billing jobs from enqueueing new notices. Existing queued messages remain in Redis. |
 | `REFERRAL_REWARDS_ENABLED=false` | Keeps provider top-ups active but pauses reward settlement and its catch-up job. Credited payments remain queued and are settled idempotently after re-enabling; existing history and balances remain unchanged. |
 | `NOTIFICATION_MAX_ATTEMPTS` | Moves repeatedly failing Telegram deliveries to the failed queue after delayed exponential retries. |
 
-For incident maintenance, set at least `MAINTENANCE_MODE=true` and
-`BILLING_ENABLED=false`, then recreate the backend containers so every process
-loads the same settings.
+For incident maintenance, set at least `MAINTENANCE_MODE=true`,
+`BILLING_ENABLED=false`, and `PAYMENTS_ENABLED=false`, then recreate the backend
+containers so every process loads the same settings.
 
 ## Local Docker workflow
 
@@ -289,6 +291,15 @@ server create/update but are masked in API responses. See `admin/README.md` for
 the current endpoint list.
 
 ## Security and deployment notes
+
+GitHub Actions now separates validation from release. `CI` runs tests, real
+PostgreSQL concurrency checks, migration drift checks, frontend validation,
+Compose rendering, and all image builds on pull requests. `Release bot canary`
+is a manual `main`-only workflow that publishes digest-pinned images, validates
+a fresh restored production dump with the exact migrations image, and starts
+only the bot behind fail-closed money and VPN switches. See the
+[production rollout runbook](docs/production-rollout.md) for the release and
+rollback contract.
 
 - Build `admin`, `bot`, `billing`, and `migrations` only as targets of the root
   multi-stage `Dockerfile`. Production uses explicit profiles, external data

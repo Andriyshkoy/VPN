@@ -12,7 +12,7 @@ x-observability-environment: &observability-environment
   STATSD_PORT: 9125
   # Production passwords must be URL-safe (the runbook uses hex) so the same
   # value is valid in both Redis AUTH and this connection URI.
-  REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
+  REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379/0
 
 x-control-plane-environment: &control-plane-environment
   # Production is fail-closed on the private mTLS listener. Legacy HTTP is a
@@ -20,6 +20,23 @@ x-control-plane-environment: &control-plane-environment
   VPN_MANAGER_TLS_ENABLED: "true"
   VPN_MANAGER_MTLS_REQUIRED: "true"
   VPN_MANAGER_TLS_PORT: 16291
+  VPN_MANAGER_CA_CERT_PATH: /run/secrets/vpn-manager/ca.crt
+  VPN_MANAGER_CLIENT_CERT_PATH: /run/secrets/vpn-manager/client.crt
+  VPN_MANAGER_CLIENT_KEY_PATH: /run/secrets/vpn-manager/client.key
+  VPN_DRIFT_REPAIR_ENABLED: ${VPN_DRIFT_REPAIR_ENABLED:?VPN_DRIFT_REPAIR_ENABLED is required}
+
+x-release-policy-environment: &release-policy-environment
+  # These values must be explicit in every release manifest. Missing values are
+  # a deployment error instead of silently enabling money or VPN mutations.
+  MAINTENANCE_MODE: ${MAINTENANCE_MODE:?MAINTENANCE_MODE is required}
+  BILLING_ENABLED: ${BILLING_ENABLED:?BILLING_ENABLED is required}
+  PAYMENTS_ENABLED: ${PAYMENTS_ENABLED:?PAYMENTS_ENABLED is required}
+  PROVISIONING_ENABLED: ${PROVISIONING_ENABLED:?PROVISIONING_ENABLED is required}
+  NOTIFICATIONS_ENABLED: ${NOTIFICATIONS_ENABLED:?NOTIFICATIONS_ENABLED is required}
+  REFERRAL_REWARDS_ENABLED: ${REFERRAL_REWARDS_ENABLED:?REFERRAL_REWARDS_ENABLED is required}
+  REFERRAL_LEVEL_1_RATE_BPS: ${REFERRAL_LEVEL_1_RATE_BPS:?REFERRAL_LEVEL_1_RATE_BPS is required}
+  REFERRAL_LEVEL_2_RATE_BPS: ${REFERRAL_LEVEL_2_RATE_BPS:?REFERRAL_LEVEL_2_RATE_BPS is required}
+  REFERRAL_PROGRAM_VERSION: ${REFERRAL_PROGRAM_VERSION:?REFERRAL_PROGRAM_VERSION is required}
 
 x-backend-security: &backend-security
   read_only: true
@@ -49,7 +66,7 @@ services:
   redis:
     image: redis:7@sha256:24ea35ee039d7345bef2377611e3b1a615231746de4cfea74c1414575ee56167
     environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     entrypoint:
       - /bin/sh
       - -ec
@@ -69,7 +86,7 @@ services:
 
   migrations:
     <<: *backend-security
-    image: ${VPN_MIGRATIONS_IMAGE:-andriyshkoy/vpn-migrations:unreleased}
+    image: ${VPN_MIGRATIONS_IMAGE:?VPN_MIGRATIONS_IMAGE is required}
     profiles: ["hub", "bot", "worker", "billing-scheduler"]
     depends_on:
       db:
@@ -80,7 +97,7 @@ services:
 
   admin:
     <<: *backend-security
-    image: ${VPN_ADMIN_IMAGE:-andriyshkoy/vpn-admin:unreleased}
+    image: ${VPN_ADMIN_IMAGE:?VPN_ADMIN_IMAGE is required}
     profiles: ["hub"]
     depends_on:
       db:
@@ -92,7 +109,7 @@ services:
     env_file:
       - ${VPN_ENV_FILE:-.env}
     environment:
-      <<: [*observability-environment, *control-plane-environment]
+      <<: [*observability-environment, *control-plane-environment, *release-policy-environment]
       VPN_HUB_SERVICE: admin
     volumes:
       - *vpn-manager-tls-volume
@@ -113,7 +130,7 @@ services:
 
   bot:
     <<: *backend-security
-    image: ${VPN_BOT_IMAGE:-andriyshkoy/vpn-bot:unreleased}
+    image: ${VPN_BOT_IMAGE:?VPN_BOT_IMAGE is required}
     profiles: ["bot"]
     depends_on:
       db:
@@ -125,7 +142,7 @@ services:
     env_file:
       - ${VPN_ENV_FILE:-.env}
     environment:
-      <<: [*observability-environment, *control-plane-environment]
+      <<: [*observability-environment, *control-plane-environment, *release-policy-environment]
       VPN_HUB_SERVICE: bot
     volumes:
       - *vpn-manager-tls-volume
@@ -135,7 +152,7 @@ services:
 
   rq_worker:
     <<: *backend-security
-    image: ${VPN_BILLING_IMAGE:-andriyshkoy/vpn-billing:unreleased}
+    image: ${VPN_BILLING_IMAGE:?VPN_BILLING_IMAGE is required}
     profiles: ["worker"]
     command: ./billing_daemon/entrypoint_worker.sh
     depends_on:
@@ -148,7 +165,7 @@ services:
     env_file:
       - ${VPN_ENV_FILE:-.env}
     environment:
-      <<: [*observability-environment, *control-plane-environment]
+      <<: [*observability-environment, *control-plane-environment, *release-policy-environment]
       VPN_HUB_SERVICE: rq_worker
     volumes:
       - *vpn-manager-tls-volume
@@ -158,7 +175,7 @@ services:
 
   rq_scheduler:
     <<: *backend-security
-    image: ${VPN_BILLING_IMAGE:-andriyshkoy/vpn-billing:unreleased}
+    image: ${VPN_BILLING_IMAGE:?VPN_BILLING_IMAGE is required}
     profiles: ["billing-scheduler"]
     command: ./billing_daemon/entrypoint_scheduler.sh
     depends_on:
@@ -171,7 +188,7 @@ services:
     env_file:
       - ${VPN_ENV_FILE:-.env}
     environment:
-      <<: *observability-environment
+      <<: [*observability-environment, *release-policy-environment]
       VPN_HUB_SERVICE: rq_scheduler
     networks: [data, monitoring]
     stop_grace_period: 30s
@@ -222,7 +239,7 @@ services:
     profiles: ["monitoring"]
     environment:
       REDIS_ADDR: redis://redis:6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     expose:
       - "9121"
     read_only: true
@@ -253,7 +270,7 @@ services:
     restart: unless-stopped
 
   admin_frontend:
-    image: ${VPN_ADMIN_FRONTEND_IMAGE:-andriyshkoy/vpn-admin-frontend:unreleased}
+    image: ${VPN_ADMIN_FRONTEND_IMAGE:?VPN_ADMIN_FRONTEND_IMAGE is required}
     profiles: ["hub"]
     depends_on:
       - admin
@@ -261,7 +278,7 @@ services:
     restart: unless-stopped
 
   nginx:
-    image: ${VPN_NGINX_IMAGE:-andriyshkoy/vpn-nginx:unreleased}
+    image: ${VPN_NGINX_IMAGE:?VPN_NGINX_IMAGE is required}
     profiles: ["hub"]
     depends_on:
       - admin_frontend

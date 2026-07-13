@@ -90,6 +90,11 @@ class BalanceOperations:
 class ProviderPaymentOperations:
     """Provider payment intent validation and idempotent capture."""
 
+    @staticmethod
+    def _ensure_payments_enabled() -> None:
+        if not settings.payments_enabled:
+            raise InvalidOperationError("Provider payments are temporarily disabled")
+
     async def create_payment_intent(
         self,
         *,
@@ -99,6 +104,7 @@ class ProviderPaymentOperations:
         currency: str = "RUB",
         idempotency_key: str | None = None,
     ) -> PaymentIntent:
+        self._ensure_payments_enabled()
         intent_id = None
         if idempotency_key is not None:
             if (
@@ -139,6 +145,7 @@ class ProviderPaymentOperations:
         currency: str,
         provider: str = "telegram",
     ) -> PaymentIntent:
+        self._ensure_payments_enabled()
         async with self._uow() as repos:
             payment = await self._billing_repo(repos).validate_payment_intent(
                 user_id=user_id,
@@ -165,6 +172,7 @@ class ProviderPaymentOperations:
     ) -> bool:
         """Claim the at-most-once provider invoice delivery for an intent."""
 
+        self._ensure_payments_enabled()
         async with self._uow() as repos:
             return await self._billing_repo(repos).claim_invoice_delivery_attempt(
                 user_id=user_id,

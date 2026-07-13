@@ -246,6 +246,60 @@ async def test_telegram_payment_is_credited_once_and_validates_intent(sessionmak
 
 
 @pytest.mark.asyncio
+async def test_payment_kill_switch_blocks_new_flows_but_credits_capture(
+    monkeypatch, sessionmaker
+):
+    user = await UserService(uow).register(10103)
+    billing = BillingService(uow, per_config_cost="1.00")
+    intent = await billing.create_payment_intent(
+        user_id=user.id,
+        amount="12.34",
+        currency="RUB",
+    )
+    await billing.validate_payment_intent(
+        user_id=user.id,
+        claim_id="checkout-before-pause",
+        payload=intent.payload,
+        amount="12.34",
+        currency="RUB",
+    )
+
+    monkeypatch.setattr(settings, "payments_enabled", False)
+
+    with pytest.raises(InvalidOperationError, match="temporarily disabled"):
+        await billing.create_payment_intent(
+            user_id=user.id,
+            amount="20.00",
+            currency="RUB",
+        )
+    with pytest.raises(InvalidOperationError, match="temporarily disabled"):
+        await billing.validate_payment_intent(
+            user_id=user.id,
+            claim_id="checkout-before-pause",
+            payload=intent.payload,
+            amount="12.34",
+            currency="RUB",
+        )
+    with pytest.raises(InvalidOperationError, match="temporarily disabled"):
+        await billing.claim_payment_invoice_delivery(
+            user_id=user.id,
+            intent_id=intent.intent_id,
+        )
+
+    receipt = await billing.record_telegram_payment(
+        user_id=user.id,
+        telegram_payment_charge_id="captured-before-pause",
+        total_amount_minor=1234,
+        currency="RUB",
+        payload=intent.payload,
+        intent_id=intent.intent_id,
+    )
+
+    assert receipt.credited is True
+    assert receipt.user.balance == Decimal("12.34")
+
+
+@pytest.mark.asyncio
 async def test_unclaimed_payment_intent_cannot_be_captured(sessionmaker):
     user = await UserService(uow).register(110)
     billing = BillingService(uow, per_config_cost="1.00")

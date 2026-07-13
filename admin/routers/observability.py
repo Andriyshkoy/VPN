@@ -32,6 +32,7 @@ async def ready() -> JSONResponse:
             "status": "ready" if ready_now else "not_ready",
             "dependencies": dependencies,
             "maintenance_mode": settings.maintenance_mode,
+            "payments_enabled": settings.payments_enabled,
         },
     )
 

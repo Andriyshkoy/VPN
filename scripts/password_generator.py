@@ -13,9 +13,9 @@ def generate_password_hash(password: str) -> str:
 
     # Generate a salt and hash the password
     salt = gensalt()
-    hashed_password = hashpw(password.encode('utf-8'), salt)
+    hashed_password = hashpw(password.encode("utf-8"), salt)
 
-    return hashed_password.decode('utf-8')  # Return as string for storage
+    return hashed_password.decode("utf-8")  # Return as string for storage
 
 
 if __name__ == "__main__":

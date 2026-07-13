@@ -81,23 +81,37 @@ def test_production_release_is_explicit_segmented_and_volume_safe():
         compose, "redis"
     )
     assert '--requirepass "$$REDIS_PASSWORD"' in _service_block(compose, "redis")
-    assert "REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0" in (
-        _top_level_block(compose, "x-observability-environment")
-    )
+    assert (
+        "REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}"
+        "@redis:6379/0"
+    ) in (_top_level_block(compose, "x-observability-environment"))
 
-    for service_name in (
-        "migrations",
-        "admin",
-        "bot",
-        "rq_worker",
-        "rq_scheduler",
-        "admin_frontend",
-        "nginx",
-    ):
+    required_images = {
+        "migrations": "VPN_MIGRATIONS_IMAGE",
+        "admin": "VPN_ADMIN_IMAGE",
+        "bot": "VPN_BOT_IMAGE",
+        "rq_worker": "VPN_BILLING_IMAGE",
+        "rq_scheduler": "VPN_BILLING_IMAGE",
+        "admin_frontend": "VPN_ADMIN_FRONTEND_IMAGE",
+        "nginx": "VPN_NGINX_IMAGE",
+    }
+    for service_name, image_variable in required_images.items():
         service = _service_block(compose, service_name)
         assert ":latest" not in service
-        assert "unreleased" in service
+        assert "unreleased" not in service
+        assert f"image: ${{{image_variable}:?{image_variable} is required}}" in service
     assert "env_file:" not in _service_block(compose, "admin_frontend")
+
+    release_policy = _top_level_block(compose, "x-release-policy-environment")
+    for flag in (
+        "MAINTENANCE_MODE",
+        "BILLING_ENABLED",
+        "PAYMENTS_ENABLED",
+        "PROVISIONING_ENABLED",
+        "NOTIFICATIONS_ENABLED",
+        "REFERRAL_REWARDS_ENABLED",
+    ):
+        assert f"{flag}: ${{{flag}:?{flag} is required}}" in release_policy
 
 
 def test_production_statsd_and_tls_mount_wiring_remains_fail_safe():
@@ -121,6 +135,15 @@ def test_production_statsd_and_tls_mount_wiring_remains_fail_safe():
     assert 'VPN_MANAGER_TLS_ENABLED: "true"' in control_plane
     assert 'VPN_MANAGER_MTLS_REQUIRED: "true"' in control_plane
     assert "VPN_MANAGER_TLS_PORT: 16291" in control_plane
+    assert "VPN_MANAGER_CA_CERT_PATH: /run/secrets/vpn-manager/ca.crt" in (
+        control_plane
+    )
+    assert "VPN_MANAGER_CLIENT_CERT_PATH: /run/secrets/vpn-manager/client.crt" in (
+        control_plane
+    )
+    assert "VPN_MANAGER_CLIENT_KEY_PATH: /run/secrets/vpn-manager/client.key" in (
+        control_plane
+    )
 
 
 def test_nginx_explicitly_denies_operational_endpoints():
