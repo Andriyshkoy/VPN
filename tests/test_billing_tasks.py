@@ -164,9 +164,11 @@ def test_scheduler_registers_referral_reconciliation(monkeypatch):
     import billing_daemon.scheduler as scheduler_module
 
     scheduled = []
+    scheduler_options = []
 
     class DummyScheduler:
         def __init__(self, **kwargs):
+            scheduler_options.append(kwargs)
             self.jobs = {}
 
         def __contains__(self, job_id):
@@ -182,8 +184,15 @@ def test_scheduler_registers_referral_reconciliation(monkeypatch):
     monkeypatch.setattr(scheduler_module.Redis, "from_url", lambda url: object())
     monkeypatch.setattr(scheduler_module, "Queue", lambda *args, **kwargs: object())
     monkeypatch.setattr(scheduler_module, "Scheduler", DummyScheduler)
+    monkeypatch.setattr(scheduler_module.settings, "billing_interval", 7200)
 
     scheduler_module.main()
+
+    assert scheduler_options[0]["interval"] == 30
+
+    charge_job = next(job for job in scheduled if job["id"] == "charge_all_job")
+    assert charge_job["func"] is scheduler_module.charge_all_and_notify
+    assert charge_job["interval"] == 7200
 
     referral_job = next(
         job for job in scheduled if job["id"] == "reconcile_referral_rewards_job"

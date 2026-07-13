@@ -119,6 +119,11 @@ docker compose --env-file .env --env-file release.env \
 
 Reject any backend/UI image ending in `:latest` or `:unreleased`.
 
+The production admin proxy binds only to `127.0.0.1:14081`. The host Nginx
+must terminate TLS for `admin.vpn.andriyshkoy.ru` and proxy to that loopback
+address. Do not publish port `14081` on a public interface: doing so would
+bypass the host TLS boundary.
+
 ## Staged startup
 
 Start only the data services and prove the mounted database identity:
