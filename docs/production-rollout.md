@@ -16,9 +16,9 @@ these profile gates.
    `PAYMENTS_ENABLED=false`, `PROVISIONING_ENABLED=false`, and
    `NOTIFICATIONS_ENABLED=false` for the initial canary. Successful-payment
    updates for invoices captured before the switch remain creditable.
-4. Set `REDIS_PASSWORD` from a URL-safe generator such as
-   `openssl rand -hex 32`. Production Compose injects that same value into the
-   backend `REDIS_URL`; do not use unescaped `@`, `/`, `:`, or `%` characters.
+4. Preserve any existing `REDIS_PASSWORD`. On first guarded deployment the
+   canary generates a URL-safe value with `openssl rand -hex 32` when it is
+   absent and persists it in the root-only production `.env`.
 5. Require the Manager control plane:
 
    ```dotenv
@@ -73,6 +73,12 @@ serialized `production` environment, and uploads only reviewed deployment
 files. Application secrets, the Telegram token, the Fernet key, and database
 credentials remain solely in `/opt/vpn/.env` on the server.
 
+Set the optional repository variable `ADMIN_PUBLIC_ORIGIN` to the path-free
+HTTPS origin served by the host proxy. It defaults to
+`https://admin.vpn.andriyshkoy.ru`. Both release workflows recheck that their
+SHA is still current `main` and has exact successful CI after production
+approval, immediately before preparing SSH access.
+
 The guarded remote script performs these gates before bot traffic:
 
 1. Stops and verifies the absence of old writers.
@@ -81,8 +87,13 @@ The guarded remote script performs these gates before bot traffic:
 3. Restores that dump into disposable PostgreSQL 16 and applies the exact
    digest-pinned migrations image.
 4. Runs `alembic check`, accounting invariants, count/balance comparisons, and
-   a live read-only Manager mTLS inventory test.
-5. Migrates the live database and starts only the bot. Billing, payments,
+   authenticated Manager `/status` plus inventory checks. Every Manager must
+   report ready, an `up` OpenVPN data plane, and a unique/matching instance ID.
+5. Creates the external Redis/Prometheus volumes when absent and reconciles a
+   dedicated `vpn_exporter` login with only `pg_monitor` membership. The
+   exporter credential is generated into the root-only `.env` and verified by
+   a real database login; the application database owner is never reused.
+6. Migrates the live database and starts only the bot. Billing, payments,
    provisioning, notifications, worker, scheduler, admin, UI, and monitoring
    remain off during this canary.
 
@@ -94,13 +105,14 @@ or automatically restores over newly accepted Telegram updates.
 
 The file pins the project name to `vpn` and declares external volumes. Existing
 production PostgreSQL must be exactly `vpn_db_data`; an alternate empty volume
-is a hard stop. Create the new persistent Redis/Prometheus volumes once before
-their first approved use:
+is a hard stop. The guarded canary creates the new Redis/Prometheus volumes on
+first use and verifies them again before activation. Operators can inspect all
+three identities without changing them:
 
 ```bash
 docker volume inspect vpn_db_data
-docker volume create vpn_redis_data
-docker volume create vpn_prometheus_data
+docker volume inspect vpn_redis_data
+docker volume inspect vpn_prometheus_data
 ```
 
 Never run `docker compose down -v`. External volumes are intentional protection
@@ -151,12 +163,12 @@ docker compose --env-file .env --env-file release.env \
   --entrypoint alembic migrations check
 ```
 
-The sole current revision must be `f1a8c3d9e742`. Before starting any
+The sole current revision must be `d4e7f9a1b2c3`. Before starting any
 application process, reconcile `user.balance` against `sum(ledger_entry.amount)`,
-verify every user has one unique 32-character referral code, and review the
-count and total of `referral_reward` rows created by the backfill. For the
-initial rollout, perform the read-only Manager smoke test and start only the
-bot canary, leaving admin, worker, and scheduler off:
+verify every user has one unique 32-character referral code, and confirm that
+the admin/fleet migrations did not change user, configuration, or aggregate
+balance counts. Perform the read-only Manager smoke test and start only the bot
+canary, leaving admin, worker, and scheduler off:
 
 ```bash
 docker compose --env-file .env --env-file release.env \
@@ -165,6 +177,14 @@ docker compose --env-file .env --env-file release.env \
 docker compose --env-file .env --env-file release.env \
   -f docker-compose-prod.yml --profile bot up -d --no-deps bot
 ```
+
+After the bot canary is healthy, activate the admin control plane with the
+separate `Activate admin hub` workflow. It rechecks the exact release SHA,
+schema head, bot health, loopback HTTP contract and the configured public HTTPS
+origin. Public acceptance verifies the normal certificate/SNI path, the SPA,
+and the same-origin unauthenticated API boundary before committing the marker.
+It then starts only admin, frontend, proxy and monitoring; it does not enable
+billing, payments, provisioning, notifications, worker, or scheduler.
 
 Readiness requires PostgreSQL at the exact schema head, Redis, and valid Manager
 TLS material. Run a read-only drift audit and review aggregated findings; keep
@@ -184,11 +204,13 @@ has been separately approved.
 
 ## Rollback
 
-Prefer a code-only rollback while retaining schema head. After referral migration
-`f1a8c3d9e742`, the fallback image must understand the non-null invite code and
-referral accounting tables; pre-referral images cannot register users safely.
-Older production code also writes balances without the immutable ledger and
-must never run after migration `4a9f0d6c2e31` has been applied.
+Prefer a code-only rollback while retaining schema head. After admin/fleet
+migration `d4e7f9a1b2c3`, keep the admin control plane stopped unless its image
+understands database sessions, audit immutability and fleet lifecycle fields.
+Any bot fallback must still understand referral migration `f1a8c3d9e742`;
+pre-referral images cannot register users safely. Older production code also
+writes balances without the immutable ledger and must never run after migration
+`4a9f0d6c2e31` has been applied.
 
 Stop bot/worker/scheduler first. Do not downgrade the database while any new
 process is running. A database restore must use the post-key-rotation snapshot

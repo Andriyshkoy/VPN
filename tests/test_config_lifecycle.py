@@ -15,6 +15,7 @@ from core.exceptions import (
     APITransportError,
 )
 from core.services import BillingService, ConfigService, ServerService, UserService
+from tests.fleet_test_support import mark_server_ready
 
 
 class LifecycleGateway:
@@ -71,6 +72,7 @@ async def _user_and_server():
         api_key="secret",
         cost=0,
     )
+    await mark_server_ready(server.id)
     return user, server
 
 

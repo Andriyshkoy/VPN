@@ -12,6 +12,7 @@ async def test_login(monkeypatch, sessionmaker):
     hashed = bcrypt.hashpw(password, bcrypt.gensalt()).decode()
     monkeypatch.setenv("ADMIN_USERNAME", "admin")
     monkeypatch.setenv("ADMIN_PASSWORD_HASH", hashed)
+    monkeypatch.setenv("ADMIN_LEGACY_API_ENABLED", "true")
 
     import core.config as core_config
 

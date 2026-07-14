@@ -173,7 +173,7 @@ async def _begin_create_config(
         )
         return
 
-    servers = await server_service.list()
+    servers = await server_service.list(available_only=True)
     if not servers:
         await target.answer(
             "Сейчас нет доступных серверов. Попробуйте позже.",
@@ -260,7 +260,7 @@ async def choose_server(callback: CallbackQuery, state: FSMContext) -> None:
     if server_id is None:
         return
     server = await server_service.get(server_id)
-    if server is None:
+    if server is None or not await server_service.accepts_new_config(server_id):
         await safe_callback_answer(
             callback,
             "Сервер больше недоступен. Выберите другой.",

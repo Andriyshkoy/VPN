@@ -6,10 +6,12 @@ import ssl
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from ipaddress import IPv6Address
 from types import TracebackType
 from typing import Any, Literal, cast
 from urllib.parse import quote
+from uuid import UUID
 
 import httpx
 
@@ -53,6 +55,9 @@ ManagerCertificateStatus = Literal[
     "unknown",
     "missing",
 ]
+ManagerInventoryAvailability = Literal["available", "stale", "unknown"]
+ManagerDataPlaneState = Literal["up", "stale", "unknown"]
+ManagerExpiryState = Literal["valid", "expiring", "expired", "unknown"]
 
 _MANAGER_STATES = frozenset(
     {
@@ -93,6 +98,68 @@ class ManagerClientInventory:
     count: int
     clients: tuple[ManagerClientState, ...]
     etag: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerReadiness:
+    ready: bool
+    errors: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerInventoryCounts:
+    total: int
+    active: int
+    suspended: int
+    revoked: int
+    expired: int
+    incomplete: int
+    orphaned: int
+    unknown: int
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerInventoryStatus:
+    availability: ManagerInventoryAvailability
+    revision: str | None
+    collected_at: datetime | None
+    age_seconds: int | None
+    counts: ManagerInventoryCounts | None
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerDataPlaneStatus:
+    status: ManagerDataPlaneState
+    online_sessions: int | None
+    bytes_received: int | None
+    bytes_sent: int | None
+    status_file_age_seconds: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerExpiryStatus:
+    status: ManagerExpiryState
+    expires_at: datetime | None
+    remaining_seconds: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerPKIStatus:
+    server_certificate: ManagerExpiryStatus
+    crl: ManagerExpiryStatus
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerFleetStatus:
+    """Typed and deliberately bounded response from Manager ``GET /status``."""
+
+    manager_version: str
+    instance_id: str
+    observed_at: datetime
+    readiness: ManagerReadiness
+    inventory: ManagerInventoryStatus
+    data_plane: ManagerDataPlaneStatus
+    pki: ManagerPKIStatus
 
 
 class APIGateway:
@@ -427,6 +494,8 @@ class APIGateway:
         path = url.split("?", 1)[0].rstrip("/") or "/"
         if path == "/clients/blocked":
             return "list_blocked"
+        if path == "/status" and method == "GET":
+            return "fleet_status"
         if path == "/clients" and method == "GET":
             return "client_inventory"
         if path == "/clients" and method == "POST":
@@ -606,6 +675,202 @@ class APIGateway:
             manageable=cast(bool, payload["manageable"]),
             issues=tuple(issues),
         )
+
+    @staticmethod
+    def _timestamp(
+        value: object, field: str, *, optional: bool = False
+    ) -> datetime | None:
+        if value is None and optional:
+            return None
+        if not isinstance(value, str) or not value:
+            raise APIProtocolError(f"VPN Manager status has an invalid {field}")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise APIProtocolError(
+                f"VPN Manager status has an invalid {field}"
+            ) from exc
+        if parsed.tzinfo is None:
+            raise APIProtocolError(f"VPN Manager status has a naive {field}")
+        return parsed.astimezone(timezone.utc)
+
+    @staticmethod
+    def _bounded_int(
+        value: object,
+        field: str,
+        *,
+        optional: bool = False,
+        allow_negative: bool = False,
+    ) -> int | None:
+        if value is None and optional:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise APIProtocolError(f"VPN Manager status has an invalid {field}")
+        if (not allow_negative and value < 0) or abs(value) > (1 << 63) - 1:
+            raise APIProtocolError(f"VPN Manager status has an invalid {field}")
+        return value
+
+    @classmethod
+    def _inventory_counts(cls, value: object) -> ManagerInventoryCounts | None:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise APIProtocolError("VPN Manager status has invalid inventory counts")
+        fields = (
+            "total",
+            "active",
+            "suspended",
+            "revoked",
+            "expired",
+            "incomplete",
+            "orphaned",
+            "unknown",
+        )
+        parsed = {
+            field: cast(int, cls._bounded_int(value.get(field), f"counts.{field}"))
+            for field in fields
+        }
+        if parsed["total"] != sum(parsed[field] for field in fields[1:]):
+            raise APIProtocolError(
+                "VPN Manager status inventory total does not match state counts"
+            )
+        return ManagerInventoryCounts(**parsed)
+
+    @classmethod
+    def _inventory_status(cls, value: object) -> ManagerInventoryStatus:
+        if not isinstance(value, dict):
+            raise APIProtocolError("VPN Manager status has invalid inventory")
+        availability = value.get("availability")
+        if availability not in {"available", "stale", "unknown"}:
+            raise APIProtocolError(
+                "VPN Manager status has invalid inventory availability"
+            )
+        revision = value.get("revision")
+        if revision is not None and (
+            not isinstance(revision, str) or not revision or len(revision) > 160
+        ):
+            raise APIProtocolError("VPN Manager status has invalid inventory revision")
+        counts = cls._inventory_counts(value.get("counts"))
+        if availability == "available" and (revision is None or counts is None):
+            raise APIProtocolError("VPN Manager available inventory is incomplete")
+        return ManagerInventoryStatus(
+            availability=cast(ManagerInventoryAvailability, availability),
+            revision=cast(str | None, revision),
+            collected_at=cast(
+                datetime | None,
+                cls._timestamp(
+                    value.get("collected_at"), "inventory.collected_at", optional=True
+                ),
+            ),
+            age_seconds=cls._bounded_int(
+                value.get("age_seconds"), "inventory.age_seconds", optional=True
+            ),
+            counts=counts,
+        )
+
+    @classmethod
+    def _data_plane_status(cls, value: object) -> ManagerDataPlaneStatus:
+        if not isinstance(value, dict):
+            raise APIProtocolError("VPN Manager status has invalid data_plane")
+        plane_status = value.get("status")
+        if plane_status not in {"up", "stale", "unknown"}:
+            raise APIProtocolError("VPN Manager status has invalid data-plane state")
+        return ManagerDataPlaneStatus(
+            status=cast(ManagerDataPlaneState, plane_status),
+            online_sessions=cls._bounded_int(
+                value.get("online_sessions"), "online_sessions", optional=True
+            ),
+            bytes_received=cls._bounded_int(
+                value.get("bytes_received"), "bytes_received", optional=True
+            ),
+            bytes_sent=cls._bounded_int(
+                value.get("bytes_sent"), "bytes_sent", optional=True
+            ),
+            status_file_age_seconds=cls._bounded_int(
+                value.get("status_file_age_seconds"),
+                "status_file_age_seconds",
+                optional=True,
+            ),
+        )
+
+    @classmethod
+    def _expiry_status(cls, value: object, field: str) -> ManagerExpiryStatus:
+        if not isinstance(value, dict):
+            raise APIProtocolError(f"VPN Manager status has invalid {field}")
+        expiry_status = value.get("status")
+        if expiry_status not in {"valid", "expiring", "expired", "unknown"}:
+            raise APIProtocolError(f"VPN Manager status has invalid {field}.status")
+        return ManagerExpiryStatus(
+            status=cast(ManagerExpiryState, expiry_status),
+            expires_at=cast(
+                datetime | None,
+                cls._timestamp(
+                    value.get("expires_at"), f"{field}.expires_at", optional=True
+                ),
+            ),
+            remaining_seconds=cls._bounded_int(
+                value.get("remaining_seconds"),
+                f"{field}.remaining_seconds",
+                optional=True,
+                allow_negative=True,
+            ),
+        )
+
+    @classmethod
+    def _fleet_status(cls, payload: object) -> ManagerFleetStatus:
+        if not isinstance(payload, dict):
+            raise APIProtocolError("VPN Manager status must be an object")
+        version = payload.get("manager_version")
+        instance_id = payload.get("instance_id")
+        if not isinstance(version, str) or not version or len(version) > 64:
+            raise APIProtocolError("VPN Manager status has invalid manager_version")
+        if not isinstance(instance_id, str):
+            raise APIProtocolError("VPN Manager status has invalid instance_id")
+        try:
+            canonical_instance_id = str(UUID(instance_id))
+        except (ValueError, AttributeError) as exc:
+            raise APIProtocolError(
+                "VPN Manager status has invalid instance_id"
+            ) from exc
+
+        readiness = payload.get("readiness")
+        if not isinstance(readiness, dict) or type(readiness.get("ready")) is not bool:
+            raise APIProtocolError("VPN Manager status has invalid readiness")
+        errors = readiness.get("errors")
+        if not isinstance(errors, list) or not all(
+            isinstance(error, str) and 0 < len(error) <= 64 for error in errors
+        ):
+            raise APIProtocolError("VPN Manager status has invalid readiness errors")
+        if len(errors) > 32:
+            raise APIProtocolError("VPN Manager status has too many readiness errors")
+
+        pki = payload.get("pki")
+        if not isinstance(pki, dict):
+            raise APIProtocolError("VPN Manager status has invalid pki")
+        observed_at = cls._timestamp(payload.get("observed_at"), "observed_at")
+        assert observed_at is not None
+        return ManagerFleetStatus(
+            manager_version=version,
+            instance_id=canonical_instance_id,
+            observed_at=observed_at,
+            readiness=ManagerReadiness(
+                ready=cast(bool, readiness["ready"]), errors=tuple(errors)
+            ),
+            inventory=cls._inventory_status(payload.get("inventory")),
+            data_plane=cls._data_plane_status(payload.get("data_plane")),
+            pki=ManagerPKIStatus(
+                server_certificate=cls._expiry_status(
+                    pki.get("server_certificate"), "pki.server_certificate"
+                ),
+                crl=cls._expiry_status(pki.get("crl"), "pki.crl"),
+            ),
+        )
+
+    async def get_status(self) -> ManagerFleetStatus:
+        """Return Manager operational aggregates without client identities."""
+
+        response = await self._request("GET", "/status")
+        return self._fleet_status(self._json_object(response))
 
     async def create_client(
         self,

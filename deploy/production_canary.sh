@@ -4,8 +4,9 @@ set -Eeuo pipefail
 umask 077
 
 readonly POSTGRES_IMAGE="postgres:16@sha256:5a65324fe84dc41709ff914e90b07f3e2f577073ed27bf917d4873aca0c9ec51"
-readonly EXPECTED_REVISION="f1a8c3d9e742"
-readonly EXPECTED_PREVIOUS_REVISION="d78ffcb95ce5"
+readonly EXPECTED_REVISION="d4e7f9a1b2c3"
+readonly EXPECTED_PREVIOUS_REVISION="f1a8c3d9e742"
+readonly POSTGRES_EXPORTER_ROLE="vpn_exporter"
 
 log() {
     printf '[deploy] %s\n' "$*"
@@ -136,6 +137,98 @@ db_psql() {
         sh "$@"
 }
 
+prepare_runtime_credentials_and_volumes() {
+    local database_user
+    local exporter_user
+    local volume
+
+    if ! env_value REDIS_PASSWORD "$APP_ENV" >/dev/null; then
+        log "initializing production Redis credential"
+        set_env_value REDIS_PASSWORD "$(openssl rand -hex 32)" "$APP_ENV"
+    fi
+    if ! env_value POSTGRES_EXPORTER_USER "$APP_ENV" >/dev/null; then
+        log "initializing the dedicated PostgreSQL exporter identity"
+        set_env_value POSTGRES_EXPORTER_USER "$POSTGRES_EXPORTER_ROLE" "$APP_ENV"
+    fi
+    database_user="$(env_value POSTGRES_USER "$APP_ENV")"
+    exporter_user="$(env_value POSTGRES_EXPORTER_USER "$APP_ENV")"
+    [[ "$exporter_user" == "$POSTGRES_EXPORTER_ROLE" ]] \
+        || die "POSTGRES_EXPORTER_USER must be ${POSTGRES_EXPORTER_ROLE}"
+    [[ "$exporter_user" != "$database_user" ]] \
+        || die "PostgreSQL exporter role must differ from POSTGRES_USER"
+    if ! env_value POSTGRES_EXPORTER_PASSWORD "$APP_ENV" >/dev/null; then
+        log "initializing the PostgreSQL exporter credential"
+        set_env_value POSTGRES_EXPORTER_PASSWORD "$(openssl rand -hex 32)" "$APP_ENV"
+    fi
+
+    for volume in vpn_redis_data vpn_prometheus_data; do
+        if ! docker volume inspect "$volume" >/dev/null 2>&1; then
+            log "creating external volume ${volume}"
+            docker volume create "$volume" >/dev/null
+        fi
+        docker volume inspect "$volume" >/dev/null \
+            || die "external volume ${volume} is unavailable"
+    done
+}
+
+bootstrap_postgres_exporter_role() {
+    local connection_result
+    local exporter_database
+    local exporter_password
+    local exporter_user
+    local database_user
+    local memberships
+    local role_is_safe
+
+    exporter_user="$(env_value POSTGRES_EXPORTER_USER "$APP_ENV")"
+    exporter_password="$(env_value POSTGRES_EXPORTER_PASSWORD "$APP_ENV")"
+    exporter_database="$(env_value POSTGRES_DB "$APP_ENV")"
+    database_user="$(env_value POSTGRES_USER "$APP_ENV")"
+    [[ "$exporter_user" == "$POSTGRES_EXPORTER_ROLE" ]] \
+        || die "refusing to grant monitoring privileges to an unexpected role"
+    [[ "$exporter_user" != "$database_user" ]] \
+        || die "refusing to alter the application PostgreSQL role for monitoring"
+
+    log "reconciling the dedicated read-only PostgreSQL exporter role"
+    docker exec -i \
+        -e POSTGRES_EXPORTER_PASSWORD="$exporter_password" \
+        "$DB_CONTAINER_ID" sh -ec \
+        'exec psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+        <<'SQL'
+\getenv exporter_password POSTGRES_EXPORTER_PASSWORD
+SELECT 'CREATE ROLE vpn_exporter'
+WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vpn_exporter') \gexec
+ALTER ROLE vpn_exporter WITH
+    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS
+    CONNECTION LIMIT 5 PASSWORD :'exporter_password';
+ALTER ROLE vpn_exporter SET search_path TO pg_catalog;
+ALTER ROLE vpn_exporter SET default_transaction_read_only TO on;
+SELECT format(
+    'GRANT CONNECT ON DATABASE %I TO vpn_exporter',
+    current_database()
+) \gexec
+GRANT pg_monitor TO vpn_exporter;
+SQL
+
+    role_is_safe="$(db_psql -Atc \
+        "SELECT rolcanlogin AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls FROM pg_roles WHERE rolname = '${POSTGRES_EXPORTER_ROLE}'")"
+    [[ "$role_is_safe" == "t" ]] \
+        || die "PostgreSQL exporter role has unsafe attributes"
+    memberships="$(db_psql -Atc \
+        "SELECT coalesce(string_agg(granted.rolname, ',' ORDER BY granted.rolname), '') FROM pg_auth_members membership JOIN pg_roles granted ON granted.oid = membership.roleid JOIN pg_roles member ON member.oid = membership.member WHERE member.rolname = '${POSTGRES_EXPORTER_ROLE}'")"
+    [[ "$memberships" == "pg_monitor" ]] \
+        || die "PostgreSQL exporter role has unexpected role memberships"
+
+    connection_result="$(docker exec \
+        -e PGPASSWORD="$exporter_password" \
+        -e EXPORTER_DB="$exporter_database" \
+        "$DB_CONTAINER_ID" sh -ec \
+        'exec psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U vpn_exporter -d "$EXPORTER_DB" -Atc "SELECT 1"')" \
+        || die "PostgreSQL exporter credential verification failed"
+    [[ "$connection_result" == "1" ]] \
+        || die "PostgreSQL exporter credential returned an unexpected result"
+}
+
 create_logical_backup() {
     local container_id="$1"
     local destination="$2"
@@ -260,6 +353,8 @@ done
     || die "release points at an unexpected application env file"
 [[ "$(env_value VPN_MANAGER_TLS_DIR_PROD "$RELEASE_ENV")" == "/etc/vpn-hub/manager-pki" ]] \
     || die "release points at an unexpected Manager TLS directory"
+[[ "$(env_value ADMIN_PUBLIC_ORIGIN "$RELEASE_ENV")" =~ ^https://[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?$ ]] \
+    || die "release has an invalid public admin HTTPS origin"
 
 declare -a image_keys=(
     VPN_ADMIN_IMAGE
@@ -361,12 +456,7 @@ else
         > "$BACKUP_DIR/vpn_db_data.tar.gz.sha256"
 fi
 
-if ! env_value REDIS_PASSWORD "$APP_ENV" >/dev/null; then
-    log "initializing production Redis credential"
-    set_env_value REDIS_PASSWORD "$(openssl rand -hex 32)" "$APP_ENV"
-fi
-docker volume inspect vpn_redis_data >/dev/null 2>&1 \
-    || docker volume create vpn_redis_data >/dev/null
+prepare_runtime_credentials_and_volumes
 
 readonly -a COMPOSE=(
     docker compose
@@ -527,6 +617,8 @@ log "preflight Telegram smoke passed"
 cleanup_preflight
 PREFLIGHT_CONTAINER=""
 PREFLIGHT_NETWORK=""
+
+bootstrap_postgres_exporter_role
 
 LIVE_MIGRATION_STARTED=true
 log "applying migration to production"

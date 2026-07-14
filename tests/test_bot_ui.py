@@ -172,7 +172,8 @@ async def test_create_config_presents_monthly_price_without_hourly_microcharge(
     async def register(*args, **kwargs):
         return SimpleNamespace(id=1)
 
-    async def list_servers():
+    async def list_servers(*, available_only=False):
+        assert available_only is True
         return [SimpleNamespace(id=7, location="🇳🇱", name="Amsterdam")]
 
     monkeypatch.setattr(configs, "get_or_create_user", register)

@@ -5,6 +5,7 @@ import pytest
 from core.db.unit_of_work import uow
 from core.exceptions import InsufficientBalanceError, InvalidOperationError
 from core.services import BillingService, ConfigService, ServerService, UserService
+from tests.fleet_test_support import mark_server_ready
 
 
 class DummyGateway:
@@ -33,6 +34,12 @@ class DummyGateway:
         return []
 
 
+async def _create_ready_server(server_service: ServerService, **fields):
+    server = await server_service.create(**fields)
+    await mark_server_ready(server.id)
+    return server
+
+
 @pytest.mark.asyncio
 async def test_create_requires_balance(monkeypatch, sessionmaker):
     monkeypatch.setattr(
@@ -45,7 +52,8 @@ async def test_create_requires_balance(monkeypatch, sessionmaker):
     billing = BillingService(uow, per_config_cost=1)
 
     user = await user_svc.register(55)
-    server = await server_svc.create(
+    server = await _create_ready_server(
+        server_svc,
         name="srvbalance",
         ip="1.1.1.1",
         port=22,
@@ -78,7 +86,8 @@ async def test_services_workflow(monkeypatch, sessionmaker):
 
     # create user and server
     user = await user_svc.register(100)
-    server = await server_svc.create(
+    server = await _create_ready_server(
+        server_svc,
         name="srv",
         ip="1.1.1.1",
         port=22,
@@ -133,7 +142,8 @@ async def test_billing(monkeypatch, sessionmaker):
     billing = BillingService(uow, per_config_cost=3)
 
     user = await user_svc.register(10)
-    server = await server_svc.create(
+    server = await _create_ready_server(
+        server_svc,
         name="srv2",
         ip="1.1.1.1",
         port=22,
@@ -177,7 +187,8 @@ async def test_charge_all_returns_dict(monkeypatch, sessionmaker):
     billing = BillingService(uow, per_config_cost=2)
 
     user = await user_svc.register(99)
-    server = await server_svc.create(
+    server = await _create_ready_server(
+        server_svc,
         name="srvret",
         ip="1.1.1.1",
         port=22,
@@ -214,7 +225,8 @@ async def test_billing_suspend_unsuspend(monkeypatch, sessionmaker):
     billing = BillingService(uow, per_config_cost=3)
 
     user = await user_svc.register(20)
-    server = await server_svc.create(
+    server = await _create_ready_server(
+        server_svc,
         name="srv3",
         ip="1.1.1.1",
         port=22,
@@ -257,7 +269,8 @@ async def test_server_update_and_user_with_configs(monkeypatch, sessionmaker):
     billing = BillingService(uow, per_config_cost=1)
 
     user = await user_svc.register(200)
-    server = await server_svc.create(
+    server = await _create_ready_server(
+        server_svc,
         name="srv4",
         ip="1.1.1.1",
         port=22,

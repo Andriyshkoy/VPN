@@ -21,6 +21,7 @@ from core.exceptions import (
     InvalidOperationError,
 )
 from core.services import BillingService, ServerService, UserService
+from tests.fleet_test_support import mark_server_ready
 
 
 class BillingGateway:
@@ -62,6 +63,7 @@ async def _user_and_server(*, balance: Decimal = Decimal("0.00")):
         api_key="secret",
         cost=0,
     )
+    await mark_server_ready(server.id)
     return user, server
 
 

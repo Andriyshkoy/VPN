@@ -9,6 +9,7 @@ from core.db.unit_of_work import uow
 from core.domain import VPNOperationKind, VPNOperationStatus, VPNState
 from core.exceptions import APINotFoundError, APITransportError
 from core.services import ConfigService, ServerService, UserService
+from tests.fleet_test_support import mark_server_ready
 
 
 class LifecycleGateway:
@@ -63,6 +64,7 @@ async def _user_and_server(tg_id: int = 70001):
         api_key="secret",
         cost=0,
     )
+    await mark_server_ready(server.id)
     return user, server
 
 

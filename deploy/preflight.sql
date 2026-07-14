@@ -9,7 +9,7 @@ BEGIN
       INTO revision_count, current_revision
       FROM alembic_version;
 
-    IF revision_count <> 1 OR current_revision <> 'f1a8c3d9e742' THEN
+    IF revision_count <> 1 OR current_revision <> 'd4e7f9a1b2c3' THEN
         RAISE EXCEPTION 'unexpected Alembic revision: %', current_revision;
     END IF;
 

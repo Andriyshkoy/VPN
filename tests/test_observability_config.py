@@ -165,6 +165,15 @@ def test_nginx_explicitly_denies_operational_endpoints():
         assert "proxy_pass" not in body
 
 
+def test_nginx_preserves_browser_authority_for_same_origin_checks():
+    config = (ROOT / "nginx/nginx.conf").read_text()
+
+    # `$host` drops a non-default port (for example local :14081), causing a
+    # legitimate browser Origin to fail the backend CSRF same-origin check.
+    assert config.count("proxy_set_header Host $http_host;") == 2
+    assert "proxy_set_header Host $host;" not in config
+
+
 def test_production_runbook_uses_an_explicit_maintenance_safe_service_list():
     documentation = (ROOT / "docs/observability.md").read_text()
 

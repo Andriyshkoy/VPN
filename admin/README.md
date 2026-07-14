@@ -1,59 +1,104 @@
-# VPN Admin API
+# VPN Hub Admin API
 
-The FastAPI application is exposed through Nginx at `/api`; login is available
-at `/login`. Obtain a token with `POST /login` and send it on protected requests:
+The admin backend is a versioned, same-origin control plane under
+`/api/admin/v1`. The React console is the primary client. PostgreSQL stores
+administrator identities, revocable sessions, lockout state, actions and the
+immutable audit trail; Redis is not part of admin authentication.
 
-```text
-Authorization: Bearer <token>
-```
+## Authentication and request safety
 
-Tokens are stored in Redis with a one-hour TTL.
+`POST /api/admin/v1/auth/login` accepts `username` and `password`, then sets a
+`SameSite=Strict` HttpOnly session cookie plus a readable double-submit CSRF
+cookie. Every `POST`, `PATCH` and `DELETE` must send the same CSRF value in
+`X-CSRF-Token`. Mutations also enforce exact same-origin requests. CORS is
+disabled because both production Nginx and the local Vite proxy are
+same-origin.
 
-## Endpoints
+The legacy `ADMIN_USERNAME`/`ADMIN_PASSWORD_HASH` pair bootstraps the first
+persisted owner on a successful login. Password failures are rate-limited and
+persisted account lockout works across API workers. Session values and client
+addresses are stored only as keyed/hash digests; logout can revoke either the
+current session or all sessions.
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `POST` | `/login` | Authenticate and return `{"token": "..."}` |
-| `GET` | `/api/servers` | List servers (`limit`, `offset`, `host`, `location`) |
-| `POST` | `/api/servers` | Create a server |
-| `GET` | `/api/servers/{server_id}` | Get a server |
-| `PATCH` | `/api/servers/{server_id}` | Update supplied server fields |
-| `DELETE` | `/api/servers/{server_id}` | Delete a drained server |
-| `GET` | `/api/users` | List users (`limit`, `offset`, `username`, `tg_id`) |
-| `POST` | `/api/users` | Create/register a user |
-| `GET` | `/api/users/{user_id}` | Get a user |
-| `PATCH` | `/api/users/{user_id}` | Update supplied user fields |
-| `DELETE` | `/api/users/{user_id}` | Delete a user without configs or financial history |
-| `POST` | `/api/users/{user_id}/topup` | Add a positive amount through the ledger |
-| `POST` | `/api/users/{user_id}/withdraw` | Withdraw a positive amount through the ledger |
-| `GET` | `/api/configs` | List configs (`limit`, `offset`, `server_id`, `owner_id`, `suspended`) |
-| `GET` | `/api/configs/{config_id}` | Get a config |
-
-Deletion endpoints keep the response shape `{"deleted": true|false}`. They
-return `false` when deletion would discard managed VPN credentials or immutable
-financial history.
-
-`topup` and `withdraw` accept an optional `Idempotency-Key` header. Reuse the
-same value when retrying one administrative balance operation. Attempts to
-change a Manager IP, port, or API key while that server still owns configs are
-rejected with HTTP 409 until the server is drained.
-
-Server responses keep the `api_key` field for frontend compatibility, but its
-value is always `********`; decrypted Manager credentials are never returned.
-
-## Examples
+Example with a local, non-secure cookie configuration:
 
 ```bash
-TOKEN=$(curl -sS http://localhost:14081/login \
+curl -sS -c cookies.txt http://localhost:14081/api/admin/v1/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"change-me"}' | jq -r .token)
+  -d '{"username":"admin","password":"change-me"}' >auth.json
 
-curl -sS http://localhost:14081/api/users \
-  -H "Authorization: Bearer $TOKEN"
+CSRF=$(jq -r .csrf_token auth.json)
+curl -sS -b cookies.txt http://localhost:14081/api/admin/v1/users
 
-curl -sS http://localhost:14081/api/users/1/topup \
-  -X POST \
-  -H "Authorization: Bearer $TOKEN" \
+curl -sS -b cookies.txt \
+  -X POST http://localhost:14081/api/admin/v1/users/1/balance-adjustments \
+  -H "X-CSRF-Token: ${CSRF}" \
+  -H 'Idempotency-Key: support-case-123' \
   -H 'Content-Type: application/json' \
-  -d '{"amount":100}'
+  -d '{"direction":"credit","amount":"50.00","reason_code":"support_credit","comment":"Manual support credit","expected_balance":"0.00","expected_ledger_entry_id":null}'
 ```
+
+Never put a session or CSRF token in a URL, browser storage, log or source
+file. Production uses secure cookies and HTTPS.
+
+## Roles
+
+Permissions are checked by the API, not only hidden in the frontend:
+
+| Role | Intended scope |
+| --- | --- |
+| `owner` | Every administrative permission |
+| `support` | Users, referral context and config support; read-only servers |
+| `finance` | Balances, ledger, payments, revenue and financial audit |
+| `ops` | Config operations, server lifecycle, monitoring and audit |
+| `viewer` | Read-only business and fleet overview |
+
+Responses are permission-shaped: for example, dashboard finance or fleet data
+is omitted when the actor lacks that permission, and the operations timeline
+never unions server actions into a finance-only view.
+
+## API areas
+
+| Area | Paths and capability |
+| --- | --- |
+| Session | `/auth/login`, `/auth/me`, `/auth/logout`, `/auth/logout-all` |
+| Dashboard | `/dashboard`, `/analytics/overview`, `/analytics/finance/timeseries` |
+| User 360 | `/users`, `/users/{id}` plus paginated ledger, payments, configs, VPN operations, ancestry, children and rewards |
+| Balance | `POST /users/{id}/balance-adjustments` with decimal strings, idempotency and optimistic balance/ledger guards |
+| Finance | `/finance/ledger`, `/finance/payments`, `/finance/billing-runs`, `/finance/referral-rewards` |
+| Referrals | `/referrals/tree` with bounded direction/depth traversal |
+| Configs | `/configs`, `/configs/{id}`, `POST /configs/{id}/actions` |
+| Fleet | `/servers`, status/history, lifecycle changes and `POST /servers/{id}/actions` |
+| Operations | `/operations` unified, permission-filtered VPN/server action history |
+| Operations data | `/observability/summary`, `/audit-events` |
+
+All list endpoints are bounded and paginated. Search values are type-bounded
+before reaching PostgreSQL. Monetary fields are serialized as decimal strings,
+never JSON floating-point numbers. Remote Manager keys are write-only and
+masked in every response.
+
+## Fleet safety model
+
+New servers always enter a quarantined `disabled` state and do not accept
+placements. Endpoint or credential rotation re-quarantines the node and clears
+its learned Manager identity. Activation requires an explicit action after a
+fresh authenticated Manager status sample proves readiness, data-plane health
+and stable instance identity.
+
+Drain and retirement are guarded by desired and observed config state. A
+config remains managed until revocation is observed remotely, so a failed or
+pending revoke cannot make a destructive server change appear safe. Server
+actions use idempotency keys and version guards and are recorded independently
+from immutable audit events.
+
+## Compatibility and observability
+
+The old `/login` and unversioned Bearer API are registered only when
+`ADMIN_LEGACY_API_ENABLED=true`; it is `false` by default and intended solely
+as a short rollback switch. Internal `/health`, `/ready` and `/metrics` are not
+browser admin endpoints. Production Nginx exposes only the versioned admin API
+and SPA routes.
+
+Request and correlation IDs are validated, returned as `X-Request-ID` and
+`X-Correlation-ID`, and attached to audit/action records. Audit rows are
+append-only at the database layer.

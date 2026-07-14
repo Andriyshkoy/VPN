@@ -1,5 +1,10 @@
 from .accounting import AccountingService, BalanceHistoryItem, BalanceHistoryPage
-from .api_gateway import APIGateway, ManagerClientInventory, ManagerClientState
+from .api_gateway import (
+    APIGateway,
+    ManagerClientInventory,
+    ManagerClientState,
+    ManagerFleetStatus,
+)
 from .billing import BillingService
 from .config import ConfigService
 from .models import Config, Server, User
@@ -26,6 +31,7 @@ __all__ = [
     "APIGateway",
     "ManagerClientInventory",
     "ManagerClientState",
+    "ManagerFleetStatus",
     "BillingService",
     "UserService",
     "ServerService",

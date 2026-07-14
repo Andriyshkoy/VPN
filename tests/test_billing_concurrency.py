@@ -21,6 +21,7 @@ from core.db.unit_of_work import uow
 from core.exceptions import InvalidOperationError
 from core.services import BillingService, ServerService, UserService
 from core.services.billing import PaymentIntent
+from tests.fleet_test_support import mark_server_ready
 
 POSTGRES_TEST_URL = os.getenv("POSTGRES_TEST_URL")
 pytestmark = pytest.mark.skipif(
@@ -123,6 +124,7 @@ async def test_concurrent_paid_config_replay_creates_and_charges_once(monkeypatc
             api_key="secret",
             cost=0,
         )
+        await mark_server_ready(server.id)
         billing = BillingService(uow, per_config_cost="1.00")
 
         async def purchase():

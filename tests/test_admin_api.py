@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 
 from core.db.unit_of_work import uow
 from core.services import BillingService, ConfigService, ServerService, UserService
+from tests.fleet_test_support import mark_server_ready
 
 
 class DummyGateway:
@@ -41,6 +42,7 @@ async def test_user_endpoints(monkeypatch, sessionmaker):
     hashed = bcrypt.hashpw(password, bcrypt.gensalt()).decode()
     monkeypatch.setenv("ADMIN_USERNAME", "admin")
     monkeypatch.setenv("ADMIN_PASSWORD_HASH", hashed)
+    monkeypatch.setenv("ADMIN_LEGACY_API_ENABLED", "true")
 
     import core.config as core_config
 
@@ -116,6 +118,7 @@ async def test_config_list(monkeypatch, sessionmaker):
     hashed = bcrypt.hashpw(password, bcrypt.gensalt()).decode()
     monkeypatch.setenv("ADMIN_USERNAME", "admin")
     monkeypatch.setenv("ADMIN_PASSWORD_HASH", hashed)
+    monkeypatch.setenv("ADMIN_LEGACY_API_ENABLED", "true")
 
     import core.config as core_config
 
@@ -143,6 +146,7 @@ async def test_config_list(monkeypatch, sessionmaker):
         api_key="k",
         cost=1,
     )
+    await mark_server_ready(server.id)
     await billing.top_up(user.id, 10)
     cfg = await billing.create_paid_config(
         server_id=server.id,

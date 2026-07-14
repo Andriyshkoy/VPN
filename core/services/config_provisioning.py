@@ -11,6 +11,11 @@ from core.exceptions import (
 )
 
 from ._config_shared import _ConfigContext
+from .fleet_placement import (
+    is_managed_config,
+    latest_server_status,
+    placement_decision,
+)
 from .models import Config
 
 
@@ -66,6 +71,14 @@ class ConfigProvisioningMixin:
         server = await repos["servers"].get_for_update(server_id)
         if not server:
             raise ServerNotFoundError(f"Server {server_id} not found")
+        existing_configs = await repos["configs"].list(server_id=server_id)
+        managed_configs = sum(is_managed_config(config) for config in existing_configs)
+        latest_status = await latest_server_status(
+            repos["servers"].session,
+            server.id,
+        )
+        if not placement_decision(server, managed_configs, latest_status).allowed:
+            raise InvalidOperationError("VPN server is not accepting new configs")
         user = await repos["users"].get(id=owner_id)
         if not user:
             raise UserNotFoundError(f"User {owner_id} not found")
