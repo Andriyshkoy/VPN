@@ -82,7 +82,7 @@ jobs:
           alembic upgrade head
           alembic current
           alembic check
-          test "$(psql 'postgresql://vpn:vpn@127.0.0.1:5432/vpn_migration' -Atc 'SELECT version_num FROM alembic_version')" = "f1a8c3d9e742"
+          test "$(psql 'postgresql://vpn:vpn@127.0.0.1:5432/vpn_migration' -Atc 'SELECT version_num FROM alembic_version')" = "d4e7f9a1b2c3"
 
   frontend:
     name: Frontend
@@ -110,6 +110,9 @@ jobs:
 
       - name: Build frontend
         run: npm run build
+
+      - name: Test frontend contracts and interactions
+        run: npm test
 
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
@@ -172,10 +175,25 @@ jobs:
             exit 1
           fi
 
+      - name: Lint GitHub Actions workflows
+        run: |
+          docker run --rm \
+            --volume "$PWD:/repo:ro" \
+            --workdir /repo \
+            rhysd/actionlint:1.7.7@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9
+
       - name: Validate deployment shell behavior
         run: |
-          shellcheck deploy/production_canary.sh tests/test_production_canary_cleanup.sh
+          shellcheck \
+            deploy/production_canary.sh \
+            deploy/activate_admin_hub.sh \
+            deploy/promote_full_production.sh \
+            tests/test_production_canary_cleanup.sh \
+            tests/test_admin_hub_activation.sh \
+            tests/test_full_production_promotion.sh
           bash tests/test_production_canary_cleanup.sh
+          bash tests/test_admin_hub_activation.sh
+          bash tests/test_full_production_promotion.sh
 
   images:
     name: Image build (${{ matrix.key }})

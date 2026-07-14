@@ -1,0 +1,144 @@
+name: Activate admin hub
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type ACTIVATE_ADMIN_HUB to activate the staged main SHA
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Activation gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require main and explicit confirmation
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          test "$RELEASE_REF" = "refs/heads/main"
+          test "$CONFIRMATION" = "ACTIVATE_ADMIN_HUB"
+
+      - name: Require successful CI for the exact activation SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          test "$(gh api "repos/$REPOSITORY/commits/main" --jq .sha)" = "$RELEASE_SHA"
+          gh api \
+            "repos/$REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$RELEASE_SHA&event=push&per_page=20" \
+            | jq -e --arg sha "$RELEASE_SHA" \
+              '.workflow_runs | length > 0
+                and .[0].head_sha == $sha
+                and .[0].status == "completed"
+                and .[0].conclusion == "success"'
+
+      - name: Require successful bot canary for the exact activation SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh api \
+            "repos/$REPOSITORY/actions/workflows/release.yml/runs?head_sha=$RELEASE_SHA&event=workflow_dispatch&per_page=20" \
+            | jq -e --arg sha "$RELEASE_SHA" \
+              '.workflow_runs | length > 0
+                and .[0].head_sha == $sha
+                and .[0].status == "completed"
+                and .[0].conclusion == "success"'
+
+  activate:
+    name: Activate staged hub
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: production
+    steps:
+      - name: Reconfirm release gates after production approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          test "$(gh api "repos/$REPOSITORY/commits/main" --jq .sha)" = "$RELEASE_SHA"
+          gh api \
+            "repos/$REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$RELEASE_SHA&event=push&per_page=20" \
+            | jq -e --arg sha "$RELEASE_SHA" \
+              '.workflow_runs | length > 0
+                and .[0].head_sha == $sha
+                and .[0].status == "completed"
+                and .[0].conclusion == "success"'
+          gh api \
+            "repos/$REPOSITORY/actions/workflows/release.yml/runs?head_sha=$RELEASE_SHA&event=workflow_dispatch&per_page=20" \
+            | jq -e --arg sha "$RELEASE_SHA" \
+              '.workflow_runs | length > 0
+                and .[0].head_sha == $sha
+                and .[0].status == "completed"
+                and .[0].conclusion == "success"'
+
+      - name: Prepare strict SSH identity
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          : "${SSH_PRIVATE_KEY:?SSH_PRIVATE_KEY is required}"
+          : "${SSH_KNOWN_HOSTS:?SSH_KNOWN_HOSTS is required}"
+          install -d -m 0700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_deploy"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 0600 "$HOME/.ssh/id_deploy" "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/id_deploy" >/dev/null
+
+      - name: Require the exact successful canary on the production host
+        env:
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          : "${DEPLOY_PATH:?DEPLOY_PATH is required}"
+          : "${SSH_HOST:?SSH_HOST is required}"
+          : "${SSH_USER:?SSH_USER is required}"
+          [[ "$DEPLOY_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]]
+          release_dir="$DEPLOY_PATH/releases/$RELEASE_SHA"
+          ssh -i "$HOME/.ssh/id_deploy" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" \
+            "test \"\$(sudo -n cat '$DEPLOY_PATH/current-release')\" = '$RELEASE_SHA' && \
+             sudo -n test -x '$release_dir/activate_admin_hub.sh' && \
+             test \"\$(sudo -n awk -F= '\$1 == \"RELEASE_SHA\" { print \$2 }' '$release_dir/release.env')\" = '$RELEASE_SHA'"
+
+      - name: Activate the staged admin hub and monitoring
+        env:
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          [[ "$DEPLOY_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]]
+          release_dir="$DEPLOY_PATH/releases/$RELEASE_SHA"
+          ssh -i "$HOME/.ssh/id_deploy" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" \
+            "sudo -n env DEPLOY_ROOT='$DEPLOY_PATH' RELEASE_DIR='$release_dir' RELEASE_SHA='$RELEASE_SHA' bash '$release_dir/activate_admin_hub.sh'"
+
+      - name: Record activation summary
+        run: |
+          {
+            echo '### Production admin hub activated'
+            echo
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo '- Used the digest-pinned bundle already exercised by the bot canary.'
+            echo '- Activated only admin, SPA, loopback proxy, and monitoring services.'
+            echo '- Did not run migrations or change bot and financial mutation services.'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -62,6 +62,11 @@ services:
       OBSERVABILITY_ENABLED: "true"
       STATSD_HOST: statsd_exporter
       VPN_HUB_SERVICE: admin
+      # The development gateway is loopback-only HTTP. Production keeps the
+      # default HTTPS-only session cookies.
+      ADMIN_COOKIE_SECURE: "false"
+      ADMIN_TRUSTED_PROXY_CIDRS: 172.16.0.0/12,127.0.0.0/8,::1/128
+      PROMETHEUS_API_URL: http://prometheus:9090
     healthcheck:
       test:
         [
@@ -219,8 +224,6 @@ services:
       context: ./admin_frontend
       dockerfile: Dockerfile
     depends_on: [admin]
-    environment:
-      VITE_ADMIN_API_URL: ${VITE_ADMIN_API_URL:-http://localhost:14081}
 
   nginx:
     build: ./nginx

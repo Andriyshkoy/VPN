@@ -5,6 +5,7 @@ import pytest
 
 from core.db.unit_of_work import uow
 from core.services import BillingService, ServerService, UserService
+from tests.fleet_test_support import mark_server_ready
 
 
 @pytest.mark.asyncio
@@ -71,6 +72,7 @@ async def test_charge_and_notify(monkeypatch, sessionmaker):
         api_key="k",
         cost=1,
     )
+    await mark_server_ready(server.id)
 
     await billing.top_up(user.id, 30)
     await billing.create_paid_config(

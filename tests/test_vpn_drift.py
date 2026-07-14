@@ -105,6 +105,8 @@ async def create_hub_state(
         location="test",
         api_key="secret",
         cost=0,
+        lifecycle_state="active",
+        accepts_new_configs=True,
     )
     async with uow() as repos:
         config = await repos["configs"].create(

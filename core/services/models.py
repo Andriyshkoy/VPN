@@ -13,6 +13,16 @@ class Server:
     monthly_cost: Decimal
     location: str
     api_key: str
+    lifecycle_state: str = "active"
+    accepts_new_configs: bool = True
+    max_configs: int | None = None
+    capacity_reserve: int = 0
+    placement_weight: Decimal = Decimal("1")
+    provider: str | None = None
+    public_endpoint: str | None = None
+    manager_instance_id: str | None = None
+    version: int = 1
+    updated_at: datetime | None = None
 
     @classmethod
     def from_orm(cls, obj):
@@ -25,6 +35,16 @@ class Server:
             monthly_cost=obj.monthly_cost,
             location=obj.location,
             api_key=obj.api_key,
+            lifecycle_state=getattr(obj, "lifecycle_state", "active"),
+            accepts_new_configs=getattr(obj, "accepts_new_configs", True),
+            max_configs=getattr(obj, "max_configs", None),
+            capacity_reserve=getattr(obj, "capacity_reserve", 0),
+            placement_weight=getattr(obj, "placement_weight", Decimal("1")),
+            provider=getattr(obj, "provider", None),
+            public_endpoint=getattr(obj, "public_endpoint", None),
+            manager_instance_id=getattr(obj, "manager_instance_id", None),
+            version=getattr(obj, "version", 1),
+            updated_at=getattr(obj, "updated_at", None),
         )
 
 

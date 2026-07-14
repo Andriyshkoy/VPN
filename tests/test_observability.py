@@ -20,6 +20,7 @@ from alembic.script import ScriptDirectory
 from core.config import settings
 from core.db.models.billing_run import BillingRun
 from core.db.models.notification_outbox import NotificationOutbox
+from core.db.models.server import Server, VPNServerStatus
 from core.db.models.telegram_update import TelegramUpdateInbox
 from core.db.models.vpn_operation import VPNOperation
 from core.db.schema import EXPECTED_ALEMBIC_REVISION
@@ -226,6 +227,44 @@ async def test_database_metrics_report_backlog_age_and_outbox_lag(sessionmaker):
                 received_at=now - timedelta(minutes=30),
             )
         )
+        server = Server(
+            name="metrics-fleet-node",
+            ip="192.0.2.50",
+            port=16290,
+            host="metrics-fleet-node.example.test",
+            monthly_cost=Decimal("10.00"),
+            location="NL",
+            api_key="metrics-manager-secret",
+            lifecycle_state="active",
+            accepts_new_configs=True,
+            max_configs=10,
+            capacity_reserve=2,
+            manager_instance_id="56c1ab62-0c42-4f03-83c6-4c8e6c43e29b",
+        )
+        session.add(server)
+        await session.flush()
+        session.add(
+            VPNServerStatus(
+                server_id=server.id,
+                kind="status",
+                success=True,
+                manager_instance_id=server.manager_instance_id,
+                collected_at=now - timedelta(seconds=60),
+                snapshot={
+                    "readiness": {"ready": True, "errors": []},
+                    "data_plane": {
+                        "status": "up",
+                        "online_sessions": 3,
+                    },
+                    "pki": {
+                        "server_certificate": {
+                            "status": "expiring",
+                            "expires_at": (now + timedelta(days=20)).isoformat(),
+                        }
+                    },
+                },
+            )
+        )
 
     payload = await render_prometheus_metrics(redis_is_ready=False, now=now)
 
@@ -245,6 +284,15 @@ async def test_database_metrics_report_backlog_age_and_outbox_lag(sessionmaker):
     assert "vpn_hub_telegram_update_inbox_backlog 1" in payload
     assert "vpn_hub_telegram_update_inbox_oldest_backlog_age_seconds 1500" in payload
     assert "vpn_hub_telegram_update_inbox_dead 1" in payload
+    assert 'vpn_hub_fleet_servers{lifecycle="active"} 1' in payload
+    assert 'vpn_hub_fleet_server_health{status="healthy"} 1' in payload
+    assert "vpn_hub_fleet_servers_missing_status 0" in payload
+    assert "vpn_hub_fleet_oldest_status_age_seconds 60" in payload
+    assert "vpn_hub_fleet_online_sessions 3" in payload
+    assert "vpn_hub_fleet_capacity_total 10" in payload
+    assert "vpn_hub_fleet_capacity_available 8" in payload
+    assert "vpn_hub_fleet_servers_at_capacity 0" in payload
+    assert "metrics-manager-secret" not in payload
     assert "must-not-be-a-label" not in payload
     assert "private text" not in payload
     assert "telegram-private" not in payload

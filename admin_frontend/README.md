@@ -1,36 +1,54 @@
-# Admin Frontend
+# VPN Hub admin console
 
-This is a small React application for interacting with the VPN Admin API.
+Production-oriented React and TypeScript SPA for `/api/admin/v1`.
 
-## Setup
-
-Install dependencies:
+## Local development
 
 ```bash
-npm install
-```
-
-For standalone Vite development, create a `.env` file based on `.env.example`:
-
-```bash
-cp .env.example .env
-# edit .env if the Nginx/API origin differs
-```
-
-Environment variables used by the app:
-
-- `VITE_ADMIN_API_URL` – browser-visible Nginx/API origin. The example uses
-  `http://localhost:14081`, matching the root Docker Compose stack.
-
-The root Compose file injects this variable directly, so
-`admin_frontend/.env` is not required when the frontend runs in Compose.
-
-## Development
-
-Start the dev server with:
-
-```bash
+npm ci
 npm run dev
 ```
 
-Then open the shown URL in the browser and log in using the credentials configured on the server via the `/login` endpoint.
+Vite proxies `/api` to `http://localhost:8000` by default. Override the proxy
+only for local development:
+
+```bash
+ADMIN_API_PROXY=http://localhost:14081 npm run dev
+```
+
+The browser always uses same-origin `/api/admin/v1`; there is no build-time API
+origin or browser-visible credential.
+
+## Checks
+
+```bash
+npm run lint
+npm test
+npm run build
+```
+
+Vitest, React Testing Library and MSW cover session authentication, users,
+balance adjustments with optimistic guards, and protected route smoke tests.
+
+## Security model
+
+- Authentication uses the server-issued HttpOnly session cookie.
+- Every request sends `credentials: "include"`.
+- Mutations send the CSRF value from the `vpn_admin_csrf` cookie or the latest
+  auth response as `X-CSRF-Token`.
+- No credentials or session markers are stored in local storage.
+- Money is accepted and submitted as decimal strings, never floating-point
+  JSON numbers.
+- Balance and server actions use idempotency keys; balance writes also submit
+  the current balance and ledger snapshot, and server writes submit the server
+  version when required.
+
+The API adaptation layer lives in `src/api`. Backend wire formats are converted
+there into stable UI models, keeping nested users/configs and operational
+payload changes out of page components.
+
+## Container
+
+The Dockerfile builds hashed static assets in a Node stage and serves them from
+an unprivileged Nginx process on port `5173`. Browser routes fall back to
+`index.html`; immutable assets receive a one-year cache policy.

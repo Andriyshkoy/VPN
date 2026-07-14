@@ -202,3 +202,71 @@ groups:
           summary: "VPN Manager p95 latency is high"
           description: "Manager request p95, including retry backoff, exceeds five seconds."
           runbook: "docs/runbooks/observability.md#manager-latency"
+
+  - name: vpn-hub-fleet
+    rules:
+      - alert: VPNHubFleetServerUnreachable
+        expr: vpn_hub_fleet_server_health{status="unreachable"} > 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "A VPN Manager is unreachable"
+          description: "{{ $value }} managed VPN server(s) have a failed latest status check."
+          runbook: "docs/runbooks/observability.md#fleet-server-unreachable"
+
+      - alert: VPNHubFleetIdentityMismatch
+        expr: vpn_hub_fleet_server_health{status="instance_mismatch"} > 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "VPN Manager identity changed unexpectedly"
+          description: "{{ $value }} server endpoint(s) returned a different Manager instance ID."
+          runbook: "docs/runbooks/observability.md#fleet-identity-mismatch"
+
+      - alert: VPNHubFleetStatusMissingOrStale
+        expr: |
+          vpn_hub_fleet_servers_missing_status
+          + sum(vpn_hub_fleet_server_health{status="stale"})
+          + sum(vpn_hub_fleet_server_health{status="unknown"}) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "VPN fleet status is missing or stale"
+          description: "{{ $value }} active or draining VPN server(s) need a fresh health check."
+          runbook: "docs/runbooks/observability.md#fleet-status-stale"
+
+      - alert: VPNHubFleetServerUnhealthy
+        expr: vpn_hub_fleet_server_health{status="unhealthy"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "VPN Manager or OpenVPN data plane is unhealthy"
+          description: "{{ $value }} managed VPN server(s) report failed readiness."
+          runbook: "docs/runbooks/observability.md#fleet-server-unhealthy"
+
+      - alert: VPNHubFleetServerCertificateExpiring
+        expr: |
+          (vpn_hub_fleet_server_certificate_earliest_expiry_timestamp_seconds > time())
+          and
+          ((vpn_hub_fleet_server_certificate_earliest_expiry_timestamp_seconds - time()) < (30 * 24 * 60 * 60))
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "An OpenVPN server certificate expires soon"
+          description: "The earliest observed VPN server certificate expires within 30 days."
+          runbook: "docs/runbooks/observability.md#fleet-server-certificate-expiring"
+
+      - alert: VPNHubFleetPlacementCapacityExhausted
+        expr: vpn_hub_fleet_servers_at_capacity > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A placement-enabled VPN server reached capacity"
+          description: "{{ $value }} VPN server(s) cannot accept another configuration within their reserve policy."
+          runbook: "docs/runbooks/observability.md#fleet-capacity-exhausted"

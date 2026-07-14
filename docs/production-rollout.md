@@ -16,9 +16,9 @@ these profile gates.
    `PAYMENTS_ENABLED=false`, `PROVISIONING_ENABLED=false`, and
    `NOTIFICATIONS_ENABLED=false` for the initial canary. Successful-payment
    updates for invoices captured before the switch remain creditable.
-4. Set `REDIS_PASSWORD` from a URL-safe generator such as
-   `openssl rand -hex 32`. Production Compose injects that same value into the
-   backend `REDIS_URL`; do not use unescaped `@`, `/`, `:`, or `%` characters.
+4. Preserve any existing `REDIS_PASSWORD`. On first guarded deployment the
+   canary generates a URL-safe value with `openssl rand -hex 32` when it is
+   absent and persists it in the root-only production `.env`.
 5. Require the Manager control plane:
 
    ```dotenv
@@ -73,6 +73,12 @@ serialized `production` environment, and uploads only reviewed deployment
 files. Application secrets, the Telegram token, the Fernet key, and database
 credentials remain solely in `/opt/vpn/.env` on the server.
 
+Set the optional repository variable `ADMIN_PUBLIC_ORIGIN` to the path-free
+HTTPS origin served by the host proxy. It defaults to
+`https://admin.vpn.andriyshkoy.ru`. Every mutating workflow rechecks that its SHA
+is still current `main` and has the required exact successful predecessor runs
+after production approval, immediately before preparing SSH access.
+
 The guarded remote script performs these gates before bot traffic:
 
 1. Stops and verifies the absence of old writers.
@@ -81,8 +87,13 @@ The guarded remote script performs these gates before bot traffic:
 3. Restores that dump into disposable PostgreSQL 16 and applies the exact
    digest-pinned migrations image.
 4. Runs `alembic check`, accounting invariants, count/balance comparisons, and
-   a live read-only Manager mTLS inventory test.
-5. Migrates the live database and starts only the bot. Billing, payments,
+   authenticated Manager `/status` plus inventory checks. Every Manager must
+   report ready, an `up` OpenVPN data plane, and a unique/matching instance ID.
+5. Creates the external Redis/Prometheus volumes when absent and reconciles a
+   dedicated `vpn_exporter` login with only `pg_monitor` membership. The
+   exporter credential is generated into the root-only `.env` and verified by
+   a real database login; the application database owner is never reused.
+6. Migrates the live database and starts only the bot. Billing, payments,
    provisioning, notifications, worker, scheduler, admin, UI, and monitoring
    remain off during this canary.
 
@@ -94,13 +105,14 @@ or automatically restores over newly accepted Telegram updates.
 
 The file pins the project name to `vpn` and declares external volumes. Existing
 production PostgreSQL must be exactly `vpn_db_data`; an alternate empty volume
-is a hard stop. Create the new persistent Redis/Prometheus volumes once before
-their first approved use:
+is a hard stop. The guarded canary creates the new Redis/Prometheus volumes on
+first use and verifies them again before activation. Operators can inspect all
+three identities without changing them:
 
 ```bash
 docker volume inspect vpn_db_data
-docker volume create vpn_redis_data
-docker volume create vpn_prometheus_data
+docker volume inspect vpn_redis_data
+docker volume inspect vpn_prometheus_data
 ```
 
 Never run `docker compose down -v`. External volumes are intentional protection
@@ -151,12 +163,12 @@ docker compose --env-file .env --env-file release.env \
   --entrypoint alembic migrations check
 ```
 
-The sole current revision must be `f1a8c3d9e742`. Before starting any
+The sole current revision must be `d4e7f9a1b2c3`. Before starting any
 application process, reconcile `user.balance` against `sum(ledger_entry.amount)`,
-verify every user has one unique 32-character referral code, and review the
-count and total of `referral_reward` rows created by the backfill. For the
-initial rollout, perform the read-only Manager smoke test and start only the
-bot canary, leaving admin, worker, and scheduler off:
+verify every user has one unique 32-character referral code, and confirm that
+the admin/fleet migrations did not change user, configuration, or aggregate
+balance counts. Perform the read-only Manager smoke test and start only the bot
+canary, leaving admin, worker, and scheduler off:
 
 ```bash
 docker compose --env-file .env --env-file release.env \
@@ -166,34 +178,82 @@ docker compose --env-file .env --env-file release.env \
   -f docker-compose-prod.yml --profile bot up -d --no-deps bot
 ```
 
+After the bot canary is healthy, activate the admin control plane with the
+separate `Activate admin hub` workflow. It rechecks the exact release SHA,
+schema head, bot health, loopback HTTP contract and the configured public HTTPS
+origin. Public acceptance verifies the normal certificate/SNI path, the SPA,
+and the same-origin unauthenticated API boundary before committing the marker.
+It then starts only admin, frontend, proxy and monitoring; it does not enable
+billing, payments, provisioning, notifications, worker, or scheduler.
+
 Readiness requires PostgreSQL at the exact schema head, Redis, and valid Manager
 TLS material. Run a read-only drift audit and review aggregated findings; keep
 `VPN_DRIFT_REPAIR_ENABLED=false`.
 
-After explicit approval, start components one at a time:
+## Full production promotion
 
-```bash
-docker compose --env-file .env --env-file release.env \
-  -f docker-compose-prod.yml --profile worker up -d --no-deps rq_worker
+Run the manual `Promote full production` workflow with the exact confirmation
+`PROMOTE_FULL_PRODUCTION`. It accepts only the current `main` SHA and requires
+successful `CI`, `Release bot canary`, and `Activate admin hub` runs for that
+same SHA. The complete gate is repeated after the protected `production`
+environment approval; no image is rebuilt or uploaded at this stage.
+
+On the host, `promote_full_production.sh` acquires the same deployment lock and
+requires both `current-release` and `current-admin-hub` to equal the requested
+full SHA. It also requires the immutable staged manifest to remain fail-closed,
+the database to be at `d4e7f9a1b2c3`, all staged images and running canary
+containers to match their registry digests and revision labels, and both
+Manager and Telegram read-only smokes to pass.
+
+The script copies the active root-only `release.env` into a timestamped backup,
+then atomically installs a runtime manifest with this policy:
+
+```dotenv
+MAINTENANCE_MODE=false
+BILLING_ENABLED=true
+PAYMENTS_ENABLED=true
+PROVISIONING_ENABLED=true
+NOTIFICATIONS_ENABLED=false
+REFERRAL_REWARDS_ENABLED=true
+VPN_DRIFT_REPAIR_ENABLED=false
+OBSERVABILITY_ENABLED=true
 ```
 
+Admin is recreated and accepted first. A force-recreated RQ worker then starts
+before the bot is recreated and its ingress reopens. This happens only after
+public HTTPS, accounting, Manager mTLS and Telegram identity checks pass.
+`rq_scheduler` is force-recreated as the final service start. The script writes
+`current-production` only after every intended service is running the exact
+staged image and has loaded the promoted switches.
+
 Observe the durable Telegram inbox, payment intents, VPN operations, ledger,
-notification outbox, and queues before changing kill switches. Start
-`rq_scheduler` last, using the `billing-scheduler` profile, only after billing
-has been separately approved.
+notification outbox, RQ registries and billing periods immediately after
+promotion. Existing queued notifications remain paused; due idempotent billing
+periods can run as soon as the worker and scheduler are enabled.
 
 ## Rollback
 
-Prefer a code-only rollback while retaining schema head. After referral migration
-`f1a8c3d9e742`, the fallback image must understand the non-null invite code and
-referral accounting tables; pre-referral images cannot register users safely.
-Older production code also writes balances without the immutable ledger and
-must never run after migration `4a9f0d6c2e31` has been applied.
+Prefer a code-only rollback while retaining schema head. After admin/fleet
+migration `d4e7f9a1b2c3`, keep the admin control plane stopped unless its image
+understands database sessions, audit immutability and fleet lifecycle fields.
+Any bot fallback must still understand referral migration `f1a8c3d9e742`;
+pre-referral images cannot register users safely. Older production code also
+writes balances without the immutable ledger and must never run after migration
+`4a9f0d6c2e31` has been applied.
 
 Stop bot/worker/scheduler first. Do not downgrade the database while any new
 process is running. A database restore must use the post-key-rotation snapshot
 or explicitly restore a matching Manager key generation without logging the
 decrypted key.
+
+If full promotion fails before it is committed, the guarded script first stops
+scheduler, worker, bot and admin, atomically restores the backed-up fail-closed
+`release.env`, removes a matching partial `current-production` marker, and only
+then recreates admin and bot under that policy. It deliberately
+does not attempt to reverse already committed Telegram, payment, ledger, or VPN
+side effects. An unclean host interruption leaves `promotion-in-progress`; do
+not delete it until the running containers and the active `release.env` have
+been inspected against the referenced backup.
 
 Monitoring activation and exporter-role setup are documented in
 [`observability.md`](observability.md). Monitoring is optional and is never a

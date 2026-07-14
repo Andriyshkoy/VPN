@@ -36,6 +36,7 @@ jobs:
           RELEASE_SHA: ${{ github.sha }}
           REPOSITORY: ${{ github.repository }}
         run: |
+          test "$(gh api "repos/$REPOSITORY/commits/main" --jq .sha)" = "$RELEASE_SHA"
           gh api \
             "repos/$REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$RELEASE_SHA&event=push&per_page=20" \
             | jq -e --arg sha "$RELEASE_SHA" \
@@ -158,16 +159,20 @@ jobs:
 
       - name: Assemble fail-closed release environment
         env:
+          ADMIN_PUBLIC_ORIGIN: ${{ vars.ADMIN_PUBLIC_ORIGIN }}
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
           RELEASE_SHA: ${{ github.sha }}
         run: |
           : "${DEPLOY_PATH:?production DEPLOY_PATH variable is required}"
+          admin_public_origin="${ADMIN_PUBLIC_ORIGIN:-https://admin.vpn.andriyshkoy.ru}"
+          [[ "$admin_public_origin" =~ ^https://[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?$ ]]
           test "$(find release-fragments -type f -name '*.env' | wc -l)" -eq 6
           sort release-fragments/*.env > release.env
           {
             printf 'RELEASE_SHA=%s\n' "$RELEASE_SHA"
             printf 'VPN_ENV_FILE=%s/.env\n' "$DEPLOY_PATH"
             printf 'VPN_MANAGER_TLS_DIR_PROD=/etc/vpn-hub/manager-pki\n'
+            printf 'ADMIN_PUBLIC_ORIGIN=%s\n' "$admin_public_origin"
             printf 'MAINTENANCE_MODE=true\n'
             printf 'BILLING_ENABLED=false\n'
             printf 'PAYMENTS_ENABLED=false\n'
@@ -182,6 +187,21 @@ jobs:
           } >> release.env
           chmod 0600 release.env
           test "$(grep -Ec '^VPN_(ADMIN|BOT|BILLING|MIGRATIONS|ADMIN_FRONTEND|NGINX)_IMAGE=docker.io/.+@sha256:[0-9a-f]{64}$' release.env)" -eq 6
+
+      - name: Reconfirm current main and exact successful CI after approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          test "$(gh api "repos/$REPOSITORY/commits/main" --jq .sha)" = "$RELEASE_SHA"
+          gh api \
+            "repos/$REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$RELEASE_SHA&event=push&per_page=20" \
+            | jq -e --arg sha "$RELEASE_SHA" \
+              '.workflow_runs | length > 0
+                and .[0].head_sha == $sha
+                and .[0].status == "completed"
+                and .[0].conclusion == "success"'
 
       - name: Prepare strict SSH identity
         env:
@@ -219,6 +239,8 @@ jobs:
             deploy/manager_smoke.py \
             deploy/telegram_smoke.py \
             deploy/production_canary.sh \
+            deploy/activate_admin_hub.sh \
+            deploy/promote_full_production.sh \
             "$SSH_USER@$SSH_HOST:$remote_tmp/"
           scp -i "$HOME/.ssh/id_deploy" -o BatchMode=yes -o StrictHostKeyChecking=yes \
             observability/alerts.yml \
@@ -238,6 +260,8 @@ jobs:
              sudo -n install -m 0644 '$remote_tmp/observability/prometheus.yml' '$release_dir/observability/prometheus.yml' && \
              sudo -n install -m 0644 '$remote_tmp/observability/statsd-mapping.yml' '$release_dir/observability/statsd-mapping.yml' && \
              sudo -n install -m 0700 '$remote_tmp/production_canary.sh' '$release_dir/production_canary.sh' && \
+             sudo -n install -m 0700 '$remote_tmp/activate_admin_hub.sh' '$release_dir/activate_admin_hub.sh' && \
+             sudo -n install -m 0700 '$remote_tmp/promote_full_production.sh' '$release_dir/promote_full_production.sh' && \
              rm -rf '$remote_tmp'"
 
       - name: Run guarded production deployment

@@ -19,6 +19,13 @@ failure from a database failure. Inspect exporter logs without printing its
 expanded connection environment. Restarting an exporter is safe; deleting the
 database/Redis volume is not.
 
+The guarded canary owns initial setup of the fixed `vpn_exporter` role and its
+root-only `.env` credential. The role must differ from `POSTGRES_USER`, have
+safe login attributes, and have exactly one direct role membership:
+`pg_monitor`. Do not grant monitoring privileges to the application owner or
+paste the exporter password into logs. A role-identity or membership failure is
+a release blocker, not a reason to widen database grants.
+
 ## Redis unavailable
 
 1. Set `BILLING_ENABLED=false` if worker retries or notification state are
@@ -151,3 +158,44 @@ The histogram includes retry backoff, so first compare request retries and error
 rate. Then check Manager CPU/disk/network and hub-to-Manager connectivity. Avoid
 raising timeouts until the slow operation is known to be idempotent; longer
 timeouts can increase concurrent leased work and delay reconciliation.
+
+## Fleet server unreachable
+
+Open the server in the admin panel and run one explicit health check. Verify the
+private Hub-to-Manager route, mTLS, Manager service, and OpenVPN process without
+changing user configs. Keep new placement closed until a fresh check succeeds;
+durable lifecycle operations should be reconciled with their existing IDs.
+
+## Fleet identity mismatch
+
+Treat this as a possible endpoint replacement. Do not overwrite the stored
+instance ID or activate placement merely to clear the alert. Confirm the host,
+restore the intended Manager or complete a reviewed server replacement, then
+run a fresh health/inventory check before accepting new configs.
+
+## Fleet status stale
+
+Run bounded health checks for active and draining servers from the fleet page.
+If checks cannot remain fresh, investigate Manager reachability and the OpenVPN
+status-file configuration. Do not mark status rows healthy by hand.
+
+## Fleet server unhealthy
+
+Inspect Manager readiness and OpenVPN data-plane status in the server detail.
+Close new placement, repair the failed local PKI/file/service check, and require
+a fresh successful check before reopening placement. Existing client configs
+must not be reissued as part of this procedure.
+
+## Fleet server certificate expiring
+
+Identify the affected server from the fleet status page, renew its OpenVPN
+server certificate through the existing PKI procedure, and test a separate
+client connection. Preserve the CA and client profiles; do not rotate client
+certificates merely because the server certificate is renewed.
+
+## Fleet capacity exhausted
+
+Check configured capacity, reserve, and non-revoked profile count. Either close
+placement on the full node and activate a verified additional node, or raise the
+limit only after checking real CPU/network/session headroom. Capacity changes
+do not move or rewrite existing client configs.

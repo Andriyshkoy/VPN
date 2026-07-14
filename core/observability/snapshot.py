@@ -12,11 +12,18 @@ from sqlalchemy import case, func, select, text
 import core.db as db
 from core.config import settings
 from core.db.models.billing_run import BillingRun
+from core.db.models.config import VPN_Config
 from core.db.models.notification_outbox import NotificationOutbox
+from core.db.models.server import Server, VPNServerStatus
 from core.db.models.telegram_update import TelegramUpdateInbox
 from core.db.models.vpn_operation import VPNOperation
 from core.db.schema import EXPECTED_ALEMBIC_REVISION
-from core.domain import TelegramUpdateStatus, VPNOperationStatus
+from core.domain import (
+    ServerLifecycleState,
+    TelegramUpdateStatus,
+    VPNOperationStatus,
+    VPNState,
+)
 
 from .manager_tls import (
     ManagerTLSStatus,
@@ -39,6 +46,17 @@ _TELEGRAM_BACKLOG_STATUSES = (
     TelegramUpdateStatus.FAILED.value,
 )
 _PROCESS_START_TIMESTAMP_SECONDS = time.time()
+_FLEET_LIFECYCLE_STATES = ("active", "draining", "disabled", "retired")
+_FLEET_HEALTH_STATES = (
+    "healthy",
+    "unhealthy",
+    "unreachable",
+    "stale",
+    "unknown",
+    "instance_mismatch",
+    "disabled",
+    "retired",
+)
 
 
 async def database_ready() -> bool:
@@ -191,6 +209,28 @@ async def render_prometheus_metrics(
             )
         )
 
+        fleet_servers = (
+            await session.scalars(select(Server).order_by(Server.id))
+        ).all()
+        fleet_status_rows = (
+            await session.scalars(
+                select(VPNServerStatus)
+                .where(VPNServerStatus.kind == "status")
+                .order_by(
+                    VPNServerStatus.server_id,
+                    VPNServerStatus.collected_at.desc(),
+                    VPNServerStatus.id.desc(),
+                )
+            )
+        ).all()
+        fleet_config_rows = (
+            await session.execute(
+                select(VPN_Config.server_id, func.count(VPN_Config.id))
+                .where(VPN_Config.desired_state != VPNState.REVOKED.value)
+                .group_by(VPN_Config.server_id)
+            )
+        ).all()
+
     billing_counts = _bounded_counts(billing_rows, _BILLING_STATUSES)
     vpn_counts = _bounded_counts(
         vpn_rows, tuple(status.value for status in VPNOperationStatus)
@@ -200,6 +240,77 @@ async def render_prometheus_metrics(
         telegram_rows,
         tuple(status.value for status in TelegramUpdateStatus),
     )
+    latest_status_by_server: dict[int, VPNServerStatus] = {}
+    for row in fleet_status_rows:
+        latest_status_by_server.setdefault(row.server_id, row)
+    managed_configs = {
+        int(server_id): int(count) for server_id, count in fleet_config_rows
+    }
+    fleet_lifecycle = {state: 0 for state in _FLEET_LIFECYCLE_STATES}
+    fleet_health = {state: 0 for state in _FLEET_HEALTH_STATES}
+    fleet_missing_status = 0
+    fleet_online_sessions = 0
+    fleet_capacity_servers = 0
+    fleet_capacity_total = 0
+    fleet_capacity_available = 0
+    fleet_servers_at_capacity = 0
+    latest_status_times: list[datetime] = []
+    certificate_expiries: list[datetime] = []
+    for server in fleet_servers:
+        lifecycle = str(server.lifecycle_state)
+        fleet_lifecycle[lifecycle if lifecycle in fleet_lifecycle else "disabled"] += 1
+        latest = latest_status_by_server.get(server.id)
+        health = _fleet_health(server, latest, current_time)
+        fleet_health[health] += 1
+        if latest is None:
+            if lifecycle in {
+                ServerLifecycleState.ACTIVE.value,
+                ServerLifecycleState.DRAINING.value,
+            }:
+                fleet_missing_status += 1
+        else:
+            latest_status_times.append(_as_utc(latest.collected_at))
+            if latest.success and isinstance(latest.snapshot, dict):
+                plane = latest.snapshot.get("data_plane", {})
+                if isinstance(plane, dict):
+                    sessions = plane.get("online_sessions")
+                    if (
+                        isinstance(sessions, int)
+                        and not isinstance(sessions, bool)
+                        and sessions >= 0
+                    ):
+                        fleet_online_sessions += sessions
+                pki = latest.snapshot.get("pki", {})
+                certificate = (
+                    pki.get("server_certificate", {}) if isinstance(pki, dict) else {}
+                )
+                expires_at = (
+                    certificate.get("expires_at")
+                    if isinstance(certificate, dict)
+                    else None
+                )
+                parsed_expiry = _parse_timestamp(expires_at)
+                if (
+                    parsed_expiry is not None
+                    and lifecycle != ServerLifecycleState.RETIRED.value
+                ):
+                    certificate_expiries.append(parsed_expiry)
+        if server.max_configs is not None:
+            fleet_capacity_servers += 1
+            fleet_capacity_total += server.max_configs
+            available = max(
+                0,
+                server.max_configs
+                - server.capacity_reserve
+                - managed_configs.get(server.id, 0),
+            )
+            fleet_capacity_available += available
+            if (
+                lifecycle == ServerLifecycleState.ACTIVE.value
+                and server.accepts_new_configs
+                and available == 0
+            ):
+                fleet_servers_at_capacity += 1
 
     lines: list[str] = []
     _family(
@@ -263,6 +374,85 @@ async def render_prometheus_metrics(
             ({"feature": "notifications"}, int(settings.notifications_enabled)),
             ({"feature": "maintenance"}, int(settings.maintenance_mode)),
         ],
+    )
+    _family(
+        lines,
+        "vpn_hub_fleet_servers",
+        "Managed VPN servers grouped by lifecycle state.",
+        "gauge",
+        [({"lifecycle": state}, count) for state, count in fleet_lifecycle.items()],
+    )
+    _family(
+        lines,
+        "vpn_hub_fleet_server_health",
+        "Managed VPN servers grouped by their latest bounded health state.",
+        "gauge",
+        [({"status": state}, count) for state, count in fleet_health.items()],
+    )
+    _family(
+        lines,
+        "vpn_hub_fleet_servers_missing_status",
+        "Managed VPN servers without a persisted Manager status snapshot.",
+        "gauge",
+        [({}, fleet_missing_status)],
+    )
+    _family(
+        lines,
+        "vpn_hub_fleet_oldest_status_age_seconds",
+        "Age of the oldest latest-per-server Manager status snapshot.",
+        "gauge",
+        [
+            (
+                {},
+                (
+                    _age_seconds(min(latest_status_times), current_time)
+                    if latest_status_times
+                    else 0
+                ),
+            )
+        ],
+    )
+    _family(
+        lines,
+        "vpn_hub_fleet_online_sessions",
+        "Aggregate online sessions from successful bounded Manager snapshots.",
+        "gauge",
+        [({}, fleet_online_sessions)],
+    )
+    _family(
+        lines,
+        "vpn_hub_fleet_capacity_configured_servers",
+        "Managed servers with an explicit configuration capacity.",
+        "gauge",
+        [({}, fleet_capacity_servers)],
+    )
+    _family(
+        lines,
+        "vpn_hub_fleet_capacity_total",
+        "Aggregate configured maximum VPN profile capacity.",
+        "gauge",
+        [({}, fleet_capacity_total)],
+    )
+    _family(
+        lines,
+        "vpn_hub_fleet_capacity_available",
+        "Aggregate remaining VPN profile capacity after reserves.",
+        "gauge",
+        [({}, fleet_capacity_available)],
+    )
+    _family(
+        lines,
+        "vpn_hub_fleet_servers_at_capacity",
+        "Active placement-enabled servers with no remaining configured capacity.",
+        "gauge",
+        [({}, fleet_servers_at_capacity)],
+    )
+    _family(
+        lines,
+        "vpn_hub_fleet_server_certificate_earliest_expiry_timestamp_seconds",
+        "Earliest server-certificate expiry in successful Manager snapshots.",
+        "gauge",
+        [({}, _timestamp(min(certificate_expiries)) if certificate_expiries else 0)],
     )
     _family(
         lines,
@@ -473,6 +663,51 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or len(value) > 64:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return _as_utc(parsed)
+
+
+def _fleet_health(
+    server: Server,
+    latest: VPNServerStatus | None,
+    now: datetime,
+) -> str:
+    if server.lifecycle_state in {
+        ServerLifecycleState.DISABLED.value,
+        ServerLifecycleState.RETIRED.value,
+    }:
+        return server.lifecycle_state
+    if latest is None:
+        return "unknown"
+    if not latest.success:
+        return "unreachable"
+    if (
+        _age_seconds(latest.collected_at, now)
+        > settings.admin_fleet_status_stale_seconds
+    ):
+        return "stale"
+    if (
+        latest.manager_instance_id
+        and server.manager_instance_id
+        and latest.manager_instance_id != server.manager_instance_id
+    ):
+        return "instance_mismatch"
+    snapshot = latest.snapshot if isinstance(latest.snapshot, dict) else {}
+    readiness = snapshot.get("readiness", {})
+    data_plane = snapshot.get("data_plane", {})
+    if not isinstance(readiness, dict) or readiness.get("ready") is not True:
+        return "unhealthy"
+    if not isinstance(data_plane, dict) or data_plane.get("status") != "up":
+        return "unhealthy"
+    return "healthy"
 
 
 def _timestamp(value: datetime | None) -> float:

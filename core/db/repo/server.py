@@ -64,6 +64,7 @@ class ServerRepo(BaseRepo[Server]):
         location: str,
         api_key: str,
         cost: int,
+        **fleet_fields,
     ) -> Server:
         """
         Create a new server entry.
@@ -89,6 +90,7 @@ class ServerRepo(BaseRepo[Server]):
             monthly_cost=cost,
             location=location,
             api_key=api_key,
+            **fleet_fields,
         )
         return await self.add(server)
 
