@@ -67,6 +67,27 @@ done
 if cmp -s "$STAGED" "$PROMOTED"; then
     fail "promotion did not create a distinct runtime environment"
 fi
+
+# The canary deliberately stops the previous release's mutation services while
+# retaining its last successful production marker. A valid previous SHA must
+# select a fresh promotion; only the exact SHA selects the idempotent path.
+MARKER_FILE="$TEST_ROOT/current-production-state"
+DANGLING_MARKER="$TEST_ROOT/current-production-dangling"
+release_sha="0123456789abcdef0123456789abcdef01234567"
+next_release_sha="ffffffffffffffffffffffffffffffffffffffff"
+printf '%s\n' "$release_sha" > "$MARKER_FILE"
+[[ "$(promotion_marker_state "$MARKER_FILE" "$release_sha")" == "current" ]]
+[[ "$(promotion_marker_state "$MARKER_FILE" "$next_release_sha")" == "stale" ]]
+printf 'not-a-release-sha\n' > "$MARKER_FILE"
+if (promotion_marker_state "$MARKER_FILE" "$next_release_sha") 2>/dev/null; then
+    fail "malformed full production marker was accepted"
+fi
+printf '%s\n' "$release_sha" > "$MARKER_FILE"
+ln -s "${MARKER_FILE}.missing" "$DANGLING_MARKER"
+promotion_marker_exists "$DANGLING_MARKER"
+if (promotion_marker_state "$DANGLING_MARKER" "$next_release_sha") 2>/dev/null; then
+    fail "dangling full production marker symlink was accepted"
+fi
 grep -Fx 'MAINTENANCE_MODE=true' "$STAGED" >/dev/null \
     || fail "immutable staged environment was modified"
 
@@ -177,6 +198,29 @@ mapfile -t rollback_events < <(grep '^compose ' "$EVENTS_FILE")
 if grep -Eq '<(db|redis|migrations)>' "$EVENTS_FILE"; then
     fail "rollback operated on a data or migration service"
 fi
+
+# A failed upgrade must preserve the previous release's valid marker. It is a
+# stale breadcrumb for a safe retry, not a partial marker from the new release.
+: > "$EVENTS_FILE"
+printf 'state=promoted\n' > "$LIVE_RELEASE_ENV"
+printf 'state=staged\n' > "$BACKUP_ENV"
+printf 'in-progress\n' > "$IN_PROGRESS_MARKER"
+previous_release_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+RELEASE_SHA="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+printf '%s\n' "$previous_release_sha" > "$DEPLOY_ROOT/current-production"
+restore_fail_closed_runtime
+grep -Fx 'state=staged' "$LIVE_RELEASE_ENV" >/dev/null \
+    || fail "stale-marker rollback did not restore the release environment"
+[[ ! -e "$IN_PROGRESS_MARKER" ]] \
+    || fail "stale-marker rollback left the in-progress marker behind"
+[[ -f "$DEPLOY_ROOT/current-production" && ! -L "$DEPLOY_ROOT/current-production" ]] \
+    || fail "rollback did not preserve a safe previous production marker"
+[[ "$(<"$DEPLOY_ROOT/current-production")" == "$previous_release_sha" ]] \
+    || fail "rollback did not preserve the previous production marker"
+stale_rollback_first_event="$(grep '^compose ' "$EVENTS_FILE" | head -1)"
+[[ "$stale_rollback_first_event" == \
+    'compose <--profile> <hub> <--profile> <bot> <--profile> <worker> <--profile> <billing-scheduler> <stop> <--timeout> <60> <rq_scheduler> <rq_worker> <bot> <admin>' ]] \
+    || fail "stale-marker rollback did not stop mutation services first"
 
 # The workflow has two complete gate checks: before and after environment
 # approval. It never rebuilds or uploads code and requires both host markers.

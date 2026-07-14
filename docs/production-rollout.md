@@ -232,6 +232,10 @@ public HTTPS, accounting, Manager mTLS and Telegram identity checks pass.
 `rq_scheduler` is force-recreated as the final service start. The script writes
 `current-production` only after every intended service is running the exact
 staged image and has loaded the promoted switches.
+The previous valid `current-production` marker may remain after a later canary
+stops the old mutation services. Promotion treats that marker as stale and
+replaces it atomically only after the new worker, bot and scheduler pass their
+checks. Malformed or unsafe markers are rejected fail-closed.
 
 Observe the durable Telegram inbox, payment intents, VPN operations, ledger,
 notification outbox, RQ registries and billing periods immediately after
