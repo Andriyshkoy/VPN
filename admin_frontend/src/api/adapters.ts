@@ -12,7 +12,11 @@ import type {
   ReferralReward,
   Server,
   ServerStatus,
+  TimelineActor,
+  TimelineCategory,
+  TimelineSource,
   User,
+  UserTimelineEvent,
   VpnConfig,
   VpnOperation,
 } from './types'
@@ -24,6 +28,10 @@ const text = (value: unknown, fallback = '') => value === null || value === unde
 const number = (value: unknown, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback
 const money = (value: unknown) => text(value, '0.00')
 const optionalMoney = (record: Json, key: string) => key in record && record[key] !== null ? money(record[key]) : undefined
+
+const timelineSources = new Set<TimelineSource>(['bot', 'ledger', 'payment', 'referral', 'vpn', 'admin', 'user'])
+const timelineCategories = new Set<TimelineCategory>(['bot', 'finance', 'referral', 'vpn', 'admin', 'account'])
+const timelineActorTypes = new Set<NonNullable<TimelineActor['type']>>(['user', 'admin', 'system'])
 
 function cents(value: unknown): bigint {
   const normalized = money(value).trim().replace(',', '.')
@@ -249,6 +257,39 @@ export function adaptAudit(value: unknown): AuditEvent {
   const actor = obj(raw.actor)
   const details = obj(raw.details ?? raw.metadata)
   return { id: raw.id, occurred_at: raw.created_at ?? raw.occurred_at, actor: actor.username ?? raw.actor ?? 'system', actor_id: actor.id ?? raw.actor_id, action: raw.action, target_type: raw.target_type, target_id: raw.target_id, result: details.outcome ?? raw.result ?? 'success', reason: details.reason ?? details.comment ?? raw.reason, ip_address: raw.ip_address, metadata: details }
+}
+
+function adaptTimelineActor(value: unknown): TimelineActor | string | null {
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'object') return text(value)
+  const raw = obj(value)
+  const id = raw.id ?? raw.actor_id ?? null
+  const label = raw.label ?? raw.username ?? raw.name ?? null
+  const type = raw.type ?? raw.kind ?? raw.role
+  if (id === null && label === null && type === undefined) return null
+  return {
+    ...(timelineActorTypes.has(text(type) as NonNullable<TimelineActor['type']>) ? { type: text(type) as NonNullable<TimelineActor['type']> } : {}),
+    id,
+    label: label === null ? null : text(label),
+  }
+}
+
+export function adaptUserTimelineEvent(value: unknown): UserTimelineEvent {
+  const raw = obj(value)
+  const source = text(raw.source)
+  const category = text(raw.category)
+  return {
+    id: text(raw.id),
+    source: timelineSources.has(source as TimelineSource) ? source as TimelineSource : 'user',
+    category: timelineCategories.has(category as TimelineCategory) ? category as TimelineCategory : 'account',
+    action: text(raw.action, 'unknown'),
+    result: text(raw.result, 'success'),
+    occurred_at: text(raw.occurred_at ?? raw.created_at),
+    title: text(raw.title, raw.action ? text(raw.action) : 'Событие'),
+    description: raw.description === null || raw.description === undefined ? null : text(raw.description),
+    actor: adaptTimelineActor(raw.actor),
+    metadata: obj(raw.metadata),
+  }
 }
 
 export function adaptObservability(value: unknown): ObservabilitySummary {

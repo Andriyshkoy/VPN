@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -18,6 +19,7 @@ from core.services.admin_queries import (
     AdminUserQueryService,
     money,
 )
+from core.services.user_timeline import AdminUserTimelineService
 
 from ..schemas_v1 import BalanceAdjustmentRequest
 from ..security import (
@@ -37,10 +39,20 @@ router = APIRouter(prefix="/api/admin/v1/users", tags=["admin-v1-users"])
 users = AdminUserQueryService(uow)
 referrals = AdminReferralQueryService(uow)
 balances = AdminBalanceService()
+timeline = AdminUserTimelineService(uow)
 
 UsersRead = Annotated[
     AdminPrincipal,
     Depends(require_permission(AdminPermission.USERS_READ)),
+]
+TimelineRead = Annotated[
+    AdminPrincipal,
+    Depends(
+        require_permission(
+            AdminPermission.USERS_READ,
+            AdminPermission.AUDIT_READ,
+        )
+    ),
 ]
 BalanceRead = Annotated[
     AdminPrincipal,
@@ -171,6 +183,68 @@ async def get_user(user_id: int, principal: UsersRead):
     if AdminPermission.REFERRALS_READ not in principal.permissions:
         payload.pop("referral", None)
         payload.get("identity", {}).pop("referral_code", None)
+    return payload
+
+
+@router.get("/{user_id}/timeline")
+async def get_user_timeline(
+    user_id: int,
+    request: Request,
+    principal: TimelineRead,
+    category: str | None = Query(
+        default=None,
+        pattern="^(bot|finance|referral|vpn|admin|account)$",
+    ),
+    action: str | None = Query(default=None, min_length=1, max_length=96),
+    result: str | None = Query(default=None, min_length=1, max_length=32),
+    occurred_from: datetime | None = Query(default=None, alias="from"),
+    occurred_to: datetime | None = Query(default=None, alias="to"),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=10_000),
+):
+    raw_to = request.query_params.get("to")
+    if (
+        occurred_to is not None
+        and raw_to
+        and re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_to)
+    ):
+        # A date selected in the UI means the entire calendar day; explicit
+        # timestamps retain the documented exclusive upper-bound semantics.
+        try:
+            occurred_to += timedelta(days=1)
+        except OverflowError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="timeline 'to' date is out of range",
+            ) from exc
+    try:
+        payload = await timeline.list_timeline(
+            user_id,
+            category=category,
+            action=action,
+            result=result,
+            occurred_from=occurred_from,
+            occurred_to=occurred_to,
+            limit=limit,
+            offset=offset,
+            include_finance=bool(
+                principal.permissions
+                & {AdminPermission.BALANCE_READ, AdminPermission.FINANCE_READ}
+            ),
+            include_referral=(AdminPermission.REFERRALS_READ in principal.permissions),
+            include_vpn=(AdminPermission.CONFIGS_READ in principal.permissions),
+            include_admin=(AdminPermission.AUDIT_READ in principal.permissions),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
     return payload
 
 

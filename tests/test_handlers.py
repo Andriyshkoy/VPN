@@ -6,6 +6,7 @@ import pytest
 
 import bot.handlers as handlers
 import bot.handlers.base as handlers_base
+from core.services.telegram_user_actions import TelegramActionAuditContext
 
 
 class DummyMessage:
@@ -117,7 +118,14 @@ async def test_tempfile_used(monkeypatch):
     monkeypatch.setattr(handlers, "FSInputFile", DummyFSInputFile)
 
     update = types.SimpleNamespace(update_id=4242)
-    await handlers.got_name(msg, state, bot, update)
+    audit = TelegramActionAuditContext("message.received", "handled", {})
+    await handlers.got_name(
+        msg,
+        state,
+        bot,
+        update,
+        telegram_action_audit=audit,
+    )
 
     sent_path = bot.sent.path
     tmp_dir = tempfile.gettempdir()
@@ -132,6 +140,10 @@ async def test_tempfile_used(monkeypatch):
             "telegram:create-config:update:4242",
         )
     ]
+    assert audit.action == "vpn.config_create_submit"
+    assert audit.result == "completed"
+    assert audit.metadata == {"config_id": 5, "server_id": 1}
+    assert "../../etc/passwd" not in repr(audit.metadata)
 
 
 @pytest.mark.asyncio
@@ -269,6 +281,61 @@ async def test_show_config_contains_download(monkeypatch):
     assert any("Переименовать" in text for text in button_texts)
     assert not any("Приостановить" in text for text in button_texts)
     assert not any("Возобновить" in text for text in button_texts)
+
+
+@pytest.mark.asyncio
+async def test_foreign_config_callback_audit_does_not_persist_requested_id(monkeypatch):
+    cb = DummyCallback("del_ok:987654")
+    audit = TelegramActionAuditContext(
+        "vpn.config_delete_confirm",
+        "handled",
+        {},
+    )
+
+    async def fake_get_user(*_args, **_kwargs):
+        return types.SimpleNamespace(id=1)
+
+    async def fake_get_config(*_args, **_kwargs):
+        return types.SimpleNamespace(id=987654, owner_id=2)
+
+    monkeypatch.setattr(handlers.configs, "get_or_create_user", fake_get_user)
+    monkeypatch.setattr(handlers.config_service, "get", fake_get_config)
+
+    await handlers.configs.confirm_delete_config_cb(
+        cb,
+        telegram_action_audit=audit,
+    )
+
+    assert audit.action == "vpn.config_delete_confirm"
+    assert audit.result == "rejected"
+    assert audit.metadata == {"reason_code": "config_not_found"}
+    assert "987654" not in repr(audit.metadata)
+
+
+@pytest.mark.asyncio
+async def test_missing_server_callback_audit_does_not_persist_requested_id(monkeypatch):
+    cb = DummyCallback("server:987654")
+    audit = TelegramActionAuditContext(
+        "vpn.config_server_select",
+        "handled",
+        {},
+    )
+
+    async def fake_get_server(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(handlers.server_service, "get", fake_get_server)
+
+    await handlers.configs.choose_server(
+        cb,
+        DummyStateRename(),
+        telegram_action_audit=audit,
+    )
+
+    assert audit.action == "vpn.config_server_select"
+    assert audit.result == "unavailable"
+    assert audit.metadata == {"reason_code": "server_unavailable"}
+    assert "987654" not in repr(audit.metadata)
 
 
 class DummyCallbackDownload:

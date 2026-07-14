@@ -6,7 +6,11 @@ from aiogram import F
 from aiogram.types import CallbackQuery, Message
 
 from core.db.unit_of_work import uow
-from core.services import AccountingService, BalanceHistoryPage
+from core.services import (
+    AccountingService,
+    BalanceHistoryPage,
+    TelegramActionAuditContext,
+)
 
 from ..keyboards import balance_actions_keyboard, balance_history_keyboard
 from ..ui import format_money, safe_callback_answer, safe_edit_text
@@ -98,13 +102,22 @@ async def _history_for_telegram_user(
     )
 
 
-async def cmd_balance_history(message: Message) -> None:
+async def cmd_balance_history(
+    message: Message,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
     page = await _history_for_telegram_user(
         message.from_user.id,
         message.from_user.username,
         offset=0,
     )
     if page is None:
+        if telegram_action_audit is not None:
+            telegram_action_audit.record(
+                "finance.balance_history",
+                result="unavailable",
+                metadata={"reason_code": "account_unavailable"},
+            )
         return
     await message.answer(
         render_balance_history(page),
@@ -116,10 +129,15 @@ async def cmd_balance_history(message: Message) -> None:
             direction=None,
         ),
     )
+    if telegram_action_audit is not None:
+        telegram_action_audit.record("finance.balance_history")
 
 
 @router.callback_query(F.data.startswith("balance_history:"))
-async def balance_history_callback(callback: CallbackQuery) -> None:
+async def balance_history_callback(
+    callback: CallbackQuery,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
     raw_cursor = callback.data.partition(":")[2]
     try:
         cursor_parts = raw_cursor.split(":")
@@ -143,6 +161,12 @@ async def balance_history_callback(callback: CallbackQuery) -> None:
             raise ValueError
     except ValueError:
         await safe_callback_answer(callback, "Не удалось открыть эту страницу.")
+        if telegram_action_audit is not None:
+            telegram_action_audit.record(
+                "finance.balance_history",
+                result="invalid",
+                metadata={"reason_code": "invalid_cursor"},
+            )
         return
 
     page = await _history_for_telegram_user(
@@ -154,6 +178,15 @@ async def balance_history_callback(callback: CallbackQuery) -> None:
     )
     if page is None:
         await safe_callback_answer(callback)
+        if telegram_action_audit is not None:
+            metadata: dict[str, object] = {"reason_code": "account_unavailable"}
+            if direction is not None:
+                metadata["direction"] = direction
+            telegram_action_audit.record(
+                "finance.balance_history",
+                result="unavailable",
+                metadata=metadata,
+            )
         return
     await safe_edit_text(
         callback.message,
@@ -167,10 +200,18 @@ async def balance_history_callback(callback: CallbackQuery) -> None:
         ),
     )
     await safe_callback_answer(callback)
+    if telegram_action_audit is not None:
+        telegram_action_audit.record(
+            "finance.balance_history",
+            metadata={"direction": direction} if direction is not None else None,
+        )
 
 
 @router.callback_query(F.data == "balance_summary")
-async def balance_summary_callback(callback: CallbackQuery) -> None:
+async def balance_summary_callback(
+    callback: CallbackQuery,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
     from .common import render_balance_summary
 
     user = await get_or_create_user(
@@ -179,6 +220,12 @@ async def balance_summary_callback(callback: CallbackQuery) -> None:
     )
     if user is None:
         await safe_callback_answer(callback)
+        if telegram_action_audit is not None:
+            telegram_action_audit.record(
+                "finance.balance_view",
+                result="unavailable",
+                metadata={"reason_code": "account_unavailable"},
+            )
         return
     await safe_edit_text(
         callback.message,
@@ -186,3 +233,5 @@ async def balance_summary_callback(callback: CallbackQuery) -> None:
         reply_markup=balance_actions_keyboard(),
     )
     await safe_callback_answer(callback)
+    if telegram_action_audit is not None:
+        telegram_action_audit.record("finance.balance_view")

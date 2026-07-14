@@ -10,6 +10,7 @@ from bot.handlers import payments
 from core.exceptions import InvalidOperationError, UserNotFoundError
 from core.services.billing import PaymentIntent
 from core.services.payments import TelegramPayService
+from core.services.telegram_user_actions import TelegramActionAuditContext
 
 
 class DummyBot:
@@ -158,10 +159,16 @@ async def test_topup_invoice_uses_persisted_intent_without_ui_change(monkeypatch
     )
     monkeypatch.setattr(payments, "TelegramPayService", PayService)
 
+    audit = TelegramActionAuditContext(
+        "finance.payment_amount_select",
+        "handled",
+        {},
+    )
     await payments.got_topup_amount(
         DummyCallback(),
         DummyBot(),
         SimpleNamespace(update_id=7001),
+        telegram_action_audit=audit,
     )
 
     assert sent["intent_args"] == {
@@ -181,6 +188,10 @@ async def test_topup_invoice_uses_persisted_intent_without_ui_change(monkeypatch
         Decimal("100.00"),
         {"payload": "topup:intent-id", "currency": "RUB"},
     )
+    assert audit.action == "finance.payment_amount_select"
+    assert audit.result == "completed"
+    assert audit.metadata == {"amount_rub": 100}
+    assert "intent-id" not in repr(audit.metadata)
 
 
 @pytest.mark.asyncio
@@ -315,9 +326,22 @@ async def test_pre_checkout_rejects_invoice_mismatch(monkeypatch):
         currency="RUB",
     )
 
-    await payments.process_pre_checkout_query(query, bot)
+    audit = TelegramActionAuditContext(
+        "finance.payment_pre_checkout",
+        "handled",
+        {},
+    )
+    await payments.process_pre_checkout_query(
+        query,
+        bot,
+        telegram_action_audit=audit,
+    )
 
     assert bot.pre_checkout_answers[0][1]["ok"] is False
+    assert audit.action == "finance.payment_pre_checkout"
+    assert audit.result == "rejected"
+    assert audit.metadata == {"reason_code": "payment_validation_failed"}
+    assert "topup:intent-id" not in repr(audit.metadata)
 
 
 @pytest.mark.asyncio

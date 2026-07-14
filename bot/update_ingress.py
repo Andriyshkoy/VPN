@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import logging
 import time
 
@@ -13,6 +14,7 @@ from core.services.telegram_updates import (
     ClaimedTelegramUpdate,
     TelegramUpdateService,
 )
+from core.services.telegram_user_actions import TelegramActionAuditContext
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +99,8 @@ class TelegramUpdateProcessor:
         if claimed is None:
             return False
 
-        handler = asyncio.create_task(self._dispatch(claimed))
+        audit_context = TelegramActionAuditContext.from_payload(claimed.payload)
+        handler = asyncio.create_task(self._dispatch(claimed, audit_context))
         heartbeat = asyncio.create_task(self._renew_lease(claimed))
         try:
             done, _ = await asyncio.wait(
@@ -112,7 +115,9 @@ class TelegramUpdateProcessor:
                 )
                 await self._cancel_handler(handler)
                 await self._stop_heartbeat(heartbeat)
-                await self.service.mark_failed(claimed, timeout)
+                await self.service.mark_failed(
+                    claimed, timeout, audit_context=audit_context
+                )
                 logger.error(
                     "Telegram update %s handler timed out on attempt %s",
                     claimed.update_id,
@@ -158,9 +163,13 @@ class TelegramUpdateProcessor:
                     claimed.attempts,
                     exc_info=exc,
                 )
-                await self.service.mark_failed(claimed, exc)
+                await self.service.mark_failed(
+                    claimed, exc, audit_context=audit_context
+                )
             else:
-                completed = await self.service.mark_processed(claimed)
+                completed = await self.service.mark_processed(
+                    claimed, audit_context=audit_context
+                )
                 if not completed:
                     logger.warning(
                         "Telegram update %s lost its processing lease before ACK",
@@ -175,12 +184,32 @@ class TelegramUpdateProcessor:
             await self._cancel_handler(handler)
             await self._stop_heartbeat(heartbeat)
 
-    async def _dispatch(self, claimed: ClaimedTelegramUpdate) -> None:
+    async def _dispatch(
+        self,
+        claimed: ClaimedTelegramUpdate,
+        audit_context: TelegramActionAuditContext,
+    ) -> None:
         update = Update.model_validate(
             claimed.payload,
             context={"bot": self.bot},
         )
-        await self.dispatcher.feed_update(self.bot, update)
+        parameters = inspect.signature(self.dispatcher.feed_update).parameters.values()
+        supports_workflow_data = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            or parameter.name == "telegram_action_audit"
+            for parameter in parameters
+        )
+        if supports_workflow_data:
+            await self.dispatcher.feed_update(
+                self.bot,
+                update,
+                telegram_action_audit=audit_context,
+            )
+        else:
+            # Lightweight dispatcher test doubles and legacy adapters may not
+            # expose aiogram's workflow-data kwargs. The central safe fallback
+            # remains available even without handler outcome enrichment.
+            await self.dispatcher.feed_update(self.bot, update)
 
     async def run(self) -> None:
         retry_delay = 1.0

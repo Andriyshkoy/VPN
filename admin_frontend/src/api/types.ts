@@ -264,6 +264,28 @@ export interface AuditEvent {
   metadata?: Record<string, unknown>
 }
 
+export type TimelineSource = 'bot' | 'ledger' | 'payment' | 'referral' | 'vpn' | 'admin' | 'user'
+export type TimelineCategory = 'bot' | 'finance' | 'referral' | 'vpn' | 'admin' | 'account'
+
+export interface TimelineActor {
+  type?: 'user' | 'admin' | 'system'
+  id?: string | number | null
+  label?: string | null
+}
+
+export interface UserTimelineEvent {
+  id: string
+  source: TimelineSource
+  category: TimelineCategory
+  action: string
+  result: string
+  occurred_at: string
+  title: string
+  description?: string | null
+  actor?: TimelineActor | string | null
+  metadata: Record<string, unknown>
+}
+
 export interface BalanceAdjustmentInput {
   direction: 'credit' | 'debit'
   amount: Money

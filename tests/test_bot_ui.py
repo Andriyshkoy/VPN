@@ -131,7 +131,8 @@ async def test_main_action_clears_fsm_before_shared_action(monkeypatch):
     message = DummyMessage(MENU_BALANCE)
     observed = {}
 
-    async def show_balance(target):
+    async def show_balance(target, telegram_action_audit=None):
+        assert telegram_action_audit is None
         observed["state_was_cleared"] = state.cleared
         observed["message"] = target
 
@@ -223,7 +224,8 @@ async def test_dispatcher_menu_button_wins_over_active_name_state(monkeypatch):
     bot = Bot("123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi")
     observed = []
 
-    async def show_balance(message):
+    async def show_balance(message, telegram_action_audit=None):
+        assert telegram_action_audit is None
         observed.append(message.text)
 
     async def existing_user(tg_id, **kwargs):

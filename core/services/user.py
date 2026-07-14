@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from core.db.models.ledger import LedgerEntry, LedgerKind
 from core.db.models.payment import ProviderPayment
+from core.db.models.telegram_user_action import TelegramUserActionEvent
 from core.db.models.user import User as UserModel
 from core.db.repo.billing import to_money
 from core.domain import VPNOperationKind, VPNState
@@ -140,9 +141,19 @@ class UserService:
                 .where(ProviderPayment.user_id == user_id)
                 .limit(1)
             )
-            if financial_record is not None or payment_record is not None:
-                # Financial history is immutable. A future admin use case should
-                # anonymize/disable this account instead of physically deleting it.
+            bot_audit_record = await session.scalar(
+                select(TelegramUserActionEvent.id)
+                .where(TelegramUserActionEvent.user_id == user_id)
+                .limit(1)
+            )
+            if (
+                financial_record is not None
+                or payment_record is not None
+                or bot_audit_record is not None
+            ):
+                # Financial and bot action history are immutable. A future
+                # admin use case should anonymize/disable this account instead
+                # of physically deleting it.
                 return False
 
             await repos["users"].delete(id=user_id)

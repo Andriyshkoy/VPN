@@ -20,6 +20,7 @@ from aiogram.types import (
 from core.config import settings
 from core.domain import VPNOperationStatus, VPNState
 from core.exceptions import APIConnectionError, InsufficientBalanceError, ServiceError
+from core.services.telegram_user_actions import TelegramActionAuditContext
 
 from ..keyboards import cancel_keyboard, main_menu_keyboard
 from ..states import CreateConfig, RenameConfig
@@ -150,12 +151,17 @@ async def _configs_view(
     return text, _configs_markup(configs)
 
 
-async def cmd_configs(message: Message) -> None:
+async def cmd_configs(
+    message: Message,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
     text, markup = await _configs_view(
         message.from_user.id,
         message.from_user.username,
     )
     await message.answer(text, reply_markup=markup)
+    if telegram_action_audit is not None:
+        telegram_action_audit.record("vpn.config_list")
 
 
 async def _begin_create_config(
@@ -164,9 +170,16 @@ async def _begin_create_config(
     *,
     tg_id: int,
     username: str | None,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
 ) -> None:
     await get_or_create_user(tg_id, username)
     if settings.maintenance_mode or not settings.provisioning_enabled:
+        if telegram_action_audit is not None:
+            telegram_action_audit.record(
+                "vpn.config_create_start",
+                result="unavailable",
+                metadata={"reason_code": "provisioning_disabled"},
+            )
         await target.answer(
             "Создание конфигураций временно недоступно. Попробуйте позже.",
             reply_markup=main_menu_keyboard(),
@@ -175,6 +188,12 @@ async def _begin_create_config(
 
     servers = await server_service.list(available_only=True)
     if not servers:
+        if telegram_action_audit is not None:
+            telegram_action_audit.record(
+                "vpn.config_create_start",
+                result="unavailable",
+                metadata={"reason_code": "no_available_server"},
+            )
         await target.answer(
             "Сейчас нет доступных серверов. Попробуйте позже.",
             reply_markup=main_menu_keyboard(),
@@ -201,31 +220,47 @@ async def _begin_create_config(
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
     )
     await state.set_state(CreateConfig.choosing_server)
+    if telegram_action_audit is not None:
+        telegram_action_audit.record("vpn.config_create_start")
 
 
-async def cmd_create_config(message: Message, state: FSMContext) -> None:
+async def cmd_create_config(
+    message: Message,
+    state: FSMContext,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
     await _begin_create_config(
         message,
         state,
         tg_id=message.from_user.id,
         username=message.from_user.username,
+        telegram_action_audit=telegram_action_audit,
     )
 
 
 @router.callback_query(F.data == "cfg:create")
-async def create_config_cb(callback: CallbackQuery, state: FSMContext) -> None:
+async def create_config_cb(
+    callback: CallbackQuery,
+    state: FSMContext,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
     await state.clear()
     await _begin_create_config(
         callback.message,
         state,
         tg_id=callback.from_user.id,
         username=callback.from_user.username,
+        telegram_action_audit=telegram_action_audit,
     )
     await safe_callback_answer(callback)
 
 
 @router.callback_query(F.data == "cfg:list")
-async def list_configs_cb(callback: CallbackQuery, state: FSMContext) -> None:
+async def list_configs_cb(
+    callback: CallbackQuery,
+    state: FSMContext,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
     await state.clear()
     text, markup = await _configs_view(
         callback.from_user.id,
@@ -233,6 +268,8 @@ async def list_configs_cb(callback: CallbackQuery, state: FSMContext) -> None:
     )
     await safe_edit_text(callback.message, text, reply_markup=markup)
     await safe_callback_answer(callback)
+    if telegram_action_audit is not None:
+        telegram_action_audit.record("vpn.config_list")
 
 
 async def _callback_id(
@@ -255,12 +292,33 @@ async def _callback_id(
 
 
 @router.callback_query(F.data.startswith("server:"))
-async def choose_server(callback: CallbackQuery, state: FSMContext) -> None:
+async def choose_server(
+    callback: CallbackQuery,
+    state: FSMContext,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
     server_id = await _callback_id(callback, "server:")
     if server_id is None:
+        if telegram_action_audit is not None:
+            telegram_action_audit.record(
+                "vpn.config_server_select",
+                result="invalid",
+                metadata={"reason_code": "invalid_callback"},
+            )
         return
     server = await server_service.get(server_id)
     if server is None or not await server_service.accepts_new_config(server_id):
+        if telegram_action_audit is not None:
+            metadata: dict[str, object] = {
+                "reason_code": "server_unavailable",
+            }
+            if server is not None:
+                metadata["server_id"] = server_id
+            telegram_action_audit.record(
+                "vpn.config_server_select",
+                result="unavailable",
+                metadata=metadata,
+            )
         await safe_callback_answer(
             callback,
             "Сервер больше недоступен. Выберите другой.",
@@ -277,15 +335,29 @@ async def choose_server(callback: CallbackQuery, state: FSMContext) -> None:
     )
     await state.set_state(CreateConfig.entering_name)
     await safe_callback_answer(callback)
+    if telegram_action_audit is not None:
+        telegram_action_audit.record(
+            "vpn.config_server_select",
+            metadata={"server_id": server_id},
+        )
 
 
 @router.message(CreateConfig.choosing_server, ~F.successful_payment)
-async def choose_server_message_hint(message: Message) -> None:
+async def choose_server_message_hint(
+    message: Message,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
     await message.answer(
         "Выберите сервер кнопкой в сообщении выше. Чтобы выйти, откройте "
         "другой раздел в меню.",
         reply_markup=main_menu_keyboard(),
     )
+    if telegram_action_audit is not None:
+        telegram_action_audit.record(
+            "vpn.config_server_select",
+            result="invalid",
+            metadata={"reason_code": "button_required"},
+        )
 
 
 @router.message(CreateConfig.entering_name, F.text, ~F.successful_payment)
@@ -294,10 +366,17 @@ async def got_name(
     state: FSMContext,
     bot: Any,
     event_update: Update,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
 ) -> None:
     data = await state.get_data()
     server_id = data.get("server_id")
     if not server_id:
+        if telegram_action_audit is not None:
+            telegram_action_audit.record(
+                "vpn.config_create_submit",
+                result="rejected",
+                metadata={"reason_code": "server_not_selected"},
+            )
         await message.answer(
             "Сервер не выбран. Начните создание заново.",
             reply_markup=main_menu_keyboard(),
@@ -307,6 +386,12 @@ async def got_name(
 
     display_name = (message.text or "").strip()
     user = await get_or_create_user(message.from_user.id, message.from_user.username)
+    if telegram_action_audit is not None:
+        telegram_action_audit.record(
+            "vpn.config_create_submit",
+            result="handled",
+            metadata={"server_id": server_id},
+        )
     purchase_key = f"telegram:create-config:update:{event_update.update_id}"
     unique_name = uuid5(NAMESPACE_URL, purchase_key).hex
     try:
@@ -319,6 +404,15 @@ async def got_name(
             idempotency_key=purchase_key,
         )
     except InsufficientBalanceError:
+        if telegram_action_audit is not None:
+            telegram_action_audit.record(
+                "vpn.config_create_submit",
+                result="rejected",
+                metadata={
+                    "server_id": server_id,
+                    "reason_code": "insufficient_balance",
+                },
+            )
         await message.answer(
             "Недостаточно средств. Сначала пополните баланс.",
             reply_markup=main_menu_keyboard(),
@@ -330,6 +424,15 @@ async def got_name(
         # retry this exact update without charging or provisioning twice.
         raise
     except ServiceError:
+        if telegram_action_audit is not None:
+            telegram_action_audit.record(
+                "vpn.config_create_submit",
+                result="rejected",
+                metadata={
+                    "server_id": server_id,
+                    "reason_code": "request_rejected",
+                },
+            )
         await message.answer(
             "Не удалось создать конфигурацию. Проверьте название и попробуйте "
             "ещё раз позже.",
@@ -360,23 +463,49 @@ async def got_name(
         "Откройте <b>«Инструкции»</b>, если подключаете устройство впервые.",
         reply_markup=main_menu_keyboard(),
     )
+    if telegram_action_audit is not None:
+        telegram_action_audit.record(
+            "vpn.config_create_submit",
+            metadata={
+                "config_id": config.id,
+                "server_id": server_id,
+            },
+        )
     await state.clear()
 
 
 @router.message(CreateConfig.entering_name, ~F.successful_payment)
-async def config_name_message_hint(message: Message) -> None:
+async def config_name_message_hint(
+    message: Message,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
     await message.answer(
         "Название нужно отправить текстом, например «Мой телефон».",
         reply_markup=cancel_keyboard(),
     )
+    if telegram_action_audit is not None:
+        telegram_action_audit.record(
+            "vpn.config_create_submit",
+            result="invalid",
+            metadata={"reason_code": "text_required"},
+        )
 
 
 async def _owned_config(
     callback: CallbackQuery,
     prefix: str,
+    *,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+    audit_action: str,
 ) -> tuple[Any, Any] | None:
     config_id = await _callback_id(callback, prefix)
     if config_id is None:
+        if telegram_action_audit is not None:
+            telegram_action_audit.record(
+                audit_action,
+                result="invalid",
+                metadata={"reason_code": "invalid_callback"},
+            )
         return None
     user = await get_or_create_user(
         callback.from_user.id,
@@ -384,6 +513,15 @@ async def _owned_config(
     )
     config = await config_service.get(config_id)
     if not config or config.owner_id != user.id:
+        if telegram_action_audit is not None:
+            # Never persist the attacker-controlled target before ownership is
+            # proven. The public response deliberately has the same shape for
+            # a missing and a foreign configuration.
+            telegram_action_audit.record(
+                audit_action,
+                result="rejected",
+                metadata={"reason_code": "config_not_found"},
+            )
         await safe_callback_answer(
             callback,
             "Конфигурация не найдена.",
@@ -473,21 +611,52 @@ async def _config_details(config: Any) -> tuple[str, InlineKeyboardMarkup]:
 
 
 @router.callback_query(F.data.startswith("cfg:"))
-async def show_config(callback: CallbackQuery) -> None:
-    owned = await _owned_config(callback, "cfg:")
+async def show_config(
+    callback: CallbackQuery,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
+    owned = await _owned_config(
+        callback,
+        "cfg:",
+        telegram_action_audit=telegram_action_audit,
+        audit_action="vpn.config_view",
+    )
     if owned is None:
         return
     config, _ = owned
     text, markup = await _config_details(config)
     await safe_edit_text(callback.message, text, reply_markup=markup)
     await safe_callback_answer(callback)
+    if telegram_action_audit is not None:
+        telegram_action_audit.record(
+            "vpn.config_view",
+            metadata={"config_id": config.id},
+        )
 
 
 @router.callback_query(F.data.startswith("sus:"))
-async def suspend_config_cb(callback: CallbackQuery) -> None:
-    owned = await _owned_config(callback, "sus:")
+async def suspend_config_cb(
+    callback: CallbackQuery,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
+    owned = await _owned_config(
+        callback,
+        "sus:",
+        telegram_action_audit=telegram_action_audit,
+        audit_action="vpn.config_suspend",
+    )
     if owned is None:
         return
+    config, _ = owned
+    if telegram_action_audit is not None:
+        telegram_action_audit.record(
+            "vpn.config_suspend",
+            result="unavailable",
+            metadata={
+                "config_id": config.id,
+                "reason_code": "manual_pause_disabled",
+            },
+        )
     await safe_callback_answer(
         callback,
         "Ручная пауза временно недоступна. Для потерянного устройства удалите "
@@ -497,10 +666,28 @@ async def suspend_config_cb(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("uns:"))
-async def unsuspend_config_cb(callback: CallbackQuery) -> None:
-    owned = await _owned_config(callback, "uns:")
+async def unsuspend_config_cb(
+    callback: CallbackQuery,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
+    owned = await _owned_config(
+        callback,
+        "uns:",
+        telegram_action_audit=telegram_action_audit,
+        audit_action="vpn.config_resume",
+    )
     if owned is None:
         return
+    config, _ = owned
+    if telegram_action_audit is not None:
+        telegram_action_audit.record(
+            "vpn.config_resume",
+            result="unavailable",
+            metadata={
+                "config_id": config.id,
+                "reason_code": "manual_resume_disabled",
+            },
+        )
     await safe_callback_answer(
         callback,
         "Ручное возобновление временно недоступно. Конфигурации, остановленные "
@@ -510,8 +697,16 @@ async def unsuspend_config_cb(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("del:"))
-async def delete_config_cb(callback: CallbackQuery) -> None:
-    owned = await _owned_config(callback, "del:")
+async def delete_config_cb(
+    callback: CallbackQuery,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
+    owned = await _owned_config(
+        callback,
+        "del:",
+        telegram_action_audit=telegram_action_audit,
+        audit_action="vpn.config_delete_request",
+    )
     if owned is None:
         return
     config, _ = owned
@@ -534,17 +729,39 @@ async def delete_config_cb(callback: CallbackQuery) -> None:
         reply_markup=markup,
     )
     await safe_callback_answer(callback)
+    if telegram_action_audit is not None:
+        telegram_action_audit.record(
+            "vpn.config_delete_request",
+            metadata={"config_id": config.id},
+        )
 
 
 @router.callback_query(F.data.startswith("del_ok:"))
-async def confirm_delete_config_cb(callback: CallbackQuery) -> None:
-    owned = await _owned_config(callback, "del_ok:")
+async def confirm_delete_config_cb(
+    callback: CallbackQuery,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
+    owned = await _owned_config(
+        callback,
+        "del_ok:",
+        telegram_action_audit=telegram_action_audit,
+        audit_action="vpn.config_delete_confirm",
+    )
     if owned is None:
         return
     config, _ = owned
     try:
         await config_service.revoke_config(config.id)
     except ServiceError:
+        if telegram_action_audit is not None:
+            telegram_action_audit.record(
+                "vpn.config_delete_confirm",
+                result="failed",
+                metadata={
+                    "config_id": config.id,
+                    "reason_code": "vpn_operation_failed",
+                },
+            )
         await callback.message.answer("Не удалось удалить конфигурацию.")
         await safe_callback_answer(callback)
         return
@@ -559,17 +776,46 @@ async def confirm_delete_config_cb(callback: CallbackQuery) -> None:
         reply_markup=markup,
     )
     await safe_callback_answer(callback)
+    if telegram_action_audit is not None:
+        telegram_action_audit.record(
+            "vpn.config_delete_confirm",
+            metadata={"config_id": config.id},
+        )
 
 
 @router.callback_query(F.data.startswith("dl:"))
-async def download_config_cb(callback: CallbackQuery, bot: Any) -> None:
-    owned = await _owned_config(callback, "dl:")
+async def download_config_cb(
+    callback: CallbackQuery,
+    bot: Any,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
+    owned = await _owned_config(
+        callback,
+        "dl:",
+        telegram_action_audit=telegram_action_audit,
+        audit_action="vpn.config_download",
+    )
     if owned is None:
         return
     config, _ = owned
+    if telegram_action_audit is not None:
+        telegram_action_audit.record(
+            "vpn.config_download",
+            result="handled",
+            metadata={"config_id": config.id},
+        )
     try:
         content = await config_service.download_config(config.id)
     except ServiceError:
+        if telegram_action_audit is not None:
+            telegram_action_audit.record(
+                "vpn.config_download",
+                result="failed",
+                metadata={
+                    "config_id": config.id,
+                    "reason_code": "download_failed",
+                },
+            )
         await callback.message.answer("Не удалось скачать конфигурацию.")
         await safe_callback_answer(callback)
         return
@@ -591,11 +837,25 @@ async def download_config_cb(callback: CallbackQuery, bot: Any) -> None:
         except OSError:
             pass
     await safe_callback_answer(callback)
+    if telegram_action_audit is not None:
+        telegram_action_audit.record(
+            "vpn.config_download",
+            metadata={"config_id": config.id},
+        )
 
 
 @router.callback_query(F.data.startswith("rn:"))
-async def rename_config_cb(callback: CallbackQuery, state: FSMContext) -> None:
-    owned = await _owned_config(callback, "rn:")
+async def rename_config_cb(
+    callback: CallbackQuery,
+    state: FSMContext,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
+    owned = await _owned_config(
+        callback,
+        "rn:",
+        telegram_action_audit=telegram_action_audit,
+        audit_action="vpn.config_rename_start",
+    )
     if owned is None:
         return
     config, _ = owned
@@ -606,13 +866,28 @@ async def rename_config_cb(callback: CallbackQuery, state: FSMContext) -> None:
     )
     await state.set_state(RenameConfig.entering_name)
     await safe_callback_answer(callback)
+    if telegram_action_audit is not None:
+        telegram_action_audit.record(
+            "vpn.config_rename_start",
+            metadata={"config_id": config.id},
+        )
 
 
 @router.message(RenameConfig.entering_name, F.text, ~F.successful_payment)
-async def got_new_name(message: Message, state: FSMContext) -> None:
+async def got_new_name(
+    message: Message,
+    state: FSMContext,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
     data = await state.get_data()
     config_id = data.get("config_id")
     if not config_id:
+        if telegram_action_audit is not None:
+            telegram_action_audit.record(
+                "vpn.config_rename_submit",
+                result="rejected",
+                metadata={"reason_code": "config_not_selected"},
+            )
         await message.answer(
             "Конфигурация не выбрана. Начните заново.",
             reply_markup=main_menu_keyboard(),
@@ -623,19 +898,45 @@ async def got_new_name(message: Message, state: FSMContext) -> None:
     user = await get_or_create_user(message.from_user.id, message.from_user.username)
     config = await config_service.get(config_id)
     if not config or config.owner_id != user.id:
+        if telegram_action_audit is not None:
+            telegram_action_audit.record(
+                "vpn.config_rename_submit",
+                result="rejected",
+                metadata={"reason_code": "config_not_found"},
+            )
         await message.answer(
             "Конфигурация не найдена.",
             reply_markup=main_menu_keyboard(),
         )
         await state.clear()
         return
+    if telegram_action_audit is not None:
+        telegram_action_audit.record(
+            "vpn.config_rename_submit",
+            result="handled",
+            metadata={"config_id": config.id},
+        )
     try:
         await config_service.rename_config(config_id, message.text or "")
         await message.answer(
             "✅ Конфигурация переименована.",
             reply_markup=main_menu_keyboard(),
         )
+        if telegram_action_audit is not None:
+            telegram_action_audit.record(
+                "vpn.config_rename_submit",
+                metadata={"config_id": config.id},
+            )
     except ServiceError:
+        if telegram_action_audit is not None:
+            telegram_action_audit.record(
+                "vpn.config_rename_submit",
+                result="invalid",
+                metadata={
+                    "config_id": config.id,
+                    "reason_code": "invalid_name",
+                },
+            )
         await message.answer(
             "Не удалось переименовать конфигурацию. Название должно содержать "
             "от 1 до 128 символов.",
@@ -645,8 +946,17 @@ async def got_new_name(message: Message, state: FSMContext) -> None:
 
 
 @router.message(RenameConfig.entering_name, ~F.successful_payment)
-async def rename_message_hint(message: Message) -> None:
+async def rename_message_hint(
+    message: Message,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
     await message.answer(
         "Новое название нужно отправить текстом.",
         reply_markup=cancel_keyboard(),
     )
+    if telegram_action_audit is not None:
+        telegram_action_audit.record(
+            "vpn.config_rename_submit",
+            result="invalid",
+            metadata={"reason_code": "text_required"},
+        )

@@ -12,8 +12,8 @@ trap 'rm -f "$EVENTS_FILE" "$RUNTIME_ENV_FILE" "$EXPORTER_SQL_FILE"' EXIT
 # shellcheck source=../deploy/production_canary.sh
 source "$REPO_ROOT/deploy/production_canary.sh"
 
-[[ "$EXPECTED_REVISION" == "d4e7f9a1b2c3" ]]
-[[ "$EXPECTED_PREVIOUS_REVISION" == "f1a8c3d9e742" ]]
+[[ "$EXPECTED_REVISION" == "e9f1a2b3c4d5" ]]
+[[ "$EXPECTED_PREVIOUS_REVISION" == "d4e7f9a1b2c3" ]]
 [[ "$POSTGRES_EXPORTER_ROLE" == "vpn_exporter" ]]
 
 interactive_smoke_count="$(

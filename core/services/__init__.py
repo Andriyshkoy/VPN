@@ -13,7 +13,15 @@ from .payments import CryptoPaymentService, TelegramPayService
 from .referrals import ReferralOverview, ReferralService
 from .server import ServerService
 from .telegram_updates import ClaimedTelegramUpdate, TelegramUpdateService
+from .telegram_user_actions import (
+    TelegramActionAuditContext,
+    TelegramActionClassification,
+    TelegramUserActionService,
+    classify_telegram_action,
+    sanitize_action_metadata,
+)
 from .user import UserService
+from .user_timeline import AdminUserTimelineService
 from .vpn_drift import (
     VPNDriftFinding,
     VPNDriftRepairOperation,
@@ -34,6 +42,7 @@ __all__ = [
     "ManagerFleetStatus",
     "BillingService",
     "UserService",
+    "AdminUserTimelineService",
     "ServerService",
     "ConfigService",
     "TelegramPayService",
@@ -42,6 +51,11 @@ __all__ = [
     "Notification",
     "ClaimedTelegramUpdate",
     "TelegramUpdateService",
+    "TelegramActionClassification",
+    "TelegramActionAuditContext",
+    "TelegramUserActionService",
+    "classify_telegram_action",
+    "sanitize_action_metadata",
     "VPNDriftService",
     "VPNDriftFinding",
     "VPNDriftReport",
