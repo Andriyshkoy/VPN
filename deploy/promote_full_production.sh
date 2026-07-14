@@ -153,6 +153,27 @@ assert_exact_marker() {
     [[ "$actual" == "$expected" ]] || die "${label} marker does not match"
 }
 
+promotion_marker_state() {
+    local marker="$1"
+    local expected="$2"
+    local actual
+
+    [[ -f "$marker" && ! -L "$marker" && -s "$marker" ]] \
+        || die "full production marker is missing or unsafe"
+    actual="$(<"$marker")"
+    [[ "$actual" =~ ^[0-9a-f]{40}$ ]] \
+        || die "full production marker is malformed"
+    if [[ "$actual" == "$expected" ]]; then
+        printf 'current\n'
+    else
+        printf 'stale\n'
+    fi
+}
+
+promotion_marker_exists() {
+    [[ -e "$1" || -L "$1" ]]
+}
+
 assert_container_image() {
     local service="$1"
     local expected_image="$2"
@@ -523,6 +544,7 @@ main() {
     local revision
     local db_container_id
     local promotion_marker
+    local promotion_state
     local candidate
     local timestamp
     local backup_dir
@@ -639,14 +661,19 @@ main() {
     [[ "$revision" == "$EXPECTED_REVISION" ]] \
         || die "live schema is not at the canary-tested revision"
 
-    if [[ -e "$promotion_marker" ]]; then
-        assert_exact_marker "$promotion_marker" "$RELEASE_SHA" "full production"
-        assert_policy "$LIVE_RELEASE_ENV" promoted
-        assert_full_topology
-        run_admin_smokes
-        run_read_only_preflights
-        log "full production release is already active and healthy"
-        return 0
+    if promotion_marker_exists "$promotion_marker"; then
+        promotion_state="$(
+            promotion_marker_state "$promotion_marker" "$RELEASE_SHA"
+        )"
+        if [[ "$promotion_state" == "current" ]]; then
+            assert_policy "$LIVE_RELEASE_ENV" promoted
+            assert_full_topology
+            run_admin_smokes
+            run_read_only_preflights
+            log "full production release is already active and healthy"
+            return 0
+        fi
+        log "a stale full production marker will be replaced after successful smokes"
     fi
 
     assert_policy "$LIVE_RELEASE_ENV" staged
