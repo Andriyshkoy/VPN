@@ -187,6 +187,9 @@ separate `Activate admin hub` workflow. It rechecks the exact release SHA,
 schema head, bot health, loopback HTTP contract and the configured public HTTPS
 origin. Public acceptance verifies the normal certificate/SNI path, the SPA,
 and the same-origin unauthenticated API boundary before committing the marker.
+The previous release marker may remain after the canary stops the old admin
+layer; activation replaces it atomically only after the new release passes all
+smoke tests.
 It then starts only admin, frontend, proxy and monitoring; it does not enable
 billing, payments, provisioning, notifications, worker, or scheduler.
 

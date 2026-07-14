@@ -5,8 +5,9 @@ set -Eeuo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EVENTS_FILE="$(mktemp)"
 MARKER_FILE="$(mktemp)"
-readonly REPO_ROOT EVENTS_FILE MARKER_FILE
-trap 'rm -f "$EVENTS_FILE" "$MARKER_FILE"' EXIT
+DANGLING_MARKER="${MARKER_FILE}.dangling"
+readonly REPO_ROOT EVENTS_FILE MARKER_FILE DANGLING_MARKER
+trap 'rm -f "$EVENTS_FILE" "$MARKER_FILE" "$DANGLING_MARKER"' EXIT
 
 # shellcheck source=../deploy/activate_admin_hub.sh
 source "$REPO_ROOT/deploy/activate_admin_hub.sh"
@@ -133,6 +134,23 @@ printf '%s\n' "$release_sha" > "$MARKER_FILE"
 assert_exact_marker "$MARKER_FILE" "$release_sha" "test release"
 if (assert_exact_marker "$MARKER_FILE" "ffffffffffffffffffffffffffffffffffffffff" "test release") 2>/dev/null; then
     fail "mismatched release marker was accepted"
+fi
+
+# A valid marker from the previous release is expected after the canary stops
+# the old admin layer. It must select the fresh activation path, while an exact
+# marker keeps the idempotent read-only smoke path.
+next_release_sha="ffffffffffffffffffffffffffffffffffffffff"
+[[ "$(activation_marker_state "$MARKER_FILE" "$release_sha")" == "current" ]]
+[[ "$(activation_marker_state "$MARKER_FILE" "$next_release_sha")" == "stale" ]]
+printf 'not-a-release-sha\n' > "$MARKER_FILE"
+if (activation_marker_state "$MARKER_FILE" "$next_release_sha") 2>/dev/null; then
+    fail "malformed admin hub marker was accepted"
+fi
+printf '%s\n' "$release_sha" > "$MARKER_FILE"
+ln -s "${MARKER_FILE}.missing" "$DANGLING_MARKER"
+activation_marker_exists "$DANGLING_MARKER"
+if (activation_marker_state "$DANGLING_MARKER" "$next_release_sha") 2>/dev/null; then
+    fail "dangling admin hub marker symlink was accepted"
 fi
 
 workflow="$REPO_ROOT/.github/workflows/activate-admin-hub.yml"

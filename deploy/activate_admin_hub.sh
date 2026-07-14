@@ -163,6 +163,27 @@ assert_exact_marker() {
     [[ "$actual" == "$expected" ]] || die "${label} marker does not match"
 }
 
+activation_marker_state() {
+    local marker="$1"
+    local expected="$2"
+    local actual
+
+    [[ -f "$marker" && ! -L "$marker" && -s "$marker" ]] \
+        || die "admin hub release marker is missing or unsafe"
+    actual="$(<"$marker")"
+    [[ "$actual" =~ ^[0-9a-f]{40}$ ]] \
+        || die "admin hub release marker is malformed"
+    if [[ "$actual" == "$expected" ]]; then
+        printf 'current\n'
+    else
+        printf 'stale\n'
+    fi
+}
+
+activation_marker_exists() {
+    [[ -e "$1" || -L "$1" ]]
+}
+
 smoke_spa_at() {
     local url="$1"
     local label="$2"
@@ -334,6 +355,7 @@ start_new_services() {
 
 main() {
     local activation_marker
+    local activation_state
     local image_ref
     local key
     local rendered_images
@@ -472,12 +494,17 @@ main() {
     [[ "$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$bot_container_id")" == "$RELEASE_SHA" ]] \
         || die "the running bot revision does not match the staged release"
 
-    if [[ -e "$activation_marker" ]]; then
-        assert_exact_marker "$activation_marker" "$RELEASE_SHA" "admin hub release"
-        log "admin hub release is already active; re-running read-only smokes"
-        run_smokes
-        log "admin hub activation already healthy"
-        return 0
+    if activation_marker_exists "$activation_marker"; then
+        activation_state="$(
+            activation_marker_state "$activation_marker" "$RELEASE_SHA"
+        )"
+        if [[ "$activation_state" == "current" ]]; then
+            log "admin hub release is already active; re-running read-only smokes"
+            run_smokes
+            log "admin hub activation already healthy"
+            return 0
+        fi
+        log "a stale admin hub marker will be replaced after successful smokes"
     fi
 
     for service in "${HUB_SERVICES[@]}" "${MONITORING_SERVICES[@]}"; do
