@@ -118,7 +118,11 @@ async def test_start_registers_payload_and_installs_menu(monkeypatch):
         "ref_id": f"ref_{code}",
     }
     assert message.calls[-1][1]["reply_markup"].is_persistent is True
-    assert "запоминания команд" in message.calls[-1][0]
+    welcome = message.calls[-1][0]
+    assert "Простой и доступный VPN" in welcome
+    assert "Около 50 ₽ в месяц" in welcome
+    assert "списываются постепенно" in welcome
+    assert "можно пользоваться" in welcome
 
 
 @pytest.mark.asyncio
