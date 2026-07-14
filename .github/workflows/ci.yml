@@ -187,10 +187,13 @@ jobs:
           shellcheck \
             deploy/production_canary.sh \
             deploy/activate_admin_hub.sh \
+            deploy/promote_full_production.sh \
             tests/test_production_canary_cleanup.sh \
-            tests/test_admin_hub_activation.sh
+            tests/test_admin_hub_activation.sh \
+            tests/test_full_production_promotion.sh
           bash tests/test_production_canary_cleanup.sh
           bash tests/test_admin_hub_activation.sh
+          bash tests/test_full_production_promotion.sh
 
   images:
     name: Image build (${{ matrix.key }})

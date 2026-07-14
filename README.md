@@ -313,6 +313,13 @@ After a successful bot canary for the exact main SHA, the separate manual
 monitoring. It does not run migrations or enable billing, payments,
 provisioning, notifications, worker or scheduler.
 
+The final manual `Promote full production` workflow accepts only that same
+current `main` SHA after both staged workflows succeeded. It rechecks the whole
+chain after production approval, backs up the active release manifest, enables
+the reviewed money and VPN switches, recreates admin, starts a fresh worker
+before renewed bot ingress, and starts the scheduler last. Automatic
+notifications and VPN drift repair remain disabled.
+
 - Build `admin`, `bot`, `billing`, and `migrations` only as targets of the root
   multi-stage `Dockerfile`. Production uses explicit profiles, external data
   volumes, and immutable image references; follow the

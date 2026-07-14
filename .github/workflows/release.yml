@@ -240,6 +240,7 @@ jobs:
             deploy/telegram_smoke.py \
             deploy/production_canary.sh \
             deploy/activate_admin_hub.sh \
+            deploy/promote_full_production.sh \
             "$SSH_USER@$SSH_HOST:$remote_tmp/"
           scp -i "$HOME/.ssh/id_deploy" -o BatchMode=yes -o StrictHostKeyChecking=yes \
             observability/alerts.yml \
@@ -260,6 +261,7 @@ jobs:
              sudo -n install -m 0644 '$remote_tmp/observability/statsd-mapping.yml' '$release_dir/observability/statsd-mapping.yml' && \
              sudo -n install -m 0700 '$remote_tmp/production_canary.sh' '$release_dir/production_canary.sh' && \
              sudo -n install -m 0700 '$remote_tmp/activate_admin_hub.sh' '$release_dir/activate_admin_hub.sh' && \
+             sudo -n install -m 0700 '$remote_tmp/promote_full_production.sh' '$release_dir/promote_full_production.sh' && \
              rm -rf '$remote_tmp'"
 
       - name: Run guarded production deployment

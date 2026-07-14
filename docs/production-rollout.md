@@ -75,9 +75,9 @@ credentials remain solely in `/opt/vpn/.env` on the server.
 
 Set the optional repository variable `ADMIN_PUBLIC_ORIGIN` to the path-free
 HTTPS origin served by the host proxy. It defaults to
-`https://admin.vpn.andriyshkoy.ru`. Both release workflows recheck that their
-SHA is still current `main` and has exact successful CI after production
-approval, immediately before preparing SSH access.
+`https://admin.vpn.andriyshkoy.ru`. Every mutating workflow rechecks that its SHA
+is still current `main` and has the required exact successful predecessor runs
+after production approval, immediately before preparing SSH access.
 
 The guarded remote script performs these gates before bot traffic:
 
@@ -190,17 +190,46 @@ Readiness requires PostgreSQL at the exact schema head, Redis, and valid Manager
 TLS material. Run a read-only drift audit and review aggregated findings; keep
 `VPN_DRIFT_REPAIR_ENABLED=false`.
 
-After explicit approval, start components one at a time:
+## Full production promotion
 
-```bash
-docker compose --env-file .env --env-file release.env \
-  -f docker-compose-prod.yml --profile worker up -d --no-deps rq_worker
+Run the manual `Promote full production` workflow with the exact confirmation
+`PROMOTE_FULL_PRODUCTION`. It accepts only the current `main` SHA and requires
+successful `CI`, `Release bot canary`, and `Activate admin hub` runs for that
+same SHA. The complete gate is repeated after the protected `production`
+environment approval; no image is rebuilt or uploaded at this stage.
+
+On the host, `promote_full_production.sh` acquires the same deployment lock and
+requires both `current-release` and `current-admin-hub` to equal the requested
+full SHA. It also requires the immutable staged manifest to remain fail-closed,
+the database to be at `d4e7f9a1b2c3`, all staged images and running canary
+containers to match their registry digests and revision labels, and both
+Manager and Telegram read-only smokes to pass.
+
+The script copies the active root-only `release.env` into a timestamped backup,
+then atomically installs a runtime manifest with this policy:
+
+```dotenv
+MAINTENANCE_MODE=false
+BILLING_ENABLED=true
+PAYMENTS_ENABLED=true
+PROVISIONING_ENABLED=true
+NOTIFICATIONS_ENABLED=false
+REFERRAL_REWARDS_ENABLED=true
+VPN_DRIFT_REPAIR_ENABLED=false
+OBSERVABILITY_ENABLED=true
 ```
 
+Admin is recreated and accepted first. A force-recreated RQ worker then starts
+before the bot is recreated and its ingress reopens. This happens only after
+public HTTPS, accounting, Manager mTLS and Telegram identity checks pass.
+`rq_scheduler` is force-recreated as the final service start. The script writes
+`current-production` only after every intended service is running the exact
+staged image and has loaded the promoted switches.
+
 Observe the durable Telegram inbox, payment intents, VPN operations, ledger,
-notification outbox, and queues before changing kill switches. Start
-`rq_scheduler` last, using the `billing-scheduler` profile, only after billing
-has been separately approved.
+notification outbox, RQ registries and billing periods immediately after
+promotion. Existing queued notifications remain paused; due idempotent billing
+periods can run as soon as the worker and scheduler are enabled.
 
 ## Rollback
 
@@ -216,6 +245,15 @@ Stop bot/worker/scheduler first. Do not downgrade the database while any new
 process is running. A database restore must use the post-key-rotation snapshot
 or explicitly restore a matching Manager key generation without logging the
 decrypted key.
+
+If full promotion fails before it is committed, the guarded script first stops
+scheduler, worker, bot and admin, atomically restores the backed-up fail-closed
+`release.env`, removes a matching partial `current-production` marker, and only
+then recreates admin and bot under that policy. It deliberately
+does not attempt to reverse already committed Telegram, payment, ledger, or VPN
+side effects. An unclean host interruption leaves `promotion-in-progress`; do
+not delete it until the running containers and the active `release.env` have
+been inspected against the referenced backup.
 
 Monitoring activation and exporter-role setup are documented in
 [`observability.md`](observability.md). Monitoring is optional and is never a
