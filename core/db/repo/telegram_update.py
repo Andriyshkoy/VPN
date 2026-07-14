@@ -166,6 +166,62 @@ class TelegramUpdateRepo(BaseRepo[TelegramUpdateInbox]):
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def terminalize_exhausted(
+        self,
+        *,
+        now: datetime,
+        max_attempts: int,
+    ) -> list[tuple[TelegramUpdateInbox, str]]:
+        """Close exhausted rows and return them for atomic safe audit append.
+
+        ``claim_next`` retains equivalent guards for direct repository callers.
+        The bot service calls this method first so auto-DEAD transitions and
+        their immutable user-action event share one transaction.
+        """
+
+        terminalized: list[tuple[TelegramUpdateInbox, str]] = []
+        failed = (
+            update(self.model)
+            .where(
+                self.model.status == TelegramUpdateStatus.FAILED.value,
+                self.model.attempts >= max_attempts,
+            )
+            .values(
+                status=TelegramUpdateStatus.DEAD.value,
+                lease_token=None,
+                lease_until=None,
+                updated_at=now,
+            )
+            .returning(self.model)
+        )
+        terminalized.extend(
+            (row, "retry_budget_exhausted")
+            for row in (await self.session.scalars(failed)).all()
+        )
+
+        expired = (
+            update(self.model)
+            .where(
+                self.model.status == TelegramUpdateStatus.PROCESSING.value,
+                self.model.attempts >= max_attempts,
+                self.model.lease_until.is_not(None),
+                self.model.lease_until <= now,
+            )
+            .values(
+                status=TelegramUpdateStatus.DEAD.value,
+                lease_token=None,
+                lease_until=None,
+                last_error="processing lease expired after final attempt",
+                updated_at=now,
+            )
+            .returning(self.model)
+        )
+        terminalized.extend(
+            (row, "lease_expired")
+            for row in (await self.session.scalars(expired)).all()
+        )
+        return terminalized
+
     async def renew_lease(
         self,
         update_id: int,
@@ -216,21 +272,26 @@ class TelegramUpdateRepo(BaseRepo[TelegramUpdateInbox]):
         next_attempt_at: datetime,
         exhausted: bool,
     ) -> bool:
+        values = {
+            "status": (
+                TelegramUpdateStatus.DEAD.value
+                if exhausted
+                else TelegramUpdateStatus.FAILED.value
+            ),
+            "lease_token": None,
+            "lease_until": None,
+            "last_error": error[:4000],
+            "next_attempt_at": next_attempt_at,
+            "updated_at": now,
+        }
+        if exhausted:
+            # The caller already owns the in-memory payload needed for its
+            # safe classification. Do not retain raw dead-letter contents.
+            values["payload"] = {}
         stmt = (
             update(self.model)
             .where(*self._owned_processing(update_id, lease_token))
-            .values(
-                status=(
-                    TelegramUpdateStatus.DEAD.value
-                    if exhausted
-                    else TelegramUpdateStatus.FAILED.value
-                ),
-                lease_token=None,
-                lease_until=None,
-                last_error=error[:4000],
-                next_attempt_at=next_attempt_at,
-                updated_at=now,
-            )
+            .values(**values)
         )
         return bool((await self.session.execute(stmt)).rowcount)
 

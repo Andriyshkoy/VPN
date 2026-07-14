@@ -1,11 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, CircleDollarSign, ExternalLink, ShieldAlert } from 'lucide-react'
+import { ArrowLeft, CircleDollarSign, ShieldAlert } from 'lucide-react'
 import { useState } from 'react'
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
-  auditApi,
   usersApi,
-  type AuditEvent,
   type LedgerEntry,
   type Payment,
   type ReferralNode,
@@ -20,6 +18,7 @@ import { PageHeader, StatCard } from '../components/PageHeader'
 import { Pagination } from '../components/Pagination'
 import { EmptyState, ErrorState, ForbiddenState, PageLoading } from '../components/States'
 import { StatusBadge } from '../components/StatusBadge'
+import { UserTimeline } from '../components/UserTimeline'
 import { formatDateTime, formatMoney, formatNumber, shortId, userLabel } from '../lib/format'
 
 const DETAIL_PAGE_SIZE = 25
@@ -41,7 +40,7 @@ const tabs = [
   { id: 'finance', label: 'Финансы', permission: 'balance:read' },
   { id: 'configs', label: 'Конфигурации', permission: 'configs:read' },
   { id: 'referrals', label: 'Рефералы', permission: 'referrals:read' },
-  { id: 'audit', label: 'Аудит', permission: 'audit:read' },
+  { id: 'history', label: 'История', permission: 'audit:read' },
 ]
 
 export function UserDetailPage() {
@@ -57,6 +56,7 @@ export function UserDetailPage() {
   const navigate = useNavigate()
   const [balanceOpen, setBalanceOpen] = useState(false)
   const userQuery = useQuery({ queryKey: ['user', userId], queryFn: () => usersApi.detail(userId), enabled: Boolean(userId) })
+  if (tab === 'audit') return <Navigate to={`/users/${userId}/history`} replace />
   if (!tabs.some((item) => item.id === tab)) return <Navigate to={`/users/${userId}/overview`} replace />
   const tabAllowed = tabs.find((item) => item.id === tab)?.permission
   const canOpenTab = tabAllowed ? admin?.permissions.includes(tabAllowed) ?? false : false
@@ -72,7 +72,7 @@ export function UserDetailPage() {
         <div className="user-summary__stats">{canReadBalance && <><StatCard label="Баланс" value={formatMoney(user.balance)} /><StatCard label="Пополнения" value={formatMoney(user.deposits_total)} /><StatCard label="Потребление" value={formatMoney(user.service_spend_total)} /></>}<StatCard label="Активные конфиги" value={formatNumber(user.active_configs_count ?? user.configs_count)} /></div>
       </section>
       <nav className="tabs" aria-label="Разделы пользователя">{tabs.filter((item) => admin?.permissions.includes(item.permission)).map((item) => <Link key={item.id} className={tab === item.id ? 'tab tab--active' : 'tab'} to={`/users/${userId}/${item.id}`}>{item.label}</Link>)}</nav>
-      {!canOpenTab ? <ForbiddenState /> : <>{tab === 'overview' && <UserOverview userId={userId} user={user} canReadBalance={canReadBalance} canReadReferrals={canReadReferrals} canReadConfigs={canReadConfigs} canReadOperations={canReadOperations} />}{tab === 'finance' && <UserFinance userId={userId} />}{tab === 'configs' && <UserConfigs userId={userId} canReadServers={canReadServers} />}{tab === 'referrals' && <UserReferrals userId={userId} />}{tab === 'audit' && <UserAudit userId={userId} />}</>}
+      {!canOpenTab ? <ForbiddenState /> : <>{tab === 'overview' && <UserOverview userId={userId} user={user} canReadBalance={canReadBalance} canReadReferrals={canReadReferrals} canReadConfigs={canReadConfigs} canReadOperations={canReadOperations} />}{tab === 'finance' && <UserFinance userId={userId} />}{tab === 'configs' && <UserConfigs userId={userId} canReadServers={canReadServers} />}{tab === 'referrals' && <UserReferrals userId={userId} />}{tab === 'history' && <UserTimeline userId={userId} />}</>}
       {canAdjustBalance && user.balance !== undefined && <BalanceAdjustmentDialog user={user} open={balanceOpen} onClose={() => setBalanceOpen(false)} />}
     </>
   )
@@ -162,19 +162,4 @@ function UserReferrals({ userId }: { userId: string }) {
 
 function ReferralList({ nodes }: { nodes: ReferralNode[] }) {
   return <div className="referral-list">{nodes.map((node) => <div className="referral-row" key={node.user_id}><span className="avatar">{(node.username || String(node.user_id)).slice(0, 1).toUpperCase()}</span><span><Link className="primary-link" to={`/users/${node.user_id}`}>{node.username ? `@${node.username}` : `Пользователь #${node.user_id}`}</Link><small>Регистрация {formatDateTime(node.registered_at)}</small></span><span><small>Пополнения</small><strong>{formatMoney(node.deposits_total)}</strong></span><span><small>Начисления</small><strong>{formatMoney(node.rewards_total)}</strong></span><span><small>Своя сеть</small><strong>{formatNumber(node.direct_referrals)}</strong></span></div>)}</div>
-}
-
-function UserAudit({ userId }: { userId: string }) {
-  const [params, setParams] = useSearchParams()
-  const offset = pageOffset(params, 'audit_offset')
-  const query = useQuery({ queryKey: ['user-audit', userId, offset], queryFn: () => auditApi.list({ target_type: 'user', target_id: userId, limit: DETAIL_PAGE_SIZE, offset }), placeholderData: (previous) => previous })
-  const columns: Column<AuditEvent>[] = [
-    { key: 'time', header: 'Время', render: (row) => formatDateTime(row.occurred_at) },
-    { key: 'actor', header: 'Инициатор', render: (row) => row.actor || 'system' },
-    { key: 'action', header: 'Действие', render: (row) => <span className="mono-soft">{row.action || '—'}</span> },
-    { key: 'reason', header: 'Причина', render: (row) => row.reason || '—' },
-    { key: 'result', header: 'Результат', render: (row) => <StatusBadge value={row.result} /> },
-    { key: 'meta', header: '', render: (row) => row.metadata && Object.keys(row.metadata).length ? <details className="details-popover"><summary><ExternalLink size={15} /> Детали</summary><pre>{JSON.stringify(row.metadata, null, 2)}</pre></details> : null },
-  ]
-  return <section className="panel"><header className="panel__header"><div><h2>История действий</h2><p>Неизменяемый журнал по пользователю</p></div></header>{query.isLoading ? <PageLoading /> : query.isError ? <ErrorState error={query.error} /> : query.data!.items.length ? <><DataTable label="Аудит пользователя" columns={columns} rows={query.data!.items} rowKey={(row) => row.id} /><Pagination offset={query.data!.offset} limit={query.data!.limit} total={query.data!.total} onChange={(nextOffset) => updatePage(params, setParams, 'audit_offset', nextOffset)} /></> : <EmptyState title="Событий пока нет" />}</section>
 }

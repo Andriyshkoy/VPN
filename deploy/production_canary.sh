@@ -4,8 +4,8 @@ set -Eeuo pipefail
 umask 077
 
 readonly POSTGRES_IMAGE="postgres:16@sha256:5a65324fe84dc41709ff914e90b07f3e2f577073ed27bf917d4873aca0c9ec51"
-readonly EXPECTED_REVISION="d4e7f9a1b2c3"
-readonly EXPECTED_PREVIOUS_REVISION="f1a8c3d9e742"
+readonly EXPECTED_REVISION="e9f1a2b3c4d5"
+readonly EXPECTED_PREVIOUS_REVISION="d4e7f9a1b2c3"
 readonly POSTGRES_EXPORTER_ROLE="vpn_exporter"
 
 log() {

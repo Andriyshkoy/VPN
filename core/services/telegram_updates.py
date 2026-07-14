@@ -10,6 +10,11 @@ from typing import Callable, Iterable
 from uuid import uuid4
 
 from core.config import settings
+from core.services.telegram_user_actions import (
+    TelegramActionAuditContext,
+    TelegramUserActionService,
+    safe_error_type,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +23,7 @@ class ClaimedTelegramUpdate:
     payload: dict
     lease_token: str
     attempts: int
+    received_at: datetime
 
 
 class TelegramUpdateService:
@@ -76,6 +82,24 @@ class TelegramUpdateService:
         now = now or datetime.now(timezone.utc)
         lease_token = str(uuid4())
         async with self._uow() as repos:
+            terminalized = await repos.telegram_updates.terminalize_exhausted(
+                now=now,
+                max_attempts=settings.telegram_update_max_attempts,
+            )
+            for dead, terminal_reason in terminalized:
+                await TelegramUserActionService.append_in_transaction(
+                    repos,
+                    source_update_id=dead.update_id,
+                    payload=dead.payload,
+                    result="failed",
+                    occurred_at=dead.received_at,
+                    failure_metadata={
+                        "attempts": dead.attempts,
+                        "error_type": terminal_reason,
+                    },
+                )
+                # Classification is complete; dead updates never need replay.
+                dead.payload = {}
             row = await repos.telegram_updates.claim_next(
                 lease_token=lease_token,
                 now=now,
@@ -89,6 +113,7 @@ class TelegramUpdateService:
                 payload=row.payload,
                 lease_token=lease_token,
                 attempts=row.attempts,
+                received_at=row.received_at,
             )
 
     async def renew_lease(
@@ -111,14 +136,25 @@ class TelegramUpdateService:
         claimed: ClaimedTelegramUpdate,
         *,
         now: datetime | None = None,
+        audit_context: TelegramActionAuditContext | None = None,
     ) -> bool:
         now = now or datetime.now(timezone.utc)
         async with self._uow() as repos:
-            return await repos.telegram_updates.mark_processed(
+            completed = await repos.telegram_updates.mark_processed(
                 claimed.update_id,
                 lease_token=claimed.lease_token,
                 now=now,
             )
+            if completed:
+                await TelegramUserActionService.append_in_transaction(
+                    repos,
+                    source_update_id=claimed.update_id,
+                    payload=claimed.payload,
+                    result="handled",
+                    occurred_at=claimed.received_at,
+                    audit_context=audit_context,
+                )
+            return completed
 
     async def mark_failed(
         self,
@@ -126,6 +162,7 @@ class TelegramUpdateService:
         error: Exception | str,
         *,
         now: datetime | None = None,
+        audit_context: TelegramActionAuditContext | None = None,
     ) -> bool:
         now = now or datetime.now(timezone.utc)
         exhausted = claimed.attempts >= settings.telegram_update_max_attempts
@@ -134,7 +171,7 @@ class TelegramUpdateService:
             settings.telegram_update_retry_max_seconds,
         )
         async with self._uow() as repos:
-            return await repos.telegram_updates.mark_failed(
+            completed = await repos.telegram_updates.mark_failed(
                 claimed.update_id,
                 lease_token=claimed.lease_token,
                 error=f"{type(error).__name__}: {error}"[:4000],
@@ -142,6 +179,20 @@ class TelegramUpdateService:
                 next_attempt_at=now + timedelta(seconds=delay),
                 exhausted=exhausted,
             )
+            if completed and exhausted:
+                await TelegramUserActionService.append_in_transaction(
+                    repos,
+                    source_update_id=claimed.update_id,
+                    payload=claimed.payload,
+                    result="failed",
+                    occurred_at=claimed.received_at,
+                    failure_metadata={
+                        "attempts": claimed.attempts,
+                        "error_type": safe_error_type(error),
+                    },
+                    audit_context=audit_context,
+                )
+            return completed
 
     async def purge_terminal(
         self,

@@ -10,7 +10,7 @@ from aiogram import BaseMiddleware
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import CallbackQuery, Message, PreCheckoutQuery, TelegramObject
 
-from core.services import UserService
+from core.services import TelegramActionAuditContext, UserService
 
 # The middleware only lets a syntactically valid private invitation reach the
 # /start handler. The service performs the authoritative database lookup.
@@ -38,6 +38,9 @@ class InviteOnlyAccessMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
+        telegram_action_audit = data.get("telegram_action_audit")
+        if not isinstance(telegram_action_audit, TelegramActionAuditContext):
+            telegram_action_audit = None
         from_user = getattr(event, "from_user", None)
         if from_user is None:
             return await handler(event, data)
@@ -48,6 +51,12 @@ class InviteOnlyAccessMiddleware(BaseMiddleware):
                 reactivate_delivery=self._is_private_inbound(event),
             )
         except Exception:
+            if telegram_action_audit is not None:
+                telegram_action_audit.record(
+                    "access.invite_lookup",
+                    result="unavailable",
+                    metadata={"reason_code": "lookup_failed"},
+                )
             # Database uncertainty must never look like a definitive access
             # denial: regular/captured updates stay retryable in the durable
             # inbox. Pre-checkout is the one protocol event that must receive
@@ -78,12 +87,24 @@ class InviteOnlyAccessMiddleware(BaseMiddleware):
                     ok=False,
                     error_message="Доступ к боту возможен только по приглашению.",
                 )
+            if telegram_action_audit is not None:
+                telegram_action_audit.record(
+                    "access.invite_required",
+                    result="rejected",
+                    metadata={"reason_code": "invite_required"},
+                )
             return None
 
         if isinstance(event, CallbackQuery):
             # Close the client-side spinner without disclosing account state.
             with contextlib.suppress(TelegramAPIError):
                 await event.answer()
+            if telegram_action_audit is not None:
+                telegram_action_audit.record(
+                    "access.invite_required",
+                    result="rejected",
+                    metadata={"reason_code": "invite_required"},
+                )
             return None
 
         if isinstance(event, Message):
@@ -93,8 +114,20 @@ class InviteOnlyAccessMiddleware(BaseMiddleware):
                 return await handler(event, data)
             if self._is_private_invited_start(event):
                 return await handler(event, data)
+            if telegram_action_audit is not None:
+                telegram_action_audit.record(
+                    "access.invite_required",
+                    result="rejected",
+                    metadata={"reason_code": "invite_required"},
+                )
             return None
 
+        if telegram_action_audit is not None:
+            telegram_action_audit.record(
+                "access.invite_required",
+                result="rejected",
+                metadata={"reason_code": "invite_required"},
+            )
         return None
 
     @staticmethod

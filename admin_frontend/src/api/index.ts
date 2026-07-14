@@ -17,6 +17,7 @@ import {
   adaptServerStatus,
   adaptUserDetail,
   adaptUserListItem,
+  adaptUserTimelineEvent,
 } from './adapters'
 import type {
   AdminIdentity,
@@ -31,6 +32,7 @@ import type {
   Server,
   ServerCreateInput,
   User,
+  UserTimelineEvent,
   VpnConfig,
   VpnOperation,
 } from './types'
@@ -78,6 +80,7 @@ export const usersApi = {
   },
   children: (id: string, params: ListParams = {}) => adaptedPage<ReferralNode>(`/users/${encodeURIComponent(id)}/referrals/children`, params, adaptReferralNode),
   rewards: (id: string, params: ListParams = {}) => adaptedPage<ReferralReward>(`/users/${encodeURIComponent(id)}/referral-rewards`, params, adaptReward),
+  timeline: (id: string, params: ListParams = {}) => adaptedPage<UserTimelineEvent>(`/users/${encodeURIComponent(id)}/timeline`, params, adaptUserTimelineEvent),
   adjustBalance: (id: string, input: BalanceAdjustmentInput, key: string) =>
     request<User>(`/users/${encodeURIComponent(id)}/balance-adjustments`, {
       method: 'POST',

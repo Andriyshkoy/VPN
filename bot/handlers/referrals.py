@@ -10,7 +10,11 @@ from aiogram.utils.deep_linking import create_start_link
 
 from core.config import settings
 from core.db.unit_of_work import uow
-from core.services import ReferralOverview, ReferralService
+from core.services import (
+    ReferralOverview,
+    ReferralService,
+    TelegramActionAuditContext,
+)
 
 from ..keyboards import referral_program_keyboard
 from ..ui import format_money, safe_callback_answer, safe_edit_text
@@ -86,13 +90,38 @@ async def _referral_screen(
     )
 
 
-async def cmd_referrals(message: Message, bot: Bot | None = None) -> None:
+def _record_referral_outcome(
+    telegram_action_audit: TelegramActionAuditContext | None,
+) -> None:
+    if telegram_action_audit is None:
+        return
+    if settings.referral_rewards_enabled:
+        telegram_action_audit.record("referral.overview")
+    else:
+        telegram_action_audit.record(
+            "referral.overview",
+            result="unavailable",
+            metadata={"reason_code": "referral_rewards_disabled"},
+        )
+
+
+async def cmd_referrals(
+    message: Message,
+    bot: Bot | None = None,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
     screen = await _referral_screen(
         tg_id=message.from_user.id,
         username=message.from_user.username,
         bot=bot or message.bot,
     )
     if screen is None:
+        if telegram_action_audit is not None:
+            telegram_action_audit.record(
+                "referral.overview",
+                result="unavailable",
+                metadata={"reason_code": "account_unavailable"},
+            )
         return
     text, markup = screen
     await message.answer(
@@ -100,10 +129,14 @@ async def cmd_referrals(message: Message, bot: Bot | None = None) -> None:
         reply_markup=markup,
         disable_web_page_preview=True,
     )
+    _record_referral_outcome(telegram_action_audit)
 
 
 @router.callback_query(F.data.startswith("refs:"))
-async def legacy_referrals_callback(callback: CallbackQuery) -> None:
+async def legacy_referrals_callback(
+    callback: CallbackQuery,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
     """Keep already-sent referral buttons useful after the rollout."""
 
     screen = await _referral_screen(
@@ -113,6 +146,12 @@ async def legacy_referrals_callback(callback: CallbackQuery) -> None:
     )
     if screen is None:
         await safe_callback_answer(callback)
+        if telegram_action_audit is not None:
+            telegram_action_audit.record(
+                "referral.overview",
+                result="unavailable",
+                metadata={"reason_code": "account_unavailable"},
+            )
         return
     text, markup = screen
     await safe_edit_text(
@@ -122,3 +161,4 @@ async def legacy_referrals_callback(callback: CallbackQuery) -> None:
         disable_web_page_preview=True,
     )
     await safe_callback_answer(callback)
+    _record_referral_outcome(telegram_action_audit)

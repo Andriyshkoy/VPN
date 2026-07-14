@@ -82,7 +82,7 @@ jobs:
           alembic upgrade head
           alembic current
           alembic check
-          test "$(psql 'postgresql://vpn:vpn@127.0.0.1:5432/vpn_migration' -Atc 'SELECT version_num FROM alembic_version')" = "d4e7f9a1b2c3"
+          test "$(psql 'postgresql://vpn:vpn@127.0.0.1:5432/vpn_migration' -Atc 'SELECT version_num FROM alembic_version')" = "e9f1a2b3c4d5"
 
   frontend:
     name: Frontend

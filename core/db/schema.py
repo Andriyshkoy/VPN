@@ -1,3 +1,3 @@
 """Schema contract shared by readiness and release validation."""
 
-EXPECTED_ALEMBIC_REVISION = "d4e7f9a1b2c3"
+EXPECTED_ALEMBIC_REVISION = "e9f1a2b3c4d5"
