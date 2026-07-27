@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Search, Users } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router'
 import { referralsApi, type ReferralNode } from '../api'
 import { useAuth } from '../auth/AuthProvider'
 import { PageHeader } from '../components/PageHeader'

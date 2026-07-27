@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, CircleDollarSign, ShieldAlert } from 'lucide-react'
 import { useState } from 'react'
-import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router'
 import {
   usersApi,
   type LedgerEntry,

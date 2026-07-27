@@ -13,7 +13,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 import { usersApi, type TimelineActor, type TimelineCategory, type UserTimelineEvent } from '../api'
 import { formatDateTime } from '../lib/format'
 import { Pagination } from './Pagination'

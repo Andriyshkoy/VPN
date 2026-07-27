@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, ArrowRight, CircleDollarSign, FileKey2, ServerCog, Users } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { dashboardApi } from '../api'
 import { useAuth } from '../auth/AuthProvider'
 import { DataTable, type Column } from '../components/DataTable'

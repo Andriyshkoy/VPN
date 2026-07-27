@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { CircleDollarSign, Search, SlidersHorizontal } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router'
 import { usersApi, type User } from '../api'
 import { useAuth } from '../auth/AuthProvider'
 import { BalanceAdjustmentDialog } from '../components/BalanceAdjustmentDialog'

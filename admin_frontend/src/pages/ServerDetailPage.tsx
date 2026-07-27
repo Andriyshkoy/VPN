@@ -13,7 +13,7 @@ import {
   Save,
 } from 'lucide-react'
 import { useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router'
 import { operationsApi, serversApi, type Server, type VpnOperation } from '../api'
 import { useAuth } from '../auth/AuthProvider'
 import { Modal } from '../components/Modal'

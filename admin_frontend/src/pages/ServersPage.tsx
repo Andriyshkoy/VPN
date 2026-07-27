@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, MapPin, Plus, Search, ServerCog } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router'
 import { serversApi, type ServerCreateInput } from '../api'
 import { useAuth } from '../auth/AuthProvider'
 import { Modal } from '../components/Modal'
