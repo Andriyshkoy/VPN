@@ -148,7 +148,7 @@ jobs:
             echo "- Commit: \`${GITHUB_SHA}\`"
             echo '- Reused the exact digest-pinned canary and activated admin release.'
             echo '- Enabled billing, payments and provisioning.'
-            echo '- Kept automatic Telegram notifications disabled.'
+            echo '- Enabled automatic Telegram balance notifications.'
             echo '- Started the RQ worker before renewed bot ingress and the scheduler last.'
             echo '- Kept automatic VPN drift repair disabled.'
           } >> "$GITHUB_STEP_SUMMARY"

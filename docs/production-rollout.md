@@ -224,7 +224,7 @@ MAINTENANCE_MODE=false
 BILLING_ENABLED=true
 PAYMENTS_ENABLED=true
 PROVISIONING_ENABLED=true
-NOTIFICATIONS_ENABLED=false
+NOTIFICATIONS_ENABLED=true
 REFERRAL_REWARDS_ENABLED=true
 VPN_DRIFT_REPAIR_ENABLED=false
 OBSERVABILITY_ENABLED=true
@@ -243,8 +243,9 @@ checks. Malformed or unsafe markers are rejected fail-closed.
 
 Observe the durable Telegram inbox, payment intents, VPN operations, ledger,
 notification outbox, RQ registries and billing periods immediately after
-promotion. Existing queued notifications remain paused; due idempotent billing
-periods can run as soon as the worker and scheduler are enabled.
+promotion. The worker publishes pending outbox rows, and the bot resumes
+delivery of messages already queued in Redis. Due idempotent billing periods
+can run as soon as the worker and scheduler are enabled.
 
 ## Rollback
 

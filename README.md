@@ -319,7 +319,8 @@ current `main` SHA after both staged workflows succeeded. It rechecks the whole
 chain after production approval, backs up the active release manifest, enables
 the reviewed money and VPN switches, recreates admin, starts a fresh worker
 before renewed bot ingress, and starts the scheduler last. Automatic
-notifications and VPN drift repair remain disabled.
+Telegram balance notifications are enabled as part of this final promotion;
+automatic VPN drift repair remains disabled.
 
 - Build `admin`, `bot`, `billing`, and `migrations` only as targets of the root
   multi-stage `Dockerfile`. Production uses explicit profiles, external data

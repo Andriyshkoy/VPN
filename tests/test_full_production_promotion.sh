@@ -57,7 +57,7 @@ for expected in \
     BILLING_ENABLED=true \
     PAYMENTS_ENABLED=true \
     PROVISIONING_ENABLED=true \
-    NOTIFICATIONS_ENABLED=false \
+    NOTIFICATIONS_ENABLED=true \
     REFERRAL_REWARDS_ENABLED=true \
     VPN_DRIFT_REPAIR_ENABLED=false \
     OBSERVABILITY_ENABLED=true; do
@@ -98,9 +98,9 @@ if (assert_policy "$UNSAFE" promoted) 2>/dev/null; then
     fail "automatic VPN drift repair was accepted"
 fi
 cp "$PROMOTED" "$UNSAFE"
-set_env_value NOTIFICATIONS_ENABLED true "$UNSAFE"
+set_env_value NOTIFICATIONS_ENABLED false "$UNSAFE"
 if (assert_policy "$UNSAFE" promoted) 2>/dev/null; then
-    fail "automatic Telegram notifications were accepted"
+    fail "disabled automatic Telegram notifications were accepted"
 fi
 
 # The start path must explicitly recreate admin, start a fresh worker before
