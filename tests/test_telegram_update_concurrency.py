@@ -85,10 +85,11 @@ async def test_postgres_deduplicates_ingestion_and_grants_one_processing_lease()
             insert(802, "v1:lane-a"),
             insert(803, "v1:lane-b"),
         )
+        lane_now = datetime.now(timezone.utc) + timedelta(seconds=1)
         async with maker() as session, session.begin():
             lane_a = await TelegramUpdateRepo(session).claim_next(
                 lease_token="00000000-0000-4000-9000-000000000021",
-                now=now,
+                now=lane_now,
                 lease_for=timedelta(minutes=5),
                 max_attempts=20,
             )
@@ -98,14 +99,14 @@ async def test_postgres_deduplicates_ingestion_and_grants_one_processing_lease()
                 801,
                 lease_token=lane_a.lease_token,
                 error="retry lane a",
-                now=now,
-                next_attempt_at=now + timedelta(minutes=1),
+                now=lane_now,
+                next_attempt_at=lane_now + timedelta(minutes=1),
                 exhausted=False,
             )
         async with maker() as session, session.begin():
             other_lane = await TelegramUpdateRepo(session).claim_next(
                 lease_token="00000000-0000-4000-9000-000000000022",
-                now=now,
+                now=lane_now,
                 lease_for=timedelta(minutes=5),
                 max_attempts=20,
             )

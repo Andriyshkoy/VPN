@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC1090,SC1091,SC2034,SC2317
+# shellcheck disable=SC1090,SC1091,SC2016,SC2034,SC2317
 set -Eeuo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -12,9 +12,28 @@ trap 'rm -f "$EVENTS_FILE" "$RUNTIME_ENV_FILE" "$EXPORTER_SQL_FILE"' EXIT
 # shellcheck source=../deploy/production_canary.sh
 source "$REPO_ROOT/deploy/production_canary.sh"
 
-[[ "$EXPECTED_REVISION" == "e9f1a2b3c4d5" ]]
-[[ "$EXPECTED_PREVIOUS_REVISION" == "d4e7f9a1b2c3" ]]
+[[ "$EXPECTED_REVISION" == "f4b8c1d2e3a4" ]]
+[[ "$EXPECTED_PREVIOUS_REVISION" == "e9f1a2b3c4d5" ]]
 [[ "$POSTGRES_EXPORTER_ROLE" == "vpn_exporter" ]]
+grep -F 'readonly SUSPENSION_RECONCILE=' \
+    "$REPO_ROOT/deploy/production_canary.sh" >/dev/null
+grep -F 'FINANCIAL_FINGERPRINT_BEFORE="$(financial_fingerprint)"' \
+    "$REPO_ROOT/deploy/production_canary.sh" >/dev/null
+grep -F 'readonly SUSPENSION_RECONCILE_HARD_TIMEOUT="360s"' \
+    "$REPO_ROOT/deploy/production_canary.sh" >/dev/null
+grep -F 'if ! timeout --signal=TERM --kill-after=30s' \
+    "$REPO_ROOT/deploy/production_canary.sh" >/dev/null
+reconcile_line="$(
+    grep -nF 'reconciling durable VPN suspension intents' \
+        "$REPO_ROOT/deploy/production_canary.sh" |
+        cut -d: -f1
+)"
+bot_start_line="$(
+    grep -nF 'starting only the Telegram bot canary' \
+        "$REPO_ROOT/deploy/production_canary.sh" |
+        cut -d: -f1
+)"
+[[ "$reconcile_line" -lt "$bot_start_line" ]]
 
 interactive_smoke_count="$(
     grep -Fc \

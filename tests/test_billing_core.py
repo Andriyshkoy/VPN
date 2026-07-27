@@ -533,6 +533,73 @@ async def test_periodic_charge_claims_stable_period_once(sessionmaker):
 
 
 @pytest.mark.asyncio
+async def test_periodic_charge_excludes_stale_active_suspension_intent(
+    sessionmaker,
+):
+    user, server = await _user_and_server(balance=Decimal("10.00"))
+    async with uow() as repos:
+        await repos["configs"].create(
+            server.id,
+            user.id,
+            "suspension-intent-only",
+            "Suspension intent",
+            desired_state=VPNState.SUSPENDED.value,
+            actual_state=VPNState.ACTIVE.value,
+        )
+
+    billing = BillingService(
+        uow,
+        per_config_cost="2.00",
+        billing_period_seconds=3600,
+        clock=lambda: datetime(2026, 7, 12, 13, 15, tzinfo=timezone.utc),
+    )
+
+    assert await billing.charge_all() == {}
+    assert (await UserService(uow).get(user.id)).balance == Decimal("10.00")
+    async with uow() as repos:
+        entries = await repos["billing"].list_ledger_entries(user.id)
+    assert all(entry.kind != LedgerKind.PERIODIC_CHARGE.value for entry in entries)
+
+
+@pytest.mark.asyncio
+async def test_periodic_charge_counts_only_fully_active_configs(sessionmaker):
+    user, server = await _user_and_server(balance=Decimal("10.00"))
+    async with uow() as repos:
+        await repos["configs"].create(
+            server.id,
+            user.id,
+            "fully-active",
+            "Fully active",
+        )
+        await repos["configs"].create(
+            server.id,
+            user.id,
+            "stale-active",
+            "Stale active",
+            desired_state=VPNState.SUSPENDED.value,
+            actual_state=VPNState.ACTIVE.value,
+        )
+
+    billing = BillingService(
+        uow,
+        per_config_cost="2.00",
+        billing_period_seconds=3600,
+        clock=lambda: datetime(2026, 7, 12, 14, 15, tzinfo=timezone.utc),
+    )
+
+    charged = await billing.charge_all()
+
+    assert list(charged.values()) == [Decimal("2.00")]
+    assert (await UserService(uow).get(user.id)).balance == Decimal("8.00")
+    async with uow() as repos:
+        entries = await repos["billing"].list_ledger_entries(user.id)
+    periodic = next(
+        entry for entry in entries if entry.kind == LedgerKind.PERIODIC_CHARGE.value
+    )
+    assert periodic.details["config_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_overlapping_billing_schedule_is_rejected(sessionmaker):
     user, server = await _user_and_server(balance=Decimal("10.00"))
     async with uow() as repos:

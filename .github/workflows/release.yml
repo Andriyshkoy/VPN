@@ -238,6 +238,7 @@ jobs:
             deploy/preflight.sql \
             deploy/manager_smoke.py \
             deploy/telegram_smoke.py \
+            deploy/reconcile_suspended_configs.py \
             deploy/production_canary.sh \
             deploy/activate_admin_hub.sh \
             deploy/promote_full_production.sh \
@@ -256,6 +257,7 @@ jobs:
              sudo -n install -m 0600 '$remote_tmp/preflight.sql' '$release_dir/preflight.sql' && \
              sudo -n install -m 0600 '$remote_tmp/manager_smoke.py' '$release_dir/manager_smoke.py' && \
              sudo -n install -m 0600 '$remote_tmp/telegram_smoke.py' '$release_dir/telegram_smoke.py' && \
+             sudo -n install -m 0600 '$remote_tmp/reconcile_suspended_configs.py' '$release_dir/reconcile_suspended_configs.py' && \
              sudo -n install -m 0644 '$remote_tmp/observability/alerts.yml' '$release_dir/observability/alerts.yml' && \
              sudo -n install -m 0644 '$remote_tmp/observability/prometheus.yml' '$release_dir/observability/prometheus.yml' && \
              sudo -n install -m 0644 '$remote_tmp/observability/statsd-mapping.yml' '$release_dir/observability/statsd-mapping.yml' && \
@@ -283,5 +285,6 @@ jobs:
             echo
             echo "- Commit: \`${GITHUB_SHA}\`"
             echo '- Schema and accounting invariants verified.'
+            echo '- Durable suspension intents converged without financial changes.'
             echo '- Billing, new payments, provisioning, notifications, worker, and scheduler remain disabled.'
           } >> "$GITHUB_STEP_SUMMARY"
