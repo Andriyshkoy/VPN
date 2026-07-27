@@ -4,9 +4,10 @@ set -Eeuo pipefail
 umask 077
 
 readonly POSTGRES_IMAGE="postgres:16@sha256:5a65324fe84dc41709ff914e90b07f3e2f577073ed27bf917d4873aca0c9ec51"
-readonly EXPECTED_REVISION="e9f1a2b3c4d5"
-readonly EXPECTED_PREVIOUS_REVISION="d4e7f9a1b2c3"
+readonly EXPECTED_REVISION="f4b8c1d2e3a4"
+readonly EXPECTED_PREVIOUS_REVISION="e9f1a2b3c4d5"
 readonly POSTGRES_EXPORTER_ROLE="vpn_exporter"
+readonly SUSPENSION_RECONCILE_HARD_TIMEOUT="360s"
 
 log() {
     printf '[deploy] %s\n' "$*"
@@ -135,6 +136,50 @@ db_psql() {
     docker exec -i "$DB_CONTAINER_ID" sh -ec \
         'exec psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$@"' \
         sh "$@"
+}
+
+financial_fingerprint() {
+    db_psql -Atc "
+        SELECT concat_ws(
+            '|',
+            (
+                SELECT md5(coalesce(string_agg(
+                    concat_ws(
+                        ':',
+                        id::text,
+                        user_id::text,
+                        amount::text,
+                        balance_after::text,
+                        kind,
+                        idempotency_key
+                    ),
+                    '|' ORDER BY id
+                ), ''))
+                FROM ledger_entry
+            ),
+            (
+                SELECT md5(coalesce(string_agg(
+                    concat_ws(':', id::text, balance::text),
+                    '|' ORDER BY id
+                ), ''))
+                FROM \"user\"
+            ),
+            (
+                SELECT md5(coalesce(string_agg(
+                    concat_ws(
+                        ':',
+                        id::text,
+                        period_key,
+                        status,
+                        charged_users::text,
+                        total_amount::text
+                    ),
+                    '|' ORDER BY id
+                ), ''))
+                FROM billing_run
+            )
+        )
+    "
 }
 
 prepare_runtime_credentials_and_volumes() {
@@ -295,7 +340,7 @@ main() {
 [[ "$RELEASE_DIR" == "$DEPLOY_ROOT"/releases/* ]] || die "unexpected RELEASE_DIR"
 [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || die "RELEASE_SHA must be a full commit SHA"
 
-for command_name in awk docker flock grep openssl sha256sum tar; do
+for command_name in awk docker flock grep openssl sha256sum tar timeout; do
     require_command "$command_name"
 done
 docker compose version >/dev/null
@@ -309,6 +354,7 @@ readonly COMPOSE_FILE="$RELEASE_DIR/docker-compose-prod.yml"
 readonly PREFLIGHT_SQL="$RELEASE_DIR/preflight.sql"
 readonly MANAGER_SMOKE="$RELEASE_DIR/manager_smoke.py"
 readonly TELEGRAM_SMOKE="$RELEASE_DIR/telegram_smoke.py"
+readonly SUSPENSION_RECONCILE="$RELEASE_DIR/reconcile_suspended_configs.py"
 readonly RELEASE_OBSERVABILITY_DIR="$RELEASE_DIR/observability"
 
 for required_file in \
@@ -318,6 +364,7 @@ for required_file in \
     "$PREFLIGHT_SQL" \
     "$MANAGER_SMOKE" \
     "$TELEGRAM_SMOKE" \
+    "$SUSPENSION_RECONCILE" \
     "$RELEASE_OBSERVABILITY_DIR/alerts.yml" \
     "$RELEASE_OBSERVABILITY_DIR/prometheus.yml" \
     "$RELEASE_OBSERVABILITY_DIR/statsd-mapping.yml"; do
@@ -645,6 +692,32 @@ if ! "${COMPOSE[@]}" --profile bot run --rm --no-deps \
     die "live Manager mTLS smoke failed; details retained in the private backup directory"
 fi
 log "live Manager mTLS smoke passed"
+
+log "reconciling durable VPN suspension intents under the fail-closed policy"
+FINANCIAL_FINGERPRINT_BEFORE="$(financial_fingerprint)"
+SUSPENSION_RECONCILE_LOG="$BACKUP_DIR/suspension-reconcile.log"
+: > "$SUSPENSION_RECONCILE_LOG"
+chmod 0600 "$SUSPENSION_RECONCILE_LOG"
+if ! timeout --signal=TERM --kill-after=30s \
+    "$SUSPENSION_RECONCILE_HARD_TIMEOUT" \
+    "${COMPOSE[@]}" --profile bot run --rm --no-deps \
+    --entrypoint python bot - < "$SUSPENSION_RECONCILE" \
+    > "$SUSPENSION_RECONCILE_LOG" 2>&1; then
+    die "VPN suspension reconciliation failed; details retained in the private backup directory"
+fi
+[[ "$(financial_fingerprint)" == "$FINANCIAL_FINGERPRINT_BEFORE" ]] \
+    || die "VPN suspension reconciliation changed financial state"
+[[ "$(db_psql -Atc "
+    SELECT count(*)
+    FROM vpn_config
+    WHERE desired_state = 'suspended'
+      AND (
+        actual_state IS DISTINCT FROM 'suspended'
+        OR suspended IS DISTINCT FROM true
+        OR suspended_at IS NULL
+      )
+")" == "0" ]] || die "VPN suspension drift remains after reconciliation"
+log "durable VPN suspension intents converged without financial changes"
 
 log "starting only the Telegram bot canary"
 BOT_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

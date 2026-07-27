@@ -163,7 +163,7 @@ docker compose --env-file .env --env-file release.env \
   --entrypoint alembic migrations check
 ```
 
-The sole current revision must be `e9f1a2b3c4d5`. Before starting any
+The sole current revision must be `f4b8c1d2e3a4`. Before starting any
 application process, reconcile `user.balance` against `sum(ledger_entry.amount)`,
 verify every user has one unique 32-character referral code, and confirm that
 the admin/fleet migrations did not change user, configuration, or aggregate
@@ -171,8 +171,12 @@ balance counts. The Telegram action journal intentionally has no historical
 backfill because processed inbox payloads have already been erased. Bot actions
 start accumulating after this migration; existing finance, referral, VPN,
 account, and admin events appear in the unified timeline immediately. Perform
-the read-only Manager smoke test and start only the bot canary, leaving admin,
-worker, and scheduler off:
+the read-only Manager smoke test. Before the bot starts, the canary retries only
+durable suspension intents through `ConfigService`, requires every suspended
+configuration to converge, and compares ledger, balance, and billing-run
+fingerprints before and after that recovery. Any financial change fails the
+release closed. Then start only the bot canary, leaving admin, worker, and
+scheduler off:
 
 ```bash
 docker compose --env-file .env --env-file release.env \
@@ -208,7 +212,7 @@ environment approval; no image is rebuilt or uploaded at this stage.
 On the host, `promote_full_production.sh` acquires the same deployment lock and
 requires both `current-release` and `current-admin-hub` to equal the requested
 full SHA. It also requires the immutable staged manifest to remain fail-closed,
-the database to be at `e9f1a2b3c4d5`, all staged images and running canary
+the database to be at `f4b8c1d2e3a4`, all staged images and running canary
 containers to match their registry digests and revision labels, and both
 Manager and Telegram read-only smokes to pass.
 
@@ -245,7 +249,7 @@ periods can run as soon as the worker and scheduler are enabled.
 ## Rollback
 
 Prefer a code-only rollback while retaining schema head. After Telegram action
-audit migration `e9f1a2b3c4d5`, keep the admin control plane stopped unless its image
+schema revision `f4b8c1d2e3a4`, keep the admin control plane stopped unless its image
 understands database sessions, audit immutability and fleet lifecycle fields.
 Any bot fallback must still understand referral migration `f1a8c3d9e742`;
 pre-referral images cannot register users safely. Older production code also

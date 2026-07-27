@@ -839,7 +839,10 @@ class BillingRepo:
 
         active_counts = await self.session.execute(
             select(VPN_Config.owner_id, func.count(VPN_Config.id))
-            .where(VPN_Config.actual_state == VPNState.ACTIVE.value)
+            .where(
+                VPN_Config.desired_state == VPNState.ACTIVE.value,
+                VPN_Config.actual_state == VPNState.ACTIVE.value,
+            )
             .group_by(VPN_Config.owner_id)
             .order_by(VPN_Config.owner_id)
         )

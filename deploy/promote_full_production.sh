@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 umask 077
 
-readonly EXPECTED_REVISION="e9f1a2b3c4d5"
+readonly EXPECTED_REVISION="f4b8c1d2e3a4"
 readonly -a MONITORING_SERVICES=(
     statsd_exporter
     postgres_exporter

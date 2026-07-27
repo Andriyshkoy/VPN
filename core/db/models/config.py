@@ -34,7 +34,9 @@ class VPN_Config(Base):
         DateTime, default=func.now(), server_default=func.now()
     )
     suspended: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    suspended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    suspended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # ``suspended`` remains for backwards-compatible reads.  The lifecycle
     # fields make remote side effects recoverable and observable.
