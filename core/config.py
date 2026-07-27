@@ -84,8 +84,8 @@ class Settings(BaseSettings):
     statsd_port: int = Field(default=9125, ge=1, le=65_535)
     vpn_hub_service: str = Field(default="unknown", min_length=1, max_length=48)
     # Optional reporting-only scope. These users remain fully visible and
-    # functional in billing, ledger, audit, and administrator management
-    # surfaces; only aggregate business analytics omit their contributions.
+    # functional in billing, ledger, audit, and administrator management;
+    # analytics omit only records directly owned by the configured user IDs.
     business_metrics_excluded_user_ids: str = ""
     readiness_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     sql_echo: bool = False

@@ -60,17 +60,20 @@ async def test_owner_is_excluded_only_from_aggregate_business_reporting(
         customer = User(
             tg_id=880_001,
             username="real-customer",
-            balance=Decimal("99.00"),
+            balance=Decimal("144.00"),
             created=event_time,
         )
         owner = User(
             tg_id=880_002,
             username="owner-test-account",
-            balance=Decimal("2999999.00"),
+            balance=Decimal("3000004.00"),
             created=event_time,
         )
         session.add_all([customer, owner])
         await session.flush()
+        # The included customer remains a real acquisition and liability even
+        # when their inviter is an internal account.
+        customer.referred_by_id = owner.id
 
         server = Server(
             name="business-scope-server",
@@ -239,10 +242,13 @@ async def test_owner_is_excluded_only_from_aggregate_business_reporting(
             ]
         )
 
-    analytics = AdminAnalyticsQueryService(
-        uow,
-        excluded_user_ids=(owner.id,),
+    monkeypatch.setattr(
+        settings,
+        "business_metrics_excluded_user_ids",
+        str(owner.id),
     )
+    # Exercise the same settings-driven construction used by the API singleton.
+    analytics = AdminAnalyticsQueryService(uow)
     dashboard = await analytics.dashboard(
         period_from=period_from,
         period_to=period_to,
@@ -252,11 +258,12 @@ async def test_owner_is_excluded_only_from_aggregate_business_reporting(
     assert dashboard["users"]["new"] == 1
     assert dashboard["users"]["with_configs"] == 2
     assert dashboard["users"]["paying"] == 1
+    assert dashboard["users"]["invited"] == 1
     assert dashboard["configs"] == {"active": 2}
     assert dashboard["finance"]["cash_in"] == "100.00"
     assert dashboard["finance"]["opening_balances"] == "100.00"
-    assert dashboard["finance"]["wallet_liability"] == "99.00"
-    assert dashboard["finance"]["referral_rewards"] == "0.00"
+    assert dashboard["finance"]["wallet_liability"] == "144.00"
+    assert dashboard["finance"]["referral_rewards"] == "45.00"
     # Billing-run observability remains the persisted accounting truth.
     assert dashboard["billing"]["charged_users"] == 2
     assert dashboard["billing"]["total_amount"] == "2.00"
@@ -265,11 +272,6 @@ async def test_owner_is_excluded_only_from_aggregate_business_reporting(
     # business KPI.
     assert dashboard["servers"][0]["config_total"] == 2
 
-    monkeypatch.setattr(
-        settings,
-        "business_metrics_excluded_user_ids",
-        str(owner.id),
-    )
     prometheus = await render_prometheus_metrics(
         redis_is_ready=False,
         now=event_time + timedelta(minutes=1),
@@ -289,7 +291,7 @@ async def test_owner_is_excluded_only_from_aggregate_business_reporting(
             "config_fees": "0.00",
             "config_refunds": "0.00",
             "recognized_revenue": "1.00",
-            "referral_rewards": "0.00",
+            "referral_rewards": "45.00",
             "manual_adjustments": "0.00",
         }
     ]

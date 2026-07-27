@@ -1025,31 +1025,6 @@ class AdminAnalyticsQueryService:
             return ()
         return (column.not_in(self._excluded_user_ids),)
 
-    def _ledger_scope(self) -> tuple[Any, ...]:
-        """Exclude internal-account economics without hiding ledger rows.
-
-        Referral rewards are cross-user movements. A reward paid to a regular
-        beneficiary because an excluded account deposited money belongs outside
-        the business reporting scope even though the beneficiary is not
-        excluded. The immutable reward and ledger rows remain untouched.
-        """
-
-        conditions = list(self._scope(LedgerEntry.user_id))
-        if self._excluded_user_ids:
-            internal_reward = (
-                select(ReferralReward.id)
-                .where(
-                    ReferralReward.ledger_entry_id == LedgerEntry.id,
-                    or_(
-                        ReferralReward.source_user_id.in_(self._excluded_user_ids),
-                        ReferralReward.beneficiary_user_id.in_(self._excluded_user_ids),
-                    ),
-                )
-                .exists()
-            )
-            conditions.append(~internal_reward)
-        return tuple(conditions)
-
     @staticmethod
     def _validate_timezone(name: str) -> ZoneInfo:
         try:
@@ -1129,7 +1104,7 @@ class AdminAnalyticsQueryService:
                 await session.execute(
                     select(LedgerEntry.kind, func.sum(LedgerEntry.amount))
                     .where(
-                        *self._ledger_scope(),
+                        *self._scope(LedgerEntry.user_id),
                         LedgerEntry.created_at >= period_from,
                         LedgerEntry.created_at < period_to,
                     )
@@ -1284,7 +1259,7 @@ class AdminAnalyticsQueryService:
                     select(
                         LedgerEntry.created_at, LedgerEntry.kind, LedgerEntry.amount
                     ).where(
-                        *self._ledger_scope(),
+                        *self._scope(LedgerEntry.user_id),
                         LedgerEntry.created_at >= period_from,
                         LedgerEntry.created_at < period_to,
                     )

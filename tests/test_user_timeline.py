@@ -39,9 +39,12 @@ from core.services.user import UserService
 from core.services.user_timeline import AdminUserTimelineService
 
 NOW = datetime(2026, 7, 14, 12, 0, tzinfo=timezone.utc)
-# Inbox rows use the database clock when they are ingested. Keep lease tests
-# ahead of that value instead of pinning claim eligibility to the release date.
-LEASE_NOW = datetime.now(timezone.utc) + timedelta(minutes=1)
+
+
+def _lease_now() -> datetime:
+    """Stay ahead of the database clock without a collection-time deadline."""
+
+    return datetime.now(timezone.utc) + timedelta(minutes=1)
 
 
 def _private_message(update_id: int, tg_id: int, text: str) -> dict:
@@ -118,11 +121,12 @@ async def test_fenced_ack_appends_exactly_one_safe_event(sessionmaker):
     service = TelegramUpdateService(uow)
     raw_secret = "my laptop config PRIVATE-CONTENT"
     await service.ingest(_private_message(81, user.tg_id, raw_secret))
-    claimed = await service.claim_next(now=LEASE_NOW)
+    lease_now = _lease_now()
+    claimed = await service.claim_next(now=lease_now)
     assert claimed is not None
 
     stale = replace(claimed, lease_token="not-the-owner")
-    assert not await service.mark_processed(stale, now=LEASE_NOW)
+    assert not await service.mark_processed(stale, now=lease_now)
     async with sessionmaker() as session:
         assert await session.scalar(select(TelegramUserActionEvent.id)) is None
 
@@ -135,9 +139,9 @@ async def test_fenced_ack_appends_exactly_one_safe_event(sessionmaker):
             "token": "bot-token",
         },
     )
-    assert await service.mark_processed(claimed, now=LEASE_NOW, audit_context=context)
+    assert await service.mark_processed(claimed, now=lease_now, audit_context=context)
     assert not await service.mark_processed(
-        claimed, now=LEASE_NOW, audit_context=context
+        claimed, now=lease_now, audit_context=context
     )
 
     async with sessionmaker() as session:
@@ -161,7 +165,8 @@ async def test_fenced_ack_and_audit_append_roll_back_as_one_transaction(
     user = await UserService(uow).register(810_010, username="atomic-user")
     service = TelegramUpdateService(uow)
     await service.ingest(_private_message(810, user.tg_id, "/balance"))
-    claimed = await service.claim_next(now=LEASE_NOW)
+    lease_now = _lease_now()
+    claimed = await service.claim_next(now=lease_now)
     assert claimed is not None
 
     async def fail_append(*_args, **_kwargs):
@@ -169,7 +174,7 @@ async def test_fenced_ack_and_audit_append_roll_back_as_one_transaction(
 
     monkeypatch.setattr(TelegramUserActionRepo, "append_once", fail_append)
     with pytest.raises(RuntimeError, match="audit storage failure"):
-        await service.mark_processed(claimed, now=LEASE_NOW)
+        await service.mark_processed(claimed, now=lease_now)
 
     async with sessionmaker() as session:
         inbox = await session.scalar(
@@ -199,30 +204,31 @@ async def test_terminal_failures_are_safe_and_auto_dead_is_audited(
             },
         }
     )
-    claimed = await service.claim_next(now=LEASE_NOW)
+    lease_now = _lease_now()
+    claimed = await service.claim_next(now=lease_now)
     assert claimed is not None
     assert await service.mark_failed(
         claimed,
         RuntimeError("config body and token must not enter the audit"),
-        now=LEASE_NOW,
+        now=lease_now,
     )
 
     await service.ingest(_private_message(83, user.tg_id, "another secret"))
-    crashed = await service.claim_next(now=LEASE_NOW + timedelta(seconds=1))
+    crashed = await service.claim_next(now=lease_now + timedelta(seconds=1))
     assert crashed is not None
-    assert await service.claim_next(now=LEASE_NOW + timedelta(seconds=302)) is None
+    assert await service.claim_next(now=lease_now + timedelta(seconds=302)) is None
 
     monkeypatch.setattr(settings, "telegram_update_max_attempts", 2)
     await service.ingest(_private_message(84, user.tg_id, "/help"))
-    lowered = await service.claim_next(now=LEASE_NOW + timedelta(seconds=400))
+    lowered = await service.claim_next(now=lease_now + timedelta(seconds=400))
     assert lowered is not None
     assert await service.mark_failed(
         lowered,
         RuntimeError("first retry"),
-        now=LEASE_NOW + timedelta(seconds=400),
+        now=lease_now + timedelta(seconds=400),
     )
     monkeypatch.setattr(settings, "telegram_update_max_attempts", 1)
-    assert await service.claim_next(now=LEASE_NOW + timedelta(seconds=402)) is None
+    assert await service.claim_next(now=lease_now + timedelta(seconds=402)) is None
 
     async with sessionmaker() as session:
         events = (
