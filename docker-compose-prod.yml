@@ -49,6 +49,12 @@ x-backend-security: &backend-security
   tmpfs:
     - /tmp
 
+x-json-file-logging: &json-file-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   db:
     image: postgres:16@sha256:5a65324fe84dc41709ff914e90b07f3e2f577073ed27bf917d4873aca0c9ec51
@@ -64,6 +70,7 @@ services:
       timeout: 5s
       retries: 10
     networks: [data]
+    logging: *json-file-logging
     restart: unless-stopped
 
   redis:
@@ -85,6 +92,7 @@ services:
       timeout: 3s
       retries: 10
     networks: [data]
+    logging: *json-file-logging
     restart: unless-stopped
 
   migrations:
@@ -97,6 +105,7 @@ services:
     env_file:
       - ${VPN_ENV_FILE:-.env}
     networks: [data]
+    logging: *json-file-logging
 
   admin:
     <<: *backend-security
@@ -130,6 +139,7 @@ services:
       retries: 6
     networks: [edge, app, data, monitoring]
     stop_grace_period: 30s
+    logging: *json-file-logging
     restart: unless-stopped
 
   bot:
@@ -152,6 +162,7 @@ services:
       - *vpn-manager-tls-volume
     networks: [app, data, monitoring]
     stop_grace_period: 30s
+    logging: *json-file-logging
     restart: unless-stopped
 
   rq_worker:
@@ -175,6 +186,7 @@ services:
       - *vpn-manager-tls-volume
     networks: [app, data, monitoring]
     stop_grace_period: 60s
+    logging: *json-file-logging
     restart: unless-stopped
 
   rq_scheduler:
@@ -196,6 +208,7 @@ services:
       VPN_HUB_SERVICE: rq_scheduler
     networks: [data, monitoring]
     stop_grace_period: 30s
+    logging: *json-file-logging
     restart: unless-stopped
 
   statsd_exporter:
@@ -212,6 +225,7 @@ services:
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
     networks: [app, monitoring]
+    logging: *json-file-logging
     restart: unless-stopped
 
   postgres_exporter:
@@ -236,6 +250,7 @@ services:
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
     networks: [data, monitoring]
+    logging: *json-file-logging
     restart: unless-stopped
 
   redis_exporter:
@@ -250,6 +265,7 @@ services:
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
     networks: [data, monitoring]
+    logging: *json-file-logging
     restart: unless-stopped
 
   prometheus:
@@ -271,6 +287,7 @@ services:
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
     networks: [monitoring]
+    logging: *json-file-logging
     restart: unless-stopped
 
   admin_frontend:
@@ -279,6 +296,7 @@ services:
     depends_on:
       - admin
     networks: [edge]
+    logging: *json-file-logging
     restart: unless-stopped
 
   nginx:
@@ -291,6 +309,7 @@ services:
       # application proxy off the public interfaces so :14081 cannot bypass it.
       - "127.0.0.1:14081:80"
     networks: [edge]
+    logging: *json-file-logging
     restart: unless-stopped
 
 volumes:
