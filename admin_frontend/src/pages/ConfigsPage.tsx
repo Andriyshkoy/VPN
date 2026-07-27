@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { MoreHorizontal, Search, ShieldAlert } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router'
 import { configsApi, type VpnConfig } from '../api'
 import { useAuth } from '../auth/AuthProvider'
 import { DataTable, type Column } from '../components/DataTable'

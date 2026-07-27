@@ -1,6 +1,6 @@
 import { LockKeyhole, ShieldCheck } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
-import { Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { Navigate, useLocation, useNavigate } from 'react-router'
 import { ApiError } from '../api'
 import { useAuth } from '../auth/AuthProvider'
 

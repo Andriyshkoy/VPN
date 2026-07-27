@@ -83,6 +83,10 @@ class Settings(BaseSettings):
     statsd_host: str = "statsd_exporter"
     statsd_port: int = Field(default=9125, ge=1, le=65_535)
     vpn_hub_service: str = Field(default="unknown", min_length=1, max_length=48)
+    # Optional reporting-only scope. These users remain fully visible and
+    # functional in billing, ledger, audit, and administrator management;
+    # analytics omit only records directly owned by the configured user IDs.
+    business_metrics_excluded_user_ids: str = ""
     readiness_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     sql_echo: bool = False
 
@@ -188,6 +192,40 @@ class Settings(BaseSettings):
                 "ADMIN_TRUSTED_PROXY_CIDRS contains an invalid CIDR"
             ) from exc
         return ",".join(entries)
+
+    @field_validator("business_metrics_excluded_user_ids")
+    @classmethod
+    def validate_business_metrics_excluded_user_ids(cls, value: str) -> str:
+        entries = [item.strip() for item in value.split(",") if item.strip()]
+        if len(entries) > 100:
+            raise ValueError(
+                "BUSINESS_METRICS_EXCLUDED_USER_IDS cannot contain more than 100 IDs"
+            )
+        parsed: list[int] = []
+        for entry in entries:
+            if (
+                not entry.isascii()
+                or not entry.isdecimal()
+                or not 0 < int(entry) <= 2_147_483_647
+            ):
+                raise ValueError(
+                    "BUSINESS_METRICS_EXCLUDED_USER_IDS must contain positive "
+                    "PostgreSQL INTEGER user IDs"
+                )
+            user_id = int(entry)
+            if user_id not in parsed:
+                parsed.append(user_id)
+        return ",".join(str(user_id) for user_id in parsed)
+
+    @property
+    def business_metrics_excluded_ids(self) -> tuple[int, ...]:
+        """Database user IDs omitted only from aggregate business reporting."""
+
+        return tuple(
+            int(item)
+            for item in self.business_metrics_excluded_user_ids.split(",")
+            if item
+        )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

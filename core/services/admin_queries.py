@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import aliased
 
+from core.config import settings
 from core.db.models.billing_run import BillingRun
 from core.db.models.config import VPN_Config
 from core.db.models.ledger import LedgerEntry, LedgerKind
@@ -1005,8 +1006,24 @@ class AdminReferralQueryService:
 class AdminAnalyticsQueryService:
     """Business analytics derived from accounting source-of-truth tables."""
 
-    def __init__(self, uow: Callable):
+    def __init__(
+        self,
+        uow: Callable,
+        *,
+        excluded_user_ids: tuple[int, ...] | None = None,
+    ):
         self._uow = uow
+        configured_ids = (
+            settings.business_metrics_excluded_ids
+            if excluded_user_ids is None
+            else excluded_user_ids
+        )
+        self._excluded_user_ids = tuple(sorted(set(configured_ids)))
+
+    def _scope(self, column: Any) -> tuple[Any, ...]:
+        if not self._excluded_user_ids:
+            return ()
+        return (column.not_in(self._excluded_user_ids),)
 
     @staticmethod
     def _validate_timezone(name: str) -> ZoneInfo:
@@ -1035,6 +1052,7 @@ class AdminAnalyticsQueryService:
                     select(func.count())
                     .select_from(User)
                     .where(
+                        *self._scope(User.id),
                         User.created >= user_period_from,
                         User.created < user_period_to,
                     )
@@ -1064,6 +1082,7 @@ class AdminAnalyticsQueryService:
             paying_users = int(
                 await session.scalar(
                     select(func.count(func.distinct(ProviderPayment.user_id))).where(
+                        *self._scope(ProviderPayment.user_id),
                         ProviderPayment.status == "credited",
                         ProviderPayment.credited_at >= period_from,
                         ProviderPayment.credited_at < period_to,
@@ -1074,6 +1093,7 @@ class AdminAnalyticsQueryService:
             cash_in = _decimal(
                 await session.scalar(
                     select(func.coalesce(func.sum(ProviderPayment.amount), 0)).where(
+                        *self._scope(ProviderPayment.user_id),
                         ProviderPayment.status == "credited",
                         ProviderPayment.credited_at >= period_from,
                         ProviderPayment.credited_at < period_to,
@@ -1084,6 +1104,7 @@ class AdminAnalyticsQueryService:
                 await session.execute(
                     select(LedgerEntry.kind, func.sum(LedgerEntry.amount))
                     .where(
+                        *self._scope(LedgerEntry.user_id),
                         LedgerEntry.created_at >= period_from,
                         LedgerEntry.created_at < period_to,
                     )
@@ -1119,7 +1140,7 @@ class AdminAnalyticsQueryService:
                             func.sum(case((User.balance > 0, User.balance), else_=0)),
                             0,
                         )
-                    )
+                    ).where(*self._scope(User.id))
                 )
             )
             wallet_debt = -_decimal(
@@ -1129,7 +1150,7 @@ class AdminAnalyticsQueryService:
                             func.sum(case((User.balance < 0, User.balance), else_=0)),
                             0,
                         )
-                    )
+                    ).where(*self._scope(User.id))
                 )
             )
             infrastructure_run_rate = _decimal(
@@ -1147,6 +1168,7 @@ class AdminAnalyticsQueryService:
                     select(func.count())
                     .select_from(User)
                     .where(
+                        *self._scope(User.id),
                         User.referred_by_id.is_not(None),
                         User.created >= user_period_from,
                         User.created < user_period_to,
@@ -1225,6 +1247,7 @@ class AdminAnalyticsQueryService:
             payments = (
                 await session.execute(
                     select(ProviderPayment.credited_at, ProviderPayment.amount).where(
+                        *self._scope(ProviderPayment.user_id),
                         ProviderPayment.status == "credited",
                         ProviderPayment.credited_at >= period_from,
                         ProviderPayment.credited_at < period_to,
@@ -1236,6 +1259,7 @@ class AdminAnalyticsQueryService:
                     select(
                         LedgerEntry.created_at, LedgerEntry.kind, LedgerEntry.amount
                     ).where(
+                        *self._scope(LedgerEntry.user_id),
                         LedgerEntry.created_at >= period_from,
                         LedgerEntry.created_at < period_to,
                     )

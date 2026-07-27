@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { ExternalLink, Search } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 import { auditApi, type AuditEvent } from '../api'
 import { DataTable, type Column } from '../components/DataTable'
 import { PageHeader } from '../components/PageHeader'

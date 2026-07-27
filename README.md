@@ -160,6 +160,7 @@ Store the second command's output in `ADMIN_PASSWORD_HASH`.
 | `ADMIN_FLEET_POLL_INTERVAL_SECONDS` | Background Manager status interval | `60` |
 | `ADMIN_FLEET_STATUS_STALE_SECONDS` | Age after which a fleet snapshot is stale | `300` |
 | `PROMETHEUS_API_URL` | Internal Prometheus API used by the monitoring page | `http://prometheus:9090` |
+| `BUSINESS_METRICS_EXCLUDED_USER_IDS` | Database user IDs whose own payments, ledger rows, balances, and registrations are omitted from aggregate business reporting; source data and operations stay unchanged | Empty |
 | `REDIS_URL` | Redis used by all backend processes | `redis://redis:6379/0` |
 | `PAYMENT_INTENT_TTL_SECONDS` | Lifetime of a pending invoice intent | `3600` |
 | `PAYMENTS_ENABLED` | Permit new provider invoices and Telegram pre-checkout | `true` |
