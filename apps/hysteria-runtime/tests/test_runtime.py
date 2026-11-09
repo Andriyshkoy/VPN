@@ -147,6 +147,56 @@ class AuthenticationTests(unittest.TestCase):
         self.assertTrue(successful_auth(collection)["ok"])
         self.assertFalse(successful_auth(collection, "wrong")["ok"])
 
+    def test_absent_or_null_session_policy_preserves_legacy_response(self):
+        for changes in ({}, {"max_sessions": None}):
+            with self.subTest(changes=changes):
+                collection = MemoryCollection(account(**changes))
+                before = deepcopy(collection.documents)
+                self.assertEqual(successful_auth(collection), {"ok": True, "id": USER})
+                self.assertEqual(collection.documents, before)
+                self.assertEqual(collection.updates, [])
+
+    def test_session_policy_is_returned_without_activating_account(self):
+        for limit in (1, 128):
+            with self.subTest(limit=limit):
+                collection = MemoryCollection(account(max_sessions=limit))
+                before = deepcopy(collection.documents)
+                self.assertEqual(successful_auth(collection),
+                    {"ok": True, "id": USER, "max_sessions": limit})
+                self.assertEqual(collection.documents, before)
+                self.assertEqual(collection.updates, [])
+
+    def test_unlimited_traffic_account_still_returns_session_policy(self):
+        collection = MemoryCollection(account(unlimited_user=True, max_sessions=1,
+            expiration_days=1, account_creation_date="2020-01-01",
+            max_download_bytes=1, upload_bytes=1, download_bytes=100))
+        self.assertEqual(successful_auth(collection),
+            {"ok": True, "id": USER, "max_sessions": 1})
+        self.assertFalse(successful_auth(collection, "wrong")["ok"])
+
+    def test_malformed_session_policy_denies_even_unlimited_traffic_accounts(self):
+        for value in (True, False, 0, -1, 129, "1", 1.0, [], {}):
+            for unlimited in (False, True):
+                with self.subTest(value=value, unlimited=unlimited):
+                    collection = MemoryCollection(account(max_sessions=value, unlimited_user=unlimited))
+                    before = deepcopy(collection.documents)
+                    self.assertEqual(successful_auth(collection), {"ok": False})
+                    self.assertEqual(collection.documents, before)
+                    self.assertEqual(collection.updates, [])
+
+    def test_pending_session_close_denies_auth_until_marker_is_cleared(self):
+        for unlimited in (False, True):
+            with self.subTest(unlimited=unlimited):
+                collection = MemoryCollection(account(max_sessions=1, unlimited_user=unlimited,
+                                                      _vpn_session_close_pending=True))
+                before = deepcopy(collection.documents)
+                self.assertEqual(successful_auth(collection), {"ok": False})
+                self.assertEqual(collection.documents, before)
+                self.assertEqual(collection.updates, [])
+                collection.documents[USER].pop("_vpn_session_close_pending")
+                self.assertEqual(successful_auth(collection),
+                    {"ok": True, "id": USER, "max_sessions": 1})
+
     def test_quota_exactly_exhausted_denies_both_directions(self):
         collection = MemoryCollection(account(max_download_bytes=1024, upload_bytes=400, download_bytes=624))
         self.assertFalse(successful_auth(collection)["ok"])
@@ -248,12 +298,13 @@ class AccountingTests(unittest.TestCase):
         self.assertEqual(collection.documents[USER]["status"], "Online")
 
     def test_account_policy_and_password_survive_accounting(self):
-        original = account(blocked=True, max_download_bytes=10000, expiration_days=14,
+        original = account(blocked=True, max_download_bytes=10000, expiration_days=14, max_sessions=1,
+                           _vpn_session_close_pending=True,
                            password="a-different-password", account_creation_date="2026-10-31")
         collection = MemoryCollection(original)
         apply_snapshot(collection, "epoch-one", {USER: {"tx": 50, "rx": 70}}, {}, today=TODAY)
         row = collection.documents[USER]
-        for field in ("blocked", "password", "max_download_bytes", "expiration_days", "account_creation_date", "unlimited_user"):
+        for field in ("blocked", "password", "max_download_bytes", "expiration_days", "max_sessions", "_vpn_session_close_pending", "account_creation_date", "unlimited_user"):
             self.assertEqual(row[field], original[field])
         self.assertEqual(row["status"], "Offline")
 

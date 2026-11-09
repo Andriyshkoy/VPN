@@ -69,6 +69,7 @@ export function adaptUserListItem(value: unknown): User {
   const referrer = obj(raw.referrer)
   const delivery = text(raw.delivery_status ?? raw.telegram_status, 'unknown')
   const finance = {
+    ...(typeof raw.unlimited_balance === 'boolean' && raw.balance !== undefined ? { unlimited_balance: raw.unlimited_balance } : {}),
     ...(optionalMoney(raw, 'balance') !== undefined ? { balance: optionalMoney(raw, 'balance') } : {}),
     ...(optionalMoney(raw, 'credited_total') !== undefined ? { deposits_total: optionalMoney(raw, 'credited_total') } : optionalMoney(raw, 'deposits_total') !== undefined ? { deposits_total: optionalMoney(raw, 'deposits_total') } : {}),
     ...(optionalMoney(raw, 'service_spend_total') !== undefined ? { service_spend_total: optionalMoney(raw, 'service_spend_total') } : {}),
@@ -89,6 +90,7 @@ export function adaptUserListItem(value: unknown): User {
     configs_count: number(counts.total ?? raw.configs_count),
     active_configs_count: number(counts.active ?? raw.active_configs_count),
     suspended_configs_count: number(counts.suspended ?? raw.suspended_configs_count),
+    ...(typeof raw.exclude_from_business_metrics === 'boolean' ? { exclude_from_business_metrics: raw.exclude_from_business_metrics } : {}),
     ...finance,
     ...referral,
   }
@@ -118,6 +120,7 @@ export function adaptUserDetail(value: unknown): User {
     suspended_configs_count: number(configs.suspended),
     ...(hasFinance ? {
       balance: money(finance.balance),
+      unlimited_balance: Boolean(finance.unlimited_balance ?? raw.unlimited_balance),
       deposits_total: money(finance.provider_deposits),
       service_spend_total: sumMoney(finance.service_charges, finance.config_fees),
       latest_ledger_entry_id: finance.latest_ledger_entry_id === null || finance.latest_ledger_entry_id === undefined ? undefined : number(finance.latest_ledger_entry_id),
@@ -154,6 +157,7 @@ export function adaptConfig(value: unknown): VpnConfig {
   const server = obj(raw.server)
   return {
     id: raw.id,
+    service_id: raw.service_id,
     owner_id: owner.id ?? raw.owner_id,
     owner_username: owner.username ?? raw.owner_username,
     name: raw.name,
@@ -195,6 +199,16 @@ export function adaptFinanceOverview(value: unknown): FinanceOverview {
   const cashIn = money(finance.cash_in ?? raw.deposits)
   const average = paying ? (Number(cashIn) / paying).toFixed(2) : '0.00'
   return {
+    ...(raw.subscription_forecast ? { subscription_forecast: {
+      scope: raw.subscription_forecast.scope === 'all' ? 'all' as const : 'business' as const,
+      billing_paused: Boolean(raw.subscription_forecast.billing_paused),
+      active_accounts: number(raw.subscription_forecast.active_accounts),
+      paid_active_accounts: number(raw.subscription_forecast.paid_active_accounts),
+      unlimited_active_accounts: number(raw.subscription_forecast.unlimited_active_accounts),
+      hourly_rate_rub: money(raw.subscription_forecast.hourly_rate_rub),
+      monthly_estimate_rub: money(raw.subscription_forecast.monthly_estimate_rub),
+      currency: text(raw.subscription_forecast.currency, 'RUB'),
+    } } : {}),
     deposits: cashIn,
     service_revenue: money(finance.recognized_revenue ?? raw.service_revenue),
     config_fees: money(finance.config_fees ?? raw.config_fees),

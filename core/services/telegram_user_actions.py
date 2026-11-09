@@ -29,6 +29,8 @@ _SAFE_METADATA_TYPES: dict[str, type] = {
     "error_type": str,
     "reason_code": str,
     "flow": str,
+    "plan_code": str,
+    "service_id": str,
 }
 _SAFE_FLOW_VALUES = frozenset({"create_config", "rename_config", "none"})
 
@@ -46,6 +48,10 @@ def sanitize_action_metadata(value: object) -> dict[str, object]:
         if isinstance(candidate, str):
             candidate = candidate[:64]
             if key == "flow" and candidate not in _SAFE_FLOW_VALUES:
+                continue
+            if key == "plan_code" and candidate not in {"basic", "plus"}:
+                continue
+            if key == "service_id" and candidate not in {"hysteria", "vless-reality"}:
                 continue
         elif candidate < 0:
             continue
@@ -89,6 +95,8 @@ _COMMAND_ACTIONS = {
     "balance": "finance.balance_view",
     "history": "finance.balance_history",
     "configs": "vpn.config_list",
+    "keys": "vpn.keys_view",
+    "subscription": "vpn.subscription_view",
     "topup": "finance.topup_open",
     "how_to_use": "navigation.instructions_open",
     "referrals": "referral.overview",
@@ -100,6 +108,8 @@ _COMMAND_ACTIONS = {
 _MENU_ACTIONS = {
     "💰 Баланс": "finance.balance_view",
     "🗂 Мои конфиги": "vpn.config_list",
+    "🔑 Мои ключи": "vpn.keys_view",
+    "💎 Подписка": "vpn.subscription_view",
     "💳 Пополнить": "finance.topup_open",
     "📚 Инструкции": "navigation.instructions_open",
     "🎁 Реферальная программа": "referral.overview",
@@ -246,6 +256,30 @@ def _callback_action(callback: dict[str, Any]) -> tuple[str, dict[str, object]]:
         return "callback.received", {}
     if data.startswith("refs:"):
         return "referral.overview", {}
+
+    subscription_actions = {
+        "sub:view": "vpn.subscription_view",
+        "sub:keys": "vpn.keys_view",
+        "sub:plans": "vpn.subscription_view",
+        "sub:issue": "vpn.key_issue",
+        "sub:suspend-confirm": "vpn.subscription_suspend",
+        "sub:resume-confirm": "vpn.subscription_resume",
+    }
+    if data in subscription_actions:
+        return subscription_actions[data], {}
+    if re.fullmatch(r"sub:choose:(basic|plus)", data) or re.fullmatch(
+        r"sub:apply:(basic|plus):(0|[1-9][0-9]{0,9})", data
+    ):
+        return "vpn.plan_select", {"plan_code": data.split(":")[2]}
+    if re.fullmatch(r"sub:(profile|rotate-confirm):(hysteria|vless-reality)", data):
+        action = (
+            "vpn.key_export" if data.startswith("sub:profile:") else "vpn.key_rotate"
+        )
+        return action, {"service_id": data.rsplit(":", 1)[1]}
+    if re.fullmatch(r"sub:rotate:(hysteria|vless-reality):[0-9a-f]{20}", data):
+        return "vpn.key_rotate", {"service_id": data.split(":")[2]}
+    if re.fullmatch(r"sub:(suspend|resume):[0-9a-f]{20}", data):
+        return f"vpn.subscription_{data.split(':')[1]}", {}
 
     exact_config_actions = {
         "cfg:create": "vpn.config_create_start",

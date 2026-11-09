@@ -20,6 +20,21 @@ class BSONIntegerTests(unittest.TestCase):
 
 
 class RealBSONIntegerTests(unittest.TestCase):
+    def test_real_bson_int64_session_policy_is_returned_as_plain_integer(self):
+        try:
+            from bson import BSON
+            from bson.int64 import Int64
+        except ImportError:
+            self.skipTest('Install requirements.lock for the real Mongo driver regression')
+        from test_runtime import MemoryCollection, account, USER
+        row = BSON(BSON.encode(account(max_sessions=Int64(1)))).decode()
+        self.assertIsInstance(row['max_sessions'], Int64)
+        collection = MemoryCollection(row)
+        result = authorize(collection, USER + ':test-password:with-colon')
+        self.assertEqual(result, {'ok': True, 'id': USER, 'max_sessions': 1})
+        self.assertIs(type(result['max_sessions']), int)
+        self.assertEqual(collection.updates, [])
+
     def test_real_bson_large_quota_auth_and_collector_cursor_replay(self):
         try:
             from bson import BSON

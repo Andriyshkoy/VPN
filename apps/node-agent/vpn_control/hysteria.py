@@ -64,30 +64,46 @@ class HysteriaBackend:
             for value in (snapshot.used_traffic_bytes, snapshot.traffic_limit_bytes):
                 if type(value) is not int or value < 0:
                     raise ValueError("invalid_counter")
+            if snapshot.max_sessions is not None and (type(snapshot.max_sessions) is not int or not 1 <= snapshot.max_sessions <= 128):
+                raise ValueError("invalid_session_limit")
             return snapshot
         except (TypeError, ValueError):
             raise BackendUnavailable("hysteria_bridge_invalid_snapshot") from None
 
     @staticmethod
-    def _policy(expires_at, traffic_limit_bytes, activation_days):
+    def _policy(expires_at, traffic_limit_bytes, activation_days, max_sessions=None):
         if expires_at is not None:
             raise BackendConflict("hysteria_exact_expiry_unsupported")
         if type(traffic_limit_bytes) is not int or not 0 <= traffic_limit_bytes <= 2**63 - 1:
             raise BackendConflict("invalid_traffic_limit")
         if activation_days is not None and (type(activation_days) is not int or not 1 <= activation_days <= 3660):
             raise BackendConflict("invalid_activation_days")
+        if max_sessions is not None and (type(max_sessions) is not int or not 1 <= max_sessions <= 128):
+            raise BackendConflict("invalid_max_sessions")
         return {"expires_at": None, "traffic_limit_bytes": traffic_limit_bytes,
-                "activation_days": activation_days}
+                "activation_days": activation_days, "max_sessions": max_sessions}
 
-    def create(self, username, *, expires_at, traffic_limit_bytes, activation_days=None):
-        policy = self._policy(expires_at, traffic_limit_bytes, activation_days)
+    def create(self, username, *, expires_at, traffic_limit_bytes, activation_days=None, max_sessions=None):
+        policy = self._policy(expires_at, traffic_limit_bytes, activation_days, max_sessions)
+        if max_sessions is None:
+            policy.pop("max_sessions")  # Older bridges accept unchanged unlimited creates.
         return self._snapshot(self._call("create", username, **policy))
 
     def get(self, username):
         return self._snapshot(self._call("get", username))
 
-    def update(self, username, *, expires_at, traffic_limit_bytes, activation_days=None):
-        policy = self._policy(expires_at, traffic_limit_bytes, activation_days)
+    def update(self, username, *, expires_at, traffic_limit_bytes, activation_days=None, max_sessions=None):
+        policy = self._policy(expires_at, traffic_limit_bytes, activation_days, max_sessions)
+        if max_sessions is None:
+            current = self._call("get", username)
+            self._snapshot(current)  # Validate the raw reply before feature detection.
+            if current is None:
+                raise BackendNotFound("backend_access_not_found")
+            if "max_sessions" not in current:
+                # Legacy bridges reject unknown keys and cannot have session
+                # policies. A new bridge always returns this field, including
+                # null, so clearing an existing limit keeps the explicit null.
+                policy.pop("max_sessions")
         return self._snapshot(self._call("update", username, **policy))
 
     def set_status(self, username, status):

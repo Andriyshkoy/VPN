@@ -43,7 +43,9 @@ _STATES = frozenset(
 )
 _DESIRED_STATES = frozenset({"active", "suspended", "revoked"})
 _RETRYABLE = frozenset({408, 425, 429, 500, 502, 503, 504})
-_POLICY_FIELDS = frozenset({"traffic_limit_bytes", "expires_at", "activation_days"})
+_POLICY_FIELDS = frozenset(
+    {"traffic_limit_bytes", "expires_at", "activation_days", "max_sessions"}
+)
 _EFFECTIVE_FIELDS = frozenset(
     {
         "status",
@@ -54,6 +56,7 @@ _EFFECTIVE_FIELDS = frozenset(
         "expiry_precision",
         "accounting",
         "activation_days",
+        "max_sessions",
     }
 )
 _MAX_RESPONSE_BYTES = 1_048_576
@@ -301,6 +304,15 @@ class NodeAgentGateway:
             raise APIConfigurationError("VPN node access policy is invalid")
         if days is not None and (type(days) is not int or not 1 <= days <= 3660):
             raise APIConfigurationError("VPN node access policy is invalid")
+        sessions = result.get("max_sessions")
+        if sessions is not None and (
+            type(sessions) is not int or not 1 <= sessions <= 128
+        ):
+            raise APIConfigurationError("VPN node access policy is invalid")
+        if service_id != "hysteria" and sessions is not None:
+            raise APIConfigurationError(
+                "VPN node session policy does not match service"
+            )
         if (service_id == "hysteria" and result["expires_at"] is not None) or (
             service_id == "vless-reality" and days is not None
         ):
@@ -448,6 +460,12 @@ class NodeAgentGateway:
                 or not 1 <= effective["activation_days"] <= 3660
             ):
                 raise _protocol_error()
+            if effective.get("max_sessions") is not None and (
+                type(effective["max_sessions"]) is not int
+                or not 1 <= effective["max_sessions"] <= 128
+                or service != "hysteria"
+            ):
+                raise _protocol_error()
             effective = dict(effective)
         if (
             not _integer(value.get("revision"))
@@ -497,6 +515,11 @@ class NodeAgentGateway:
         for key in ("traffic_limit_bytes", "activation_days"):
             if result.settings[key] != expected_policy[key]:
                 raise _protocol_error()
+        if (
+            "max_sessions" in expected_policy
+            and result.settings.get("max_sessions") != expected_policy["max_sessions"]
+        ):
+            raise _protocol_error()
         expected_expiry, observed_expiry = (
             expected_policy["expires_at"],
             result.settings["expires_at"],
@@ -601,13 +624,27 @@ class NodeAgentGateway:
             "traffic_limit_bytes",
             "unlimited_traffic",
             "unlimited_expiry",
+            "max_sessions",
+            "session_scope",
+            "enforcement",
+            "version",
         }
         result = {key: item for key, item in value.items() if key in known}
         if any(
             type(item) is not bool
             for key, item in result.items()
-            if key != "expiry_precision"
+            if key
+            not in {"expiry_precision", "session_scope", "enforcement", "version"}
         ) or result.get("expiry_precision") not in (None, "second", "day"):
+            raise _protocol_error()
+        if (
+            result.get("session_scope") not in (None, "auth_id_per_server_instance")
+            or result.get("enforcement") not in (None, "atomic_quic_connection")
+            or (
+                "version" in result
+                and (type(result["version"]) is not int or result["version"] < 1)
+            )
+        ):
             raise _protocol_error()
         return result
 

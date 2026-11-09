@@ -12,8 +12,10 @@ from ..keyboards import (
     MENU_BALANCE,
     MENU_CANCEL,
     MENU_CONFIGS,
+    MENU_CONFIGS_LEGACY,
     MENU_INSTRUCTIONS,
     MENU_REFERRALS,
+    MENU_SUBSCRIPTION,
     MENU_TOP_UP,
     main_menu_keyboard,
 )
@@ -114,19 +116,34 @@ async def balance_history_navigation(
 
 
 @router.message(Command("configs"))
+@router.message(Command("keys"))
 @router.message(F.text == MENU_CONFIGS)
+@router.message(F.text == MENU_CONFIGS_LEGACY)
 async def configs_navigation(
     message: Message,
     state: FSMContext,
     telegram_action_audit: TelegramActionAuditContext | None = None,
 ) -> None:
     await _reset_state(state)
-    from .configs import cmd_configs
+    from .subscriptions import cmd_keys
 
-    await cmd_configs(
+    await cmd_keys(
         message,
         telegram_action_audit=telegram_action_audit,
     )
+
+
+@router.message(Command("subscription"))
+@router.message(F.text == MENU_SUBSCRIPTION)
+async def subscription_navigation(
+    message: Message,
+    state: FSMContext,
+    telegram_action_audit: TelegramActionAuditContext | None = None,
+) -> None:
+    await _reset_state(state)
+    from .subscriptions import cmd_subscription
+
+    await cmd_subscription(message, telegram_action_audit=telegram_action_audit)
 
 
 @router.message(Command("topup"))
@@ -184,11 +201,10 @@ async def create_config_navigation(
     telegram_action_audit: TelegramActionAuditContext | None = None,
 ) -> None:
     await _reset_state(state)
-    from .configs import cmd_create_config
+    from .subscriptions import cmd_subscription
 
-    await cmd_create_config(
+    await cmd_subscription(
         message,
-        state,
         telegram_action_audit=telegram_action_audit,
     )
 

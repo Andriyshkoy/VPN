@@ -37,7 +37,9 @@ function errorMessage(body: unknown, status: number): { message: string; code?: 
     const record = body as Record<string, unknown>
     const nested = record.error && typeof record.error === 'object'
       ? record.error as Record<string, unknown>
-      : record
+      : record.detail && typeof record.detail === 'object' && !Array.isArray(record.detail)
+        ? record.detail as Record<string, unknown>
+        : record
     const message = nested.message ?? nested.detail ?? record.detail
     return {
       message: typeof message === 'string' ? message : `Запрос завершился с ошибкой (${status})`,

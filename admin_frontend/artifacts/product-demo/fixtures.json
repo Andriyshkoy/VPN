@@ -1,0 +1,209 @@
+{
+  "warning": "DEMO synthetic fixture data. No real users, access keys or API tokens.",
+  "plans": [
+    {
+      "code": "basic",
+      "name": "Basic",
+      "hourly_rate_rub": "0.07",
+      "currency": "RUB",
+      "monthly_price_rub": "50.00",
+      "monthly_estimate_rub": "50.40",
+      "services": [
+        "hysteria"
+      ],
+      "max_sessions": 1
+    },
+    {
+      "code": "plus",
+      "name": "Plus",
+      "hourly_rate_rub": "0.14",
+      "currency": "RUB",
+      "monthly_price_rub": "100.00",
+      "monthly_estimate_rub": "100.80",
+      "services": [
+        "hysteria",
+        "vless-reality"
+      ],
+      "max_sessions": null
+    }
+  ],
+  "subscriptions": [
+    {
+      "code": "basic",
+      "name": "Basic",
+      "hourly_rate_rub": "0.07",
+      "currency": "RUB",
+      "monthly_price_rub": "50.00",
+      "monthly_estimate_rub": "50.40",
+      "services": [
+        "hysteria"
+      ],
+      "max_sessions": 1,
+      "id": "demo-basic",
+      "user_id": 42,
+      "plan_code": "basic",
+      "status": "active",
+      "version": 1,
+      "billing_paused": true,
+      "unlimited_balance": false,
+      "next_charge_at": null,
+      "accesses": [
+        {
+          "service_id": "hysteria",
+          "config_id": 4201,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "code": "plus",
+      "name": "Plus",
+      "hourly_rate_rub": "0.14",
+      "currency": "RUB",
+      "monthly_price_rub": "100.00",
+      "monthly_estimate_rub": "100.80",
+      "services": [
+        "hysteria",
+        "vless-reality"
+      ],
+      "max_sessions": null,
+      "id": "demo-plus",
+      "user_id": 57,
+      "plan_code": "plus",
+      "status": "active",
+      "version": 1,
+      "billing_paused": true,
+      "unlimited_balance": false,
+      "next_charge_at": null,
+      "accesses": [
+        {
+          "service_id": "hysteria",
+          "config_id": 5701,
+          "status": "active"
+        },
+        {
+          "service_id": "vless-reality",
+          "config_id": 5702,
+          "status": "active"
+        }
+      ]
+    }
+  ],
+  "migration": {
+    "read_only": true,
+    "billing_enabled": false,
+    "counts": {
+      "basic": 1,
+      "plus": 1,
+      "suspended": 1,
+      "unchanged": 1,
+      "total": 4
+    },
+    "balance_changes": 0,
+    "ledger_changes": 0,
+    "unlimited_balance_changes": 0,
+    "items": [
+      {
+        "user_id": 42,
+        "active_configs": 1,
+        "plan_code": "basic",
+        "status": "active",
+        "reason": "DEMO: один активный профиль"
+      },
+      {
+        "user_id": 57,
+        "active_configs": 2,
+        "plan_code": "plus",
+        "status": "active",
+        "reason": "DEMO: два активных профиля"
+      },
+      {
+        "user_id": 68,
+        "active_configs": 0,
+        "plan_code": null,
+        "status": "suspended",
+        "reason": "DEMO: все профили приостановлены"
+      },
+      {
+        "user_id": 79,
+        "active_configs": 0,
+        "plan_code": null,
+        "status": "unchanged",
+        "reason": "DEMO: активных профилей нет"
+      }
+    ]
+  },
+  "demo_user": {
+    "identity": {
+      "id": 42,
+      "username": "demo_user",
+      "display_name": "DEMO User",
+      "created_at": "2026-10-01T10:00:00Z",
+      "delivery_status": "active"
+    },
+    "finance": {
+      "balance": "137.50",
+      "unlimited_balance": false,
+      "provider_deposits": "200.00",
+      "service_charges": "62.50",
+      "config_fees": "0.00",
+      "latest_ledger_entry_id": 1
+    },
+    "configs": {
+      "total": 1,
+      "active": 1,
+      "suspended": 0
+    }
+  },
+  "queued_campaign": {
+    "name": "DEMO: обновление сервиса",
+    "text": "DEMO — пример сообщения.\n\nПоявились два тарифа: Basic и Plus. Выпуск профилей бесплатный. Списания пока выключены.\n\nЭто локальный макет для проверки админки; сообщение никому не отправляется.",
+    "audience": {
+      "kind": "all",
+      "user_ids": []
+    },
+    "id": "demo-local-campaign",
+    "revision": 1,
+    "status": "queued",
+    "delivery_paused": true,
+    "counts": {
+      "total": 3,
+      "pending": 3,
+      "queued": 0,
+      "sending": 0,
+      "delivered": 0,
+      "failed": 0,
+      "unknown": 0,
+      "skipped": 0,
+      "cancelled": 0
+    },
+    "created_at": "2026-11-09T10:00:00Z",
+    "launched_at": "2026-11-09T10:05:00Z"
+  },
+  "historical_completed_campaign": {
+    "name": "DEMO: завершённая рассылка (история)",
+    "text": "DEMO — пример сообщения.\n\nПоявились два тарифа: Basic и Plus. Выпуск профилей бесплатный. Списания пока выключены.\n\nЭто локальный макет для проверки админки; сообщение никому не отправляется.",
+    "audience": {
+      "kind": "all",
+      "user_ids": []
+    },
+    "id": "demo-historical-campaign",
+    "revision": 1,
+    "status": "completed",
+    "delivery_paused": true,
+    "counts": {
+      "total": 3,
+      "pending": 0,
+      "queued": 0,
+      "sending": 0,
+      "delivered": 1,
+      "failed": 1,
+      "unknown": 1,
+      "skipped": 0,
+      "cancelled": 0
+    },
+    "created_at": "2026-11-09T10:00:00Z",
+    "launched_at": "2026-11-09T10:05:00Z"
+  },
+  "historical_counts_note": "Synthetic results from a historical example, not from this queued campaign; delivery remains paused throughout the capture."
+}

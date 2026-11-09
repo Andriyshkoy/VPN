@@ -8,6 +8,7 @@ from httpx import ASGITransport, AsyncClient
 from core.db.unit_of_work import uow
 from core.services import BillingService, ConfigService, ServerService, UserService
 from tests.fleet_test_support import mark_server_ready
+from tests.historical_billing_support import create_historical_paid_config
 
 
 class DummyGateway:
@@ -148,7 +149,8 @@ async def test_config_list(monkeypatch, sessionmaker):
     )
     await mark_server_ready(server.id)
     await billing.top_up(user.id, 10)
-    cfg = await billing.create_paid_config(
+    cfg = await create_historical_paid_config(
+        billing,
         server_id=server.id,
         owner_id=user.id,
         name="cfg",

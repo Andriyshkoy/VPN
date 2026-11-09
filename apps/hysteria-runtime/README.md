@@ -33,6 +33,36 @@ readiness checks never activate users or modify counters. `GET /healthz`
 checks process liveness; `GET /readyz` checks MongoDB. Bodies are bounded to
 16 KiB, chunked requests are rejected and errors do not contain credentials.
 
+An optional MongoDB `max_sessions` policy is `null` or absent for unlimited
+sessions, or an integer from 1 to 128. Valid BSON `Int64` values are supported;
+booleans, zero and malformed policies deny authentication. A limited account's
+auth response includes `max_sessions`, including for `unlimited_user` accounts.
+This does not activate an account or write counters. `GET /capabilities` reports
+`max_sessions: true`, `version: 1` and `policy_source: mongo_max_sessions` without
+authenticating an account or querying MongoDB.
+
+The runtime supplies policy; the patched Hysteria server enforces simultaneous
+QUIC client sessions atomically by auth ID within one server instance (the
+official application creates one instance per process). The
+node-agent must verify both that server's authenticated statistics capability
+and this auth callback's capability before provisioning a limited account.
+An older server or auth callback is unsupported for session limits. Multiple
+TCP streams within one client session share one slot; an IP address is not a
+device identity. The limit is not a cross-process or cross-node quota.
+
+Each limited HTTP authentication also verifies the current engine's protected
+statistics `/capabilities` endpoint. Only an exact supported capability grants
+access. A missing endpoint, downgrade, invalid response, or unavailable checker
+denies the limited account, so a saved limit cannot silently become unlimited.
+Unlimited accounts keep their legacy authentication behavior and do not depend
+on this engine capability check.
+
+While tightening an existing session limit, the bridge may persist
+`_vpn_session_close_pending: true` until native connection closure succeeds.
+Authentication fails closed while this marker is present, including for
+`unlimited_user` accounts. The collector preserves it; the bridge clears it
+after a successful close so a failed operation can safely be retried.
+
 The collector calls only `/traffic?clear=false` and `/online`. Upload/download
 deltas and a per-user epoch/counter cursor are committed in one MongoDB atomic
 compare-and-set update. Replaying a snapshot after an uncertain write does
@@ -72,3 +102,28 @@ dirty state. Only the runtime package, dependency lists and this README are
 included; tests, Git metadata, private files and credentials are excluded.
 Extract this archive into its own runtime release directory, rather than
 overwriting the node-agent's independent dependency lockfile.
+
+Native Hysteria integration tests can use the actual runtime HTTP handler
+backed by a disposable local MongoDB database:
+
+```sh
+PYTHONPATH=apps/hysteria-runtime python apps/hysteria-runtime/tests/serve_native_fixture.py \
+  --ready-file /tmp/hys-native-ready.json
+```
+
+Run this from the repository root with the runtime dependencies installed and
+MongoDB listening on loopback. `HYS_NATIVE_MONGO_URI` defaults to
+`mongodb://127.0.0.1:27017/`; remote hosts, SRV, replica discovery, proxy options
+and an existing database path are rejected. The helper always selects a new
+random `vpn_hys_native_...` database and binds HTTP to `127.0.0.1` on an ephemeral
+port. Its private ready file contains `auth_url`, public test-user credentials
+and the generated database name, never the MongoDB URI. Limited and independent
+users have a genuine BSON `Int64(1)` session limit; the unlimited user has `null`.
+SIGTERM or SIGINT closes the listener and drops only that generated database.
+
+Set `HYS_NATIVE_ENGINE_READY` to the native harness's engine-ready JSON path.
+The harness writes `stats_url` and `stats_secret` for the actual local Hysteria
+statistics listener into that file before authenticating limited users. The
+fixture rereads this file and checks the actual engine capability for each
+limited authentication; a missing or invalid file denies access. The JSON
+must contain exactly those two fields, with no MongoDB URI or credentials.

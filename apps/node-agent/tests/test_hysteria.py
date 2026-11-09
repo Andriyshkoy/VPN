@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import os
 from pathlib import Path
 import socket
+import socketserver
 import subprocess
 import tempfile
 import threading
@@ -68,6 +69,11 @@ class Backend(LegacyHysteria):
     def _online_count(self, username):
         return self.online.get(username, 0)
 
+    def _close_connections(self, username, *, required=False):
+        if required:
+            raise BackendUnavailable("hysteria_close_by_auth_id_unsupported")
+        return False
+
     def first_new_data_succeeds(self, username):
         if username in self.pending_kicks:
             self.pending_kicks.remove(username)
@@ -106,6 +112,144 @@ class PolicyTests(unittest.TestCase):
             with self.assertRaises(BackendConflict):
                 backend.create(USER, **kwargs)
         self.assertEqual(backend.collection.rows, {})
+
+    def test_session_policy_rejects_coercion_and_bounds_before_mutation(self):
+        backend = Backend()
+        for value in (True, False, 0, -1, 129, "1", 1.0, [], {}):
+            with self.subTest(value=value), self.assertRaises(BackendConflict):
+                backend.create(USER, max_sessions=value)
+        self.assertEqual(backend.collection.rows, {})
+
+    def test_snapshot_old_rows_unlimited_and_invalid_policy_fails_closed(self):
+        self.assertIsNone(snapshot({}).max_sessions)
+        self.assertIsNone(snapshot({"max_sessions": None}).max_sessions)
+        for value in (True, 0, -1, 129, "1"):
+            with self.subTest(value=value), self.assertRaises(BackendUnavailable):
+                snapshot({"max_sessions": value})
+
+    def test_real_bson_integer_session_policy_is_normalized(self):
+        try:
+            from bson.int64 import Int64
+        except ImportError:
+            self.skipTest("PyMongo/BSON not installed in this test interpreter")
+        value = snapshot({"max_sessions": Int64(1)}).max_sessions
+        self.assertEqual(value, 1)
+        self.assertIs(type(value), int)
+
+
+class SessionCapabilityTests(unittest.TestCase):
+    def setUp(self):
+        self.backend = Backend()
+        self.backend._config = lambda: {"trafficStats": {"listen": "127.0.0.1:25413", "secret": "private"},
+                                       "auth": {"type": "http", "http": {"url": "http://127.0.0.1:28262/auth"}}}
+        self.engine = {"max_sessions": True, "session_scope": "auth_id_per_server_instance",
+                       "enforcement": "atomic_quic_connection", "version": 1, "close_by_auth_id": True}
+        self.auth = {"max_sessions": True, "policy_source": "mongo_max_sessions", "version": 1}
+        self.requests = []
+
+        def request(url, **kwargs):
+            self.requests.append((url, kwargs))
+            if url.endswith("/close"):
+                return {"closed": 2}
+            return self.engine if ":25413/" in url else self.auth
+
+        self.backend._request = request
+
+    def test_both_engine_and_actual_callback_must_advertise_correct_policy(self):
+        for component, invalid in (("engine", None), ("auth", None),
+                                   ("engine", {"max_sessions": True, "version": True}),
+                                   ("auth", {"max_sessions": True, "version": 1})):
+            original = getattr(self, component)
+            setattr(self, component, invalid)
+            with self.subTest(component=component, invalid=invalid), self.assertRaises(BackendUnavailable):
+                self.backend.create(USER, max_sessions=1)
+            self.assertEqual(self.backend.collection.rows, {})
+            setattr(self, component, original)
+        self.assertTrue(self.backend._session_capabilities()["max_sessions"])
+        self.assertEqual(self.requests[-2][1]["secret"], "private")
+        self.assertNotIn("secret", self.requests[-1][1])
+        self.assertTrue(all("payload" not in kwargs for _, kwargs in self.requests))
+
+    def test_leftover_http_url_does_not_enable_limit_for_non_http_auth(self):
+        config = self.backend._config()
+        self.backend._config = lambda: config
+        for auth_type in (None, "password", "command", "userpass", True):
+            config["auth"]["type"] = auth_type
+            with self.subTest(auth_type=auth_type), self.assertRaises(BackendUnavailable):
+                self.backend.create(USER, max_sessions=1)
+            self.assertEqual(self.backend.collection.rows, {})
+            self.assertEqual(self.requests, [])
+        for auth_type in ("http", "https", "HTTP", "HtTpS"):
+            config["auth"]["type"] = auth_type
+            self.assertTrue(self.backend._session_capabilities()["max_sessions"])
+
+    def test_supported_limit_persists_and_unrelated_update_preserves_identity(self):
+        created = self.backend.create(USER, max_sessions=1)
+        before = copy.deepcopy(self.backend.collection.rows[USER])
+        self.assertEqual(created["max_sessions"], 1)
+        self.backend.update(USER, max_sessions=1, traffic_limit_bytes=1024)
+        row = self.backend.collection.rows[USER]
+        self.assertEqual(row["password"], before["password"])
+        self.assertEqual(row["max_sessions"], 1)
+        self.assertNotIn("account_creation_date", row)
+        self.assertNotIn(before["password"], json.dumps(self.backend.get(USER)))
+        self.assertEqual(self.backend.auth_calls, [])
+
+    def test_unsupported_update_cannot_change_mongo(self):
+        self.backend.create(USER)
+        before = copy.deepcopy(self.backend.collection.rows)
+        self.auth = None
+        with self.assertRaises(BackendUnavailable):
+            self.backend.update(USER, traffic_limit_bytes=1000, max_sessions=1)
+        self.assertEqual(self.backend.collection.rows, before)
+
+    def test_tightening_preflights_close_then_retries_durable_pending_close(self):
+        self.backend.create(USER)
+        before = copy.deepcopy(self.backend.collection.rows)
+        self.engine["close_by_auth_id"] = False
+        with self.assertRaises(BackendUnavailable):
+            self.backend.update(USER, max_sessions=1)
+        self.assertEqual(self.backend.collection.rows, before)
+        self.engine["close_by_auth_id"] = True
+        self.backend._close_connections = lambda *args, **kwargs: (_ for _ in ()).throw(BackendUnavailable("hysteria_close_unconfirmed"))
+        with self.assertRaises(BackendUnavailable):
+            self.backend.update(USER, max_sessions=1)
+        self.assertTrue(self.backend.collection.rows[USER]["_vpn_session_close_pending"])
+        self.assertEqual(self.backend.get(USER)["status"], "suspended")
+        self.backend._close_connections = lambda *args, **kwargs: True
+        result = self.backend.update(USER, max_sessions=1)
+        self.assertFalse(self.backend.collection.rows[USER]["_vpn_session_close_pending"])
+        self.assertEqual(result["status"], "active")
+
+    def test_native_close_uses_authenticated_non_sticky_endpoint(self):
+        self.assertTrue(LegacyHysteria._close_connections(self.backend, USER, required=True))
+        self.assertEqual(self.requests[-1], ("http://127.0.0.1:25413/close", {"secret": "private", "payload": [USER]}))
+        self.assertEqual(self.backend.kicks, [])
+
+    def test_suspend_and_revoke_close_failure_is_retryable_and_preserves_denial(self):
+        self.backend.create(USER)
+        self.backend._close_connections = lambda *args, **kwargs: (_ for _ in ()).throw(BackendUnavailable("hysteria_close_unconfirmed"))
+        with self.assertRaises(BackendUnavailable):
+            self.backend.set_status(USER, "suspended")
+        self.assertTrue(self.backend.collection.rows[USER]["blocked"])
+        self.backend._close_connections = lambda *args, **kwargs: True
+        self.backend.set_status(USER, "suspended")
+        self.backend.set_status(USER, "active")
+        self.backend._close_connections = lambda *args, **kwargs: (_ for _ in ()).throw(BackendUnavailable("hysteria_close_unconfirmed"))
+        with self.assertRaises(BackendUnavailable):
+            self.backend.revoke(USER)
+        self.assertTrue(self.backend.collection.rows[USER]["blocked"])
+        self.backend._close_connections = lambda *args, **kwargs: True
+        self.backend.revoke(USER)
+        self.assertEqual(self.backend.collection.rows, {})
+        self.assertEqual(self.backend.kicks, [])
+
+    def test_unlimited_legacy_creates_need_no_capability_or_success_auth_probe(self):
+        self.engine = self.auth = None
+        created = self.backend.create(USER)
+        self.assertIsNone(created["max_sessions"])
+        self.assertEqual(self.requests, [])
+        self.assertEqual(self.backend.auth_calls, [])
 
 
 class LifecycleTests(unittest.TestCase):
@@ -240,6 +384,27 @@ class WireTests(unittest.TestCase):
         self.client.revoke(USER)
         self.assertIsNone(self.client.get(USER))
 
+    def test_session_policy_round_trips_real_unix_bridge_and_can_be_cleared(self):
+        self.backend._session_capabilities = lambda: {"max_sessions": True, "close_by_auth_id": True}
+        created = self.client.create(USER, expires_at=None, traffic_limit_bytes=0, max_sessions=1)
+        self.assertEqual(created.max_sessions, 1)
+        self.assertEqual(self.backend.collection.rows[USER]["max_sessions"], 1)
+        sent = []
+        call = self.client._call
+
+        def tracked(op, username=None, **kwargs):
+            sent.append((op, kwargs))
+            return call(op, username, **kwargs)
+
+        self.client._call = tracked
+        changed = self.client.update(USER, expires_at=None, traffic_limit_bytes=0, max_sessions=None)
+        self.assertIsNone(changed.max_sessions)
+        self.assertIsNone(self.backend.collection.rows[USER]["max_sessions"])
+        self.assertEqual([op for op, _ in sent], ["get", "update"])
+        self.assertIn("max_sessions", sent[-1][1])
+        self.assertIsNone(sent[-1][1]["max_sessions"])
+        self.assertEqual(self.backend.auth_calls, [])
+
     def test_peer_credentials_reject_unapproved_uid(self):
         self.server.allowed_uids = set()
         with self.assertRaises(BackendUnavailable):
@@ -254,7 +419,122 @@ class WireTests(unittest.TestCase):
                 dispatch(self.backend, request)
 
 
+class LegacyBridgeWireTests(unittest.TestCase):
+    def setUp(self):
+        # Exercise the old exact JSON RPC key set over an actual Unix socket,
+        # including legacy snapshots which do not advertise max_sessions.
+        class LegacyHandler(socketserver.StreamRequestHandler):
+            def handle(self):
+                request = json.loads(self.rfile.readline())
+                self.server.requests.append(request)
+                required = {"get": {"username"},
+                            "create": {"username", "expires_at", "traffic_limit_bytes", "activation_days"},
+                            "update": {"username", "expires_at", "traffic_limit_bytes", "activation_days"}}
+                op = request.get("op")
+                if op not in required or set(request) - {"version", "op"} != required[op]:
+                    response = {"ok": False, "error": {"kind": "conflict", "code": "invalid_bridge_request"}}
+                else:
+                    result = getattr(self.server.backend, op)(**{key: value for key, value in request.items()
+                                                                if key not in {"version", "op"}})
+                    if result is not None:
+                        result.pop("max_sessions", None)
+                    response = {"ok": True, "result": result}
+                self.wfile.write(json.dumps(response).encode() + b"\n")
+
+        self.temp = tempfile.TemporaryDirectory()
+        self.path = str(Path(self.temp.name) / "legacy.sock")
+        self.backend = Backend()
+        self.server = BridgeServer(self.path, LegacyHandler)
+        self.server.backend, self.server.requests = self.backend, []
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.start()
+        self.client = HysteriaBackend(self.path, timeout=2)
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=3)
+        self.temp.cleanup()
+
+    def test_unlimited_create_and_policy_update_work_with_actual_legacy_json_rpc(self):
+        self.client.create(USER, expires_at=None, traffic_limit_bytes=0)
+        updated = self.client.update(USER, expires_at=None, traffic_limit_bytes=2048, activation_days=7)
+        self.assertEqual(updated.traffic_limit_bytes, 2048)
+        self.assertEqual(updated.activation_days, 7)
+        self.assertIsNone(updated.max_sessions)
+        self.assertEqual([request["op"] for request in self.server.requests], ["create", "get", "update"])
+        self.assertTrue(all("max_sessions" not in request for request in self.server.requests))
+
+    def test_positive_limit_is_not_retried_or_downgraded_for_legacy_bridge(self):
+        self.client.create(USER, expires_at=None, traffic_limit_bytes=0)
+        before = copy.deepcopy(self.backend.collection.rows)
+        self.server.requests.clear()
+        with self.assertRaises(BackendConflict):
+            self.client.update(USER, expires_at=None, traffic_limit_bytes=2048, max_sessions=1)
+        self.assertEqual(len(self.server.requests), 1)
+        self.assertEqual(self.server.requests[0]["max_sessions"], 1)
+        self.assertEqual(self.backend.collection.rows, before)
+
+    def test_missing_legacy_user_still_reports_not_found_without_policy_mutation(self):
+        with self.assertRaises(BackendNotFound):
+            self.client.update(USER, expires_at=None, traffic_limit_bytes=0)
+        self.assertEqual([request["op"] for request in self.server.requests], ["get"])
+        self.assertEqual(self.backend.collection.rows, {})
+
+
 class InternalHTTPTests(unittest.TestCase):
+    def test_real_http_legacy_404_capability_denies_limited_write_and_accepts_both_upgrades(self):
+        visited, capabilities = [], {"engine": None, "auth": None}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                visited.append((self.path, self.headers.get("Authorization")))
+                value = capabilities.get(self.path.split("/")[1])
+                raw = json.dumps(value or {}).encode()
+                self.send_response(200 if value else 404)
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        backend = LegacyHysteria(Collection(), "/unused", public_host="example.invalid")
+        base = "http://127.0.0.1:" + str(server.server_port)
+        # Each capability endpoint is rooted at its own callback origin, as in
+        # the real two-listener setup; map one loopback fixture by secret here.
+        backend._config = lambda: {"trafficStats": {"listen": "127.0.0.1:" + str(server.server_port), "secret": "private"},
+                                   "auth": {"type": "http", "http": {"url": base + "/auth"}}}
+        original_request = backend._request
+
+        def request(url, **kwargs):
+            if url.endswith("/capabilities"):
+                kind = "engine" if "secret" in kwargs else "auth"
+                url = base + "/" + kind + "/capabilities"
+            return original_request(url, **kwargs)
+
+        backend._request = request
+        try:
+            self.assertEqual(backend._session_capabilities(), {"max_sessions": False})
+            with self.assertRaises(BackendUnavailable):
+                backend.create(USER, max_sessions=1)
+            self.assertEqual(backend.collection.rows, {})
+            capabilities["engine"] = {"max_sessions": True, "version": 1,
+                "session_scope": "auth_id_per_server_instance", "enforcement": "atomic_quic_connection"}
+            with self.assertRaises(BackendUnavailable):
+                backend.create(USER, max_sessions=1)
+            capabilities["auth"] = {"max_sessions": True, "version": 1, "policy_source": "mongo_max_sessions"}
+            self.assertEqual(backend.create(USER, max_sessions=1)["max_sessions"], 1)
+            self.assertTrue(all(secret == "private" for path, secret in visited if path.startswith("/engine/")))
+            self.assertTrue(all(secret is None for path, secret in visited if path.startswith("/auth/")))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+
     def test_internal_redirect_is_rejected_before_second_request(self):
         visited = []
 
@@ -301,7 +581,7 @@ class InternalHTTPTests(unittest.TestCase):
 
         backend.collection.database = Database()
         backend._config = lambda: {"trafficStats": {"listen": "127.0.0.1:25413", "secret": "private"},
-                                    "auth": {"http": {"url": "http://127.0.0.1:28262/auth"}}}
+                                    "auth": {"type": "http", "http": {"url": "http://127.0.0.1:28262/auth"}}}
 
         def request(url, **kwargs):
             requests.append((url, kwargs))

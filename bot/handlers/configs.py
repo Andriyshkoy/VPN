@@ -4,7 +4,6 @@ import html
 import os
 import tempfile
 from typing import Any
-from uuid import NAMESPACE_URL, uuid5
 
 from aiogram import F
 from aiogram.fsm.context import FSMContext
@@ -19,15 +18,12 @@ from aiogram.types import (
 
 from core.config import settings
 from core.domain import VPNOperationStatus, VPNState
-from core.exceptions import APIConnectionError, InsufficientBalanceError, ServiceError
+from core.exceptions import ServiceError
 from core.services.telegram_user_actions import TelegramActionAuditContext
 
 from ..keyboards import cancel_keyboard, main_menu_keyboard
 from ..states import CreateConfig, RenameConfig
 from ..ui import (
-    estimate_monthly_cost,
-    format_money,
-    format_whole_money,
     safe_callback_answer,
     safe_document_filename,
     safe_edit_text,
@@ -172,56 +168,16 @@ async def _begin_create_config(
     username: str | None,
     telegram_action_audit: TelegramActionAuditContext | None = None,
 ) -> None:
-    await get_or_create_user(tg_id, username)
-    if settings.maintenance_mode or not settings.provisioning_enabled:
-        if telegram_action_audit is not None:
-            telegram_action_audit.record(
-                "vpn.config_create_start",
-                result="unavailable",
-                metadata={"reason_code": "provisioning_disabled"},
-            )
-        await target.answer(
-            "Создание конфигураций временно недоступно. Попробуйте позже.",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
+    # Retire stale OpenVPN purchase flows without issuing or charging.
+    from .subscriptions import cmd_subscription
 
-    servers = await server_service.list(available_only=True)
-    if not servers:
-        if telegram_action_audit is not None:
-            telegram_action_audit.record(
-                "vpn.config_create_start",
-                result="unavailable",
-                metadata={"reason_code": "no_available_server"},
-            )
-        await target.answer(
-            "Сейчас нет доступных серверов. Попробуйте позже.",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-
-    buttons = [
-        [
-            InlineKeyboardButton(
-                text=" ".join([server.location, server.name]),
-                callback_data=f"server:{server.id}",
-            )
-        ]
-        for server in servers
-    ]
-    await target.answer(
-        "➕ <b>Новая конфигурация</b>\n\n"
-        "Выберите ближайший сервер.\n\n"
-        f"Создание — <b>{format_money(settings.config_creation_cost)} ₽</b>.\n"
-        "Стоимость VPN — "
-        f"<b>около {format_whole_money(estimate_monthly_cost(settings.per_config_cost, settings.billing_interval))} ₽ "
-        "в месяц</b> за каждую конфигурацию. Сумма списывается с баланса "
-        "постепенно — небольшими частями в течение месяца.",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    await state.clear()
+    await cmd_subscription(
+        target,
+        telegram_action_audit=telegram_action_audit,
+        tg_id=tg_id,
+        username=username,
     )
-    await state.set_state(CreateConfig.choosing_server)
-    if telegram_action_audit is not None:
-        telegram_action_audit.record("vpn.config_create_start")
 
 
 async def cmd_create_config(
@@ -297,49 +253,14 @@ async def choose_server(
     state: FSMContext,
     telegram_action_audit: TelegramActionAuditContext | None = None,
 ) -> None:
-    server_id = await _callback_id(callback, "server:")
-    if server_id is None:
-        if telegram_action_audit is not None:
-            telegram_action_audit.record(
-                "vpn.config_server_select",
-                result="invalid",
-                metadata={"reason_code": "invalid_callback"},
-            )
-        return
-    server = await server_service.get(server_id)
-    if server is None or not await server_service.accepts_new_config(server_id):
-        if telegram_action_audit is not None:
-            metadata: dict[str, object] = {
-                "reason_code": "server_unavailable",
-            }
-            if server is not None:
-                metadata["server_id"] = server_id
-            telegram_action_audit.record(
-                "vpn.config_server_select",
-                result="unavailable",
-                metadata=metadata,
-            )
-        await safe_callback_answer(
-            callback,
-            "Сервер больше недоступен. Выберите другой.",
-            show_alert=True,
-        )
-        return
-
-    await state.update_data(server_id=server_id)
-    await callback.message.answer(
-        "📝 <b>Введите название конфигурации</b>\n\n"
-        "Например: <i>Мой телефон</i> или <i>Ноутбук</i>. Это название будет "
-        "видно только вам, его можно изменить позже.",
-        reply_markup=cancel_keyboard(),
+    await _begin_create_config(
+        callback.message,
+        state,
+        tg_id=callback.from_user.id,
+        username=callback.from_user.username,
+        telegram_action_audit=telegram_action_audit,
     )
-    await state.set_state(CreateConfig.entering_name)
     await safe_callback_answer(callback)
-    if telegram_action_audit is not None:
-        telegram_action_audit.record(
-            "vpn.config_server_select",
-            metadata={"server_id": server_id},
-        )
 
 
 @router.message(CreateConfig.choosing_server, ~F.successful_payment)
@@ -368,110 +289,13 @@ async def got_name(
     event_update: Update,
     telegram_action_audit: TelegramActionAuditContext | None = None,
 ) -> None:
-    data = await state.get_data()
-    server_id = data.get("server_id")
-    if not server_id:
-        if telegram_action_audit is not None:
-            telegram_action_audit.record(
-                "vpn.config_create_submit",
-                result="rejected",
-                metadata={"reason_code": "server_not_selected"},
-            )
-        await message.answer(
-            "Сервер не выбран. Начните создание заново.",
-            reply_markup=main_menu_keyboard(),
-        )
-        await state.clear()
-        return
-
-    display_name = (message.text or "").strip()
-    user = await get_or_create_user(message.from_user.id, message.from_user.username)
-    if telegram_action_audit is not None:
-        telegram_action_audit.record(
-            "vpn.config_create_submit",
-            result="handled",
-            metadata={"server_id": server_id},
-        )
-    purchase_key = f"telegram:create-config:update:{event_update.update_id}"
-    unique_name = uuid5(NAMESPACE_URL, purchase_key).hex
-    try:
-        config = await billing_service.create_paid_config(
-            server_id=server_id,
-            owner_id=user.id,
-            name=unique_name,
-            display_name=display_name,
-            creation_cost=settings.config_creation_cost,
-            idempotency_key=purchase_key,
-        )
-    except InsufficientBalanceError:
-        if telegram_action_audit is not None:
-            telegram_action_audit.record(
-                "vpn.config_create_submit",
-                result="rejected",
-                metadata={
-                    "server_id": server_id,
-                    "reason_code": "insufficient_balance",
-                },
-            )
-        await message.answer(
-            "Недостаточно средств. Сначала пополните баланс.",
-            reply_markup=main_menu_keyboard(),
-        )
-        await state.clear()
-        return
-    except APIConnectionError:
-        # The config/reservation intent is already durable. Let the inbox
-        # retry this exact update without charging or provisioning twice.
-        raise
-    except ServiceError:
-        if telegram_action_audit is not None:
-            telegram_action_audit.record(
-                "vpn.config_create_submit",
-                result="rejected",
-                metadata={
-                    "server_id": server_id,
-                    "reason_code": "request_rejected",
-                },
-            )
-        await message.answer(
-            "Не удалось создать конфигурацию. Проверьте название и попробуйте "
-            "ещё раз позже.",
-            reply_markup=main_menu_keyboard(),
-        )
-        await state.clear()
-        return
-
-    # Delivery belongs to the durable update attempt. Any Manager or Telegram
-    # failure must bubble up so this update is retried.
-    content = await config_service.download_config(config.id)
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
-    try:
-        await bot.send_document(
-            message.from_user.id,
-            FSInputFile(tmp_path, filename=safe_document_filename(display_name)),
-        )
-    finally:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
-
-    await message.answer(
-        "✅ Конфигурация создана и готова к импорту.\n\n"
-        "Откройте <b>«Инструкции»</b>, если подключаете устройство впервые.",
-        reply_markup=main_menu_keyboard(),
+    await _begin_create_config(
+        message,
+        state,
+        tg_id=message.from_user.id,
+        username=message.from_user.username,
+        telegram_action_audit=telegram_action_audit,
     )
-    if telegram_action_audit is not None:
-        telegram_action_audit.record(
-            "vpn.config_create_submit",
-            metadata={
-                "config_id": config.id,
-                "server_id": server_id,
-            },
-        )
-    await state.clear()
 
 
 @router.message(CreateConfig.entering_name, ~F.successful_payment)

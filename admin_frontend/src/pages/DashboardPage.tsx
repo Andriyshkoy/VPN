@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, ArrowRight, CircleDollarSign, FileKey2, ServerCog, Users } from 'lucide-react'
+import { AlertTriangle, ArrowRight, CircleDollarSign, FileKey2, ServerCog, Users, WalletCards, Mail } from 'lucide-react'
 import { Link } from 'react-router'
 import { dashboardApi } from '../api'
 import { useAuth } from '../auth/AuthProvider'
@@ -48,6 +48,8 @@ export function DashboardPage() {
       </section>
       {(data.alerts_active > 0 || data.pending_operations > 0) && <section className="attention-strip"><AlertTriangle /><div><strong>Требуется внимание</strong><span>{data.alerts_active} активных алертов · {data.pending_operations} операций в очереди</span></div>{canReadMetrics ? <Link to="/monitoring">Открыть мониторинг <ArrowRight size={16} /></Link> : canReadOperations ? <Link to="/operations">Открыть очередь <ArrowRight size={16} /></Link> : null}</section>}
       <section className="quick-grid">
+        {permissions.includes('subscriptions:read') && <Link className="quick-card" to="/subscriptions"><WalletCards /><span><strong>Подписки</strong><small>Basic 0,07 ₽/ч · Plus 0,14 ₽/ч</small></span><ArrowRight /></Link>}
+        {permissions.includes('campaigns:read') && <Link className="quick-card" to="/campaigns"><Mail /><span><strong>Рассылки</strong><small>Черновики, аудитория и доставка</small></span><ArrowRight /></Link>}
         {canReadUsers && <Link className="quick-card" to="/users"><Users /><span><strong>Пользователи</strong><small>Поиск и User 360</small></span><ArrowRight /></Link>}
         {canReadFinance && <Link className="quick-card" to="/finance"><CircleDollarSign /><span><strong>Финансы</strong><small>Доходы и движение денег</small></span><ArrowRight /></Link>}
         {canReadConfigs && <Link className="quick-card" to="/configs"><FileKey2 /><span><strong>Конфигурации</strong><small>Состояния и ошибки</small></span><ArrowRight /></Link>}

@@ -1,0 +1,2 @@
+# Unified diff context intentionally includes a leading space before Go tabs.
+engines/hysteria/session-limit.patch -whitespace

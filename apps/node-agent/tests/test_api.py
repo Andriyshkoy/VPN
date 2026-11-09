@@ -2,6 +2,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import sqlite3
 from pathlib import Path
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -28,10 +29,10 @@ class FakeBackend:
         self.blocked, self.release = None, None
         self.ready = True
 
-    def create(self, username, *, expires_at, traffic_limit_bytes, activation_days=None):
+    def create(self, username, *, expires_at, traffic_limit_bytes, activation_days=None, max_sessions=None):
         self.create_names.append(username)
         if username not in self.users:
-            self.users[username] = BackendAccess("active", 0, traffic_limit_bytes, expires_at, activation_days=activation_days)
+            self.users[username] = BackendAccess("active", 0, traffic_limit_bytes, expires_at, activation_days=activation_days, max_sessions=max_sessions)
             self.profiles[username] = "vless://CLIENT-SECRET-" + username + "@node.invalid:9443"
         if self.blocked:
             self.blocked.set()
@@ -44,9 +45,9 @@ class FakeBackend:
     def get(self, username):
         return self.users.get(username)
 
-    def update(self, username, *, expires_at, traffic_limit_bytes, activation_days=None):
+    def update(self, username, *, expires_at, traffic_limit_bytes, activation_days=None, max_sessions=None):
         current = self.users[username]
-        self.users[username] = replace(current, traffic_limit_bytes=traffic_limit_bytes, expires_at=expires_at, activation_days=activation_days)
+        self.users[username] = replace(current, traffic_limit_bytes=traffic_limit_bytes, expires_at=expires_at, activation_days=activation_days, max_sessions=max_sessions)
         return self.users[username]
 
     def set_status(self, username, status):
@@ -98,6 +99,65 @@ def test_auth_scope_and_documentation(setup):
     assert client.get("/v1/services", headers=headers(READ)).status_code == 200
     assert client.post("/v1/accesses", headers=headers(READ, "scope-test"), json={"service_id": "hysteria"}).status_code == 403
     assert client.get("/v1/services", headers={"Authorization": "Bearer " + "x" * 64}).status_code == 401
+
+
+@pytest.mark.parametrize("value", [True, False, 0, -1, 129, "1", 1.0])
+def test_session_limit_strict_validation_before_backend(setup, value):
+    client, _, hys, _ = setup
+    assert create(client, service="hysteria", max_sessions=value).status_code == 422
+    assert hys.create_names == []
+
+
+def test_session_limit_is_hysteria_policy_and_does_not_leak_profile(setup):
+    client, settings, hys, _ = setup
+    response = create(client, service="hysteria", max_sessions=1)
+    assert response.status_code == 201
+    access = response.json()["access"]
+    assert access["settings"]["max_sessions"] == access["effective"]["max_sessions"] == 1
+    access_id = access["id"]
+    changed = client.patch(f"/v1/accesses/{access_id}", headers=headers(key="session-clear"), json={"max_sessions": None})
+    assert changed.status_code == 200
+    assert changed.json()["access"]["settings"]["max_sessions"] is None
+    assert changed.json()["access"]["effective"]["max_sessions"] is None
+    assert "CLIENT-SECRET" not in json.dumps(response.json())
+    assert b"CLIENT-SECRET" not in settings.database.read_bytes()
+    assert hys.users[hys.create_names[0]].max_sessions is None
+
+
+def test_vless_session_limit_rejected_on_create_and_update(setup):
+    client, _, _, vless = setup
+    assert create(client, max_sessions=1).status_code == 422
+    assert not vless.users
+    access = create(client, key="vless-unlimited").json()["access"]
+    assert access["settings"]["max_sessions"] is None
+    before = dict(vless.users)
+    response = client.patch(f"/v1/accesses/{access['id']}", headers=headers(key="vless-session-limit"), json={"max_sessions": 1})
+    assert response.status_code == 422
+    assert vless.users == before
+
+
+def test_catalog_does_not_claim_session_capability_for_legacy_backend(setup):
+    client, _, hys, _ = setup
+    services = client.get("/v1/services", headers=headers(READ)).json()["services"]
+    assert all(service["capabilities"]["max_sessions"] is False for service in services)
+    hys.health = lambda: {"ready": True, "capabilities": {"max_sessions": True,
+        "session_scope": "auth_id_per_server_instance", "enforcement": "atomic_quic_connection", "version": 1}}
+    services = client.get("/v1/services", headers=headers(READ)).json()["services"]
+    assert {service["id"]: service["capabilities"]["max_sessions"] for service in services} == {"hysteria": True, "vless-reality": False}
+
+
+def test_existing_registry_without_session_field_remains_unlimited_and_updatable(setup):
+    client, settings, _, _ = setup
+    access = create(client, service="hysteria").json()["access"]
+    with sqlite3.connect(settings.database) as database:
+        previous = dict(access["settings"])
+        previous.pop("max_sessions")
+        database.execute("UPDATE accesses SET settings=? WHERE id=?", (json.dumps(previous), access["id"]))
+    observed = client.get(f"/v1/accesses/{access['id']}", headers=headers(READ)).json()["access"]
+    assert observed["settings"]["max_sessions"] is None
+    response = client.patch(f"/v1/accesses/{access['id']}", headers=headers(key="upgrade-old-row"), json={"max_sessions": 1})
+    assert response.status_code == 200
+    assert response.json()["access"]["settings"]["max_sessions"] == 1
 
 
 @pytest.mark.parametrize("service", ["hysteria", "vless-reality"])

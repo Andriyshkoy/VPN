@@ -22,6 +22,7 @@ from core.exceptions import InvalidOperationError
 from core.services import BillingService, ServerService, UserService
 from core.services.billing import PaymentIntent
 from tests.fleet_test_support import mark_server_ready
+from tests.historical_billing_support import prepare_historical_paid_config
 
 POSTGRES_TEST_URL = os.getenv("POSTGRES_TEST_URL")
 pytestmark = pytest.mark.skipif(
@@ -126,6 +127,19 @@ async def test_concurrent_paid_config_replay_creates_and_charges_once(monkeypatc
         )
         await mark_server_ready(server.id)
         billing = BillingService(uow, per_config_cost="1.00")
+
+        # This intent was committed by the former sale path before upgrade.
+        # Concurrent retries must finish that one operation without selling or
+        # charging a second configuration.
+        await prepare_historical_paid_config(
+            billing,
+            server_id=server.id,
+            owner_id=user.id,
+            name="stable-telegram-update",
+            display_name="Phone",
+            creation_cost="10.00",
+            idempotency_key="telegram:create-config:update:9002",
+        )
 
         async def purchase():
             return await billing.create_paid_config(

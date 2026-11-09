@@ -6,8 +6,10 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
+from core.db.models.campaign import CampaignRecipient
 from core.db.models.ledger import LedgerEntry, LedgerKind
 from core.db.models.payment import ProviderPayment
+from core.db.models.subscription import Subscription
 from core.db.models.telegram_user_action import TelegramUserActionEvent
 from core.db.models.user import User as UserModel
 from core.db.repo.billing import to_money
@@ -146,12 +148,22 @@ class UserService:
                 .where(TelegramUserActionEvent.user_id == user_id)
                 .limit(1)
             )
+            product_record = await session.scalar(
+                select(Subscription.id).where(Subscription.user_id == user_id).limit(1)
+            )
+            campaign_record = await session.scalar(
+                select(CampaignRecipient.id)
+                .where(CampaignRecipient.user_id == user_id)
+                .limit(1)
+            )
             if (
                 financial_record is not None
                 or payment_record is not None
                 or bot_audit_record is not None
+                or product_record is not None
+                or campaign_record is not None
             ):
-                # Financial and bot action history are immutable. A future
+                # Financial, product and delivery history are immutable. A future
                 # admin use case should anonymize/disable this account instead
                 # of physically deleting it.
                 return False
@@ -227,12 +239,34 @@ class UserService:
                     if user.balance > 0
                     else (VPNState.SUSPENDED.value, VPNOperationKind.SUSPEND.value)
                 )
-                planned = await self._config_service.prepare_entitlement(
-                    repos=repos,
-                    owner_id=user_id,
-                    desired_state=desired_state,
-                    kind=kind,
-                )
+                subscription = await repos["subscriptions"].get_by_user(user_id)
+                if subscription is not None:
+                    from .subscriptions import SubscriptionService
+
+                    if (
+                        desired_state == VPNState.SUSPENDED.value
+                        and not user.unlimited_balance
+                    ) or (
+                        desired_state == VPNState.ACTIVE.value
+                        and subscription.status == "expired"
+                    ):
+                        planned = await SubscriptionService(
+                            self._uow, config_service=self._config_service
+                        ).prepare_entitlement(
+                            repos=repos,
+                            user_id=user_id,
+                            desired_state=desired_state,
+                            kind=kind,
+                        )
+                elif (
+                    not user.unlimited_balance or desired_state == VPNState.ACTIVE.value
+                ):
+                    planned = await self._config_service.prepare_entitlement(
+                        repos=repos,
+                        owner_id=user_id,
+                        desired_state=desired_state,
+                        kind=kind,
+                    )
             result = User.from_orm(user) if user else None
 
         await self._config_service.execute_operations(planned, owner_id=user_id)

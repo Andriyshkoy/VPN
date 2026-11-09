@@ -292,6 +292,53 @@ class ConfigLeasedExecutorMixin:
                 settings.maintenance_mode or not settings.provisioning_enabled
             ):
                 return None, "deferred:provisioning_disabled"
+            if (
+                operation.kind == VPNOperationKind.PROVISION.value
+                and "subscription_prior_configs" in operation.payload
+            ):
+                previous = operation.payload["subscription_prior_configs"]
+                if not isinstance(previous, list) or any(
+                    not isinstance(item, dict)
+                    or type(item.get("id")) is not int
+                    or item["id"] <= 0
+                    or item.get("owner_id") != operation.owner_id
+                    or item.get("backend_type") not in {"node-agent", "openvpn-manager"}
+                    or not isinstance(item.get("config_name"), str)
+                    or type(item.get("server_id")) is not int
+                    for item in previous
+                ):
+                    return None, "deferred:invalid_subscription_dependencies"
+                for dependency in previous:
+                    old = await repos["configs"].get(id=dependency["id"])
+                    if old is not None:
+                        return None, "deferred:subscription_revocation_pending"
+                    if dependency["backend_type"] == "node-agent":
+                        binding = await repos["vpn_access_bindings"].get_for_config_ref(
+                            dependency["id"]
+                        )
+                        if binding is None or binding.revoked_at is None:
+                            return None, "deferred:subscription_revocation_pending"
+                    else:
+                        # Legacy Manager identities are server/name pairs. Its
+                        # successful REVOKE journal survives config deletion.
+                        from sqlalchemy import select
+
+                        from core.db.models.vpn_operation import VPNOperation
+
+                        revoked = await repos["users"].session.scalar(
+                            select(VPNOperation.operation_id)
+                            .where(
+                                VPNOperation.owner_id == operation.owner_id,
+                                VPNOperation.server_id == dependency["server_id"],
+                                VPNOperation.config_name == dependency["config_name"],
+                                VPNOperation.kind == VPNOperationKind.REVOKE.value,
+                                VPNOperation.status
+                                == VPNOperationStatus.SUCCEEDED.value,
+                            )
+                            .limit(1)
+                        )
+                        if revoked is None:
+                            return None, "deferred:subscription_revocation_pending"
             if operation.config_id is None:
                 await repos["vpn_operations"].mark_superseded(
                     operation_id,
@@ -401,6 +448,14 @@ class ConfigLeasedExecutorMixin:
                         "predecessor_operation_id": context.operation_id,
                     },
                 )
+        if context.payload.get("subscription_id") and context.owner_id is not None:
+            # Run after the config/operation transaction releases its locks;
+            # subscription finalization consistently locks user before config.
+            from .subscriptions import SubscriptionService
+
+            await SubscriptionService(
+                self._uow, clock=self._clock, config_service=self
+            ).reconcile_entitlement(context.owner_id)
         return VPNOperationStatus.SUCCEEDED.value
 
     async def _mark_failure(

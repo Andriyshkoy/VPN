@@ -1927,6 +1927,19 @@
               }
             ],
             "title": "Activation Days"
+          },
+          "max_sessions": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 128.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Sessions"
           }
         },
         "additionalProperties": false,
@@ -2014,6 +2027,19 @@
               }
             ],
             "title": "Activation Days"
+          },
+          "max_sessions": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 128.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Sessions"
           }
         },
         "additionalProperties": false,
@@ -2064,6 +2090,19 @@
               }
             ],
             "title": "Activation Days"
+          },
+          "max_sessions": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 128.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Sessions"
           },
           "owner_ref": {
             "anyOf": [
@@ -2269,6 +2308,19 @@
               }
             ],
             "title": "Activation Days"
+          },
+          "max_sessions": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 128.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Sessions"
           }
         },
         "additionalProperties": false,

@@ -16,6 +16,7 @@ class AccessCreate(RequestModel):
     traffic_limit_bytes: int = Field(default=0, ge=0, le=2**63 - 1, strict=True)
     expires_at: datetime | None = None
     activation_days: int | None = Field(default=None, ge=1, le=3660, strict=True)
+    max_sessions: int | None = Field(default=None, ge=1, le=128, strict=True)
 
     @field_validator("expires_at")
     @classmethod
@@ -32,6 +33,8 @@ class AccessCreate(RequestModel):
             raise ValueError("hysteria_uses_activation_days_not_exact_expiry")
         if self.service_id == "vless-reality" and self.activation_days is not None:
             raise ValueError("vless_uses_exact_expiry_not_activation_days")
+        if self.service_id == "vless-reality" and self.max_sessions is not None:
+            raise ValueError("vless_max_sessions_unsupported")
         return self
 
 
@@ -39,6 +42,7 @@ class AccessUpdate(RequestModel):
     traffic_limit_bytes: int | None = Field(default=None, ge=0, le=2**63 - 1, strict=True)
     expires_at: datetime | None = None
     activation_days: int | None = Field(default=None, ge=1, le=3660, strict=True)
+    max_sessions: int | None = Field(default=None, ge=1, le=128, strict=True)
     owner_ref: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_@.:/-]+$")
 
     @field_validator("expires_at")
@@ -64,12 +68,14 @@ class EffectiveAccess(RequestModel):
     expiry_precision: Literal["second", "day"] = "second"
     accounting: str = "delayed_backend_counters"
     activation_days: int | None = None
+    max_sessions: int | None = Field(default=None, ge=1, le=128, strict=True)
 
 
 class AccessSettings(RequestModel):
     traffic_limit_bytes: int
     expires_at: datetime | None
     activation_days: int | None
+    max_sessions: int | None = Field(default=None, ge=1, le=128, strict=True)
 
 
 class AccessView(RequestModel):

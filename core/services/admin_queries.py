@@ -16,6 +16,7 @@ from core.db.models.ledger import LedgerEntry, LedgerKind
 from core.db.models.payment import ProviderPayment
 from core.db.models.referral_reward import ReferralReward
 from core.db.models.server import Server
+from core.db.models.subscription import Subscription
 from core.db.models.user import User
 from core.db.models.vpn_operation import VPNOperation
 
@@ -1011,8 +1012,12 @@ class AdminAnalyticsQueryService:
         uow: Callable,
         *,
         excluded_user_ids: tuple[int, ...] | None = None,
+        scope: str = "business",
     ):
+        if scope not in {"business", "all"}:
+            raise ValueError("Unknown analytics scope")
         self._uow = uow
+        self._analytics_scope = scope
         configured_ids = (
             settings.business_metrics_excluded_ids
             if excluded_user_ids is None
@@ -1021,9 +1026,55 @@ class AdminAnalyticsQueryService:
         self._excluded_user_ids = tuple(sorted(set(configured_ids)))
 
     def _scope(self, column: Any) -> tuple[Any, ...]:
-        if not self._excluded_user_ids:
+        if self._analytics_scope == "all":
             return ()
-        return (column.not_in(self._excluded_user_ids),)
+        # Query the current flag instead of caching user IDs: an audited manual
+        # change must affect the next read without restarting API workers.
+        excluded = aliased(User, name="business_excluded_user")
+        conditions = [
+            column.not_in(
+                select(excluded.id).where(
+                    excluded.exclude_from_business_metrics.is_(True)
+                )
+            )
+        ]
+        if self._excluded_user_ids:
+            conditions.append(column.not_in(self._excluded_user_ids))
+        return tuple(conditions)
+
+    async def _subscription_forecast(self, session) -> dict[str, Any]:
+        from core.services.subscription_types import PLANS
+
+        tariffs = {plan.code: plan.hourly_rate_rub for plan in PLANS}
+        rows = await session.execute(
+            select(
+                Subscription.plan_code,
+                User.unlimited_balance,
+                func.count(Subscription.id),
+            )
+            .join(User, User.id == Subscription.user_id)
+            .where(Subscription.status == "active", *self._scope(User.id))
+            .group_by(Subscription.plan_code, User.unlimited_balance)
+        )
+        paid_accounts = 0
+        unlimited_accounts = 0
+        hourly_rate = Decimal("0.00")
+        for plan_code, unlimited, count in rows:
+            if unlimited:
+                unlimited_accounts += int(count)
+            else:
+                paid_accounts += int(count)
+                hourly_rate += tariffs[plan_code] * int(count)
+        return {
+            "scope": self._analytics_scope,
+            "billing_paused": not settings.billing_enabled,
+            "active_accounts": paid_accounts + unlimited_accounts,
+            "paid_active_accounts": paid_accounts,
+            "unlimited_active_accounts": unlimited_accounts,
+            "hourly_rate_rub": money(hourly_rate),
+            "monthly_estimate_rub": money(hourly_rate * Decimal("720")),
+            "currency": "RUB",
+        }
 
     @staticmethod
     def _validate_timezone(name: str) -> ZoneInfo:
@@ -1176,6 +1227,7 @@ class AdminAnalyticsQueryService:
                 )
                 or 0
             )
+            subscription_forecast = await self._subscription_forecast(session)
 
         recognized_revenue = service_charges + config_fees - config_refunds
         period_days = Decimal(
@@ -1199,6 +1251,9 @@ class AdminAnalyticsQueryService:
                 "delivery": {str(key): int(value) for key, value in delivery_rows},
             },
             "configs": {str(key): int(value) for key, value in config_rows},
+            # Operational user/config/server counters above intentionally stay
+            # complete; this block is the explicit current paid-account scope.
+            "subscription_forecast": subscription_forecast,
             "finance": {
                 "cash_in": money(cash_in),
                 "service_charges": money(service_charges),

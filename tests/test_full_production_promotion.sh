@@ -54,7 +54,7 @@ assert_policy "$PROMOTED" promoted
 
 for expected in \
     MAINTENANCE_MODE=false \
-    BILLING_ENABLED=true \
+    BILLING_ENABLED=false \
     PAYMENTS_ENABLED=true \
     PROVISIONING_ENABLED=true \
     NOTIFICATIONS_ENABLED=false \
@@ -92,6 +92,11 @@ grep -Fx 'MAINTENANCE_MODE=true' "$STAGED" >/dev/null \
     || fail "immutable staged environment was modified"
 
 UNSAFE="$TEST_ROOT/unsafe.env"
+cp "$PROMOTED" "$UNSAFE"
+set_env_value BILLING_ENABLED true "$UNSAFE"
+if (assert_policy "$UNSAFE" promoted) 2>/dev/null; then
+    fail "automatic billing activation was accepted"
+fi
 cp "$PROMOTED" "$UNSAFE"
 set_env_value VPN_DRIFT_REPAIR_ENABLED true "$UNSAFE"
 if (assert_policy "$UNSAFE" promoted) 2>/dev/null; then

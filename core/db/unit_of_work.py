@@ -7,6 +7,7 @@ from .repo import (
     BillingRepo,
     ConfigRepo,
     ServerRepo,
+    SubscriptionRepo,
     TelegramUpdateRepo,
     TelegramUserActionRepo,
     UserRepo,
@@ -27,6 +28,7 @@ class Repositories(Mapping[str, object]):
     telegram_updates: TelegramUpdateRepo
     telegram_user_actions: TelegramUserActionRepo
     vpn_access_bindings: VPNAccessBindingRepo
+    subscriptions: SubscriptionRepo | None = None
 
     def __getitem__(self, key: str):
         try:
@@ -45,11 +47,12 @@ class Repositories(Mapping[str, object]):
                 "telegram_updates",
                 "telegram_user_actions",
                 "vpn_access_bindings",
+                "subscriptions",
             )
         )
 
     def __len__(self) -> int:
-        return 8
+        return 9
 
 
 @asynccontextmanager
@@ -64,4 +67,5 @@ async def uow():
             telegram_updates=TelegramUpdateRepo(session),
             telegram_user_actions=TelegramUserActionRepo(session),
             vpn_access_bindings=VPNAccessBindingRepo(session),
+            subscriptions=SubscriptionRepo(session),
         )

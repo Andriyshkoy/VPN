@@ -33,6 +33,7 @@ CMD ["uvicorn", "admin.app:app", "--host=0.0.0.0", "--port=8000"]
 
 FROM base AS bot
 COPY --chown=app:app bot ./bot
+COPY --chown=app:app docs/client-guides/client-downloads.json ./docs/client-guides/client-downloads.json
 USER app
 CMD ["python", "-m", "bot.main"]
 

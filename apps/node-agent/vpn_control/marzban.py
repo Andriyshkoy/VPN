@@ -184,7 +184,9 @@ class MarzbanBackend:
         except legacy.OperatorError as error:
             raise _translate(error) from None
 
-    def create(self, username, *, expires_at, traffic_limit_bytes, activation_days=None):
+    def create(self, username, *, expires_at, traffic_limit_bytes, activation_days=None, max_sessions=None):
+        if max_sessions is not None:
+            raise BackendConflict("max_sessions_unsupported")
         self._reference(username)
         expires, limit = self._limits(expires_at, traffic_limit_bytes, activation_days)
         try:
@@ -214,7 +216,9 @@ class MarzbanBackend:
         except legacy.OperatorError as error:
             raise _translate(error) from None
 
-    def update(self, username, *, expires_at, traffic_limit_bytes, activation_days=None):
+    def update(self, username, *, expires_at, traffic_limit_bytes, activation_days=None, max_sessions=None):
+        if max_sessions is not None:
+            raise BackendConflict("max_sessions_unsupported")
         self._reference(username)
         expires, limit = self._limits(expires_at, traffic_limit_bytes, activation_days)
         try:

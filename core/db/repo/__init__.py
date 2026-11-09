@@ -1,6 +1,7 @@
 from .billing import BillingRepo
 from .config import ConfigRepo
 from .server import ServerRepo
+from .subscription import SubscriptionRepo
 from .telegram_update import TelegramUpdateRepo
 from .telegram_user_action import TelegramUserActionRepo
 from .user import UserRepo
@@ -11,6 +12,7 @@ __all__ = [
     "BillingRepo",
     "ConfigRepo",
     "ServerRepo",
+    "SubscriptionRepo",
     "TelegramUpdateRepo",
     "TelegramUserActionRepo",
     "UserRepo",

@@ -1,5 +1,6 @@
 import { http, HttpResponse } from 'msw'
 import { financeApi, serversApi } from '../api'
+import { request } from '../api/client'
 import { server } from './server'
 
 test('maps the server status filter to the backend lifecycle and health contract', async () => {
@@ -18,6 +19,14 @@ test('maps the server status filter to the backend lifecycle and health contract
   expect(requests[0].searchParams.has('status')).toBe(false)
   expect(requests[1].searchParams.get('health_state')).toBe('unhealthy')
   expect(requests[1].searchParams.has('status')).toBe(false)
+})
+
+test.each([
+  { error: { code: 'stale_preview', message: 'Проверьте аудиторию заново', details: { revision: 2 } } },
+  { detail: { code: 'stale_preview', message: 'Проверьте аудиторию заново', details: { revision: 2 } } },
+])('preserves structured server errors including FastAPI detail objects', async (body) => {
+  server.use(http.post('/api/admin/v1/campaigns/demo/launch', () => HttpResponse.json(body, { status: 409 })))
+  await expect(request('/campaigns/demo/launch', { method: 'POST', body: {} })).rejects.toMatchObject({ status: 409, code: 'stale_preview', message: 'Проверьте аудиторию заново', details: { revision: 2 } })
 })
 
 test('loads global ledger rows with an exact period and nested user identity', async () => {

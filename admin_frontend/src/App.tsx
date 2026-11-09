@@ -18,6 +18,8 @@ const ServerDetailPage = lazy(() => import('./pages/ServerDetailPage').then((mod
 const ServersPage = lazy(() => import('./pages/ServersPage').then((module) => ({ default: module.ServersPage })))
 const UserDetailPage = lazy(() => import('./pages/UserDetailPage').then((module) => ({ default: module.UserDetailPage })))
 const UsersPage = lazy(() => import('./pages/UsersPage').then((module) => ({ default: module.UsersPage })))
+const SubscriptionsPage = lazy(() => import('./pages/SubscriptionsPage').then((module) => ({ default: module.SubscriptionsPage })))
+const CampaignsPage = lazy(() => import('./pages/CampaignsPage').then((module) => ({ default: module.CampaignsPage })))
 
 function Secured({ children, permission, anyOf }: { children: ReactNode; permission?: string; anyOf?: string[] }) {
   const { user } = useAuth()
@@ -36,6 +38,8 @@ export default function App() {
         <Route path="/users/:userId" element={<Secured permission="users:read"><UserDetailPage /></Secured>} />
         <Route path="/users/:userId/:tab" element={<Secured permission="users:read"><UserDetailPage /></Secured>} />
         <Route path="/finance" element={<Secured permission="finance:read"><FinancePage /></Secured>} />
+        <Route path="/subscriptions" element={<Secured permission="subscriptions:read"><SubscriptionsPage /></Secured>} />
+        <Route path="/campaigns" element={<Secured permission="campaigns:read"><CampaignsPage /></Secured>} />
         <Route path="/referrals" element={<Secured permission="referrals:read"><ReferralsPage /></Secured>} />
         <Route path="/configs" element={<Secured permission="configs:read"><ConfigsPage /></Secured>} />
         <Route path="/servers" element={<Secured permission="servers:read"><ServersPage /></Secured>} />

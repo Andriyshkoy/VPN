@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "guides": 9,
+  "platforms": 6,
+  "manifest_assets": 17,
+  "image_references": 7,
+  "public_raster_files": 0,
+  "external_image_origins": 7,
+  "private_assets_verified": 17,
+  "online_release": "v5.5.5",
+  "errors": [],
+  "checked_at_utc": "2026-11-09T13:32:02.123521+00:00",
+  "command": "python3 docs/client-guides/verify_guides.py --online --private-bundle <operator-local-preview>",
+  "public_policy": "No raster files or capture receipts in public Git; official Markdown image origins only."
+}

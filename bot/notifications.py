@@ -19,6 +19,8 @@ from aiogram.exceptions import (
 
 from core.config import settings
 from core.db.unit_of_work import uow
+from core.services.campaigns import PREFIX as CAMPAIGN_PREFIX
+from core.services.campaigns import CampaignDeliveryService
 from core.services.notifications import Notification, NotificationService
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,9 @@ class DeliveryStatus(str, Enum):
     CONTENT_FAILURE = "content_failure"
     RETRY_SCHEDULED = "retry_scheduled"
     RETRIES_EXHAUSTED = "retries_exhausted"
+    UNKNOWN = "unknown"
+    SKIPPED = "skipped"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)
@@ -56,6 +61,7 @@ async def send_pending_notifications(
     ) = None,
     max_batch: int = 100,
     lease_guard: Callable[[], Awaitable[bool]] | None = None,
+    campaign_delivery: CampaignDeliveryService | None = None,
 ) -> list[NotificationDeliveryResult]:
     """Deliver one snapshot of the queue with acknowledge/retry semantics."""
     results: list[NotificationDeliveryResult] = []
@@ -69,6 +75,17 @@ async def send_pending_notifications(
         reserved = await service.reserve()
         if reserved is None:
             break
+
+        if reserved.notification_id.startswith(CAMPAIGN_PREFIX):
+            result = await _deliver_campaign_notification(
+                bot,
+                service,
+                reserved,
+                campaign_delivery or CampaignDeliveryService(),
+                delivery_recorder,
+            )
+            results.append(result)
+            continue
 
         try:
             await bot.send_message(reserved.chat_id, reserved.text)
@@ -157,6 +174,111 @@ async def send_pending_notifications(
     return results
 
 
+async def _deliver_campaign_notification(bot, service, reserved, delivery, recorder):
+    """Campaign-only semantics: never blindly resend an ambiguous Telegram send."""
+    # One elected listener and this pacing cap campaign throughput at 20/s.
+    await asyncio.sleep(0.05)
+    claim = await delivery.claim(
+        reserved.notification_id, chat_id=reserved.chat_id, text=reserved.text
+    )
+    if not claim.allowed:
+        if claim.status == "deferred":
+            await service.retry(reserved, delay_seconds=max(1, claim.delay_seconds))
+            return NotificationDeliveryResult(
+                reserved.notification_id,
+                reserved.notification,
+                DeliveryStatus.RETRY_SCHEDULED,
+                reserved.attempts,
+            )
+        await service.acknowledge(reserved)
+        status = {
+            "unknown": DeliveryStatus.UNKNOWN,
+            "cancelled": DeliveryStatus.CANCELLED,
+            "delivered": DeliveryStatus.DELIVERED,
+        }.get(claim.status, DeliveryStatus.SKIPPED)
+        return NotificationDeliveryResult(
+            reserved.notification_id, reserved.notification, status, reserved.attempts
+        )
+
+    error = None
+    try:
+        # Campaigns are plain text even if the bot defaults to HTML parsing.
+        await bot.send_message(claim.chat_id, claim.text, parse_mode=None)
+    except asyncio.CancelledError:
+        await asyncio.shield(
+            delivery.finish(
+                reserved.notification_id,
+                status="unknown",
+                error="cancelled_during_send",
+            )
+        )
+        await asyncio.shield(
+            service.fail(reserved, reason="cancelled_during_send", category="unknown")
+        )
+        raise
+    except Exception as exc:
+        error = type(exc).__name__
+        if isinstance(exc, TelegramRetryAfter):
+            if reserved.attempts + 1 >= settings.notification_max_attempts:
+                status = DeliveryStatus.RETRIES_EXHAUSTED
+                await delivery.finish(
+                    reserved.notification_id,
+                    status="failed",
+                    error="rate_limit_exhausted",
+                )
+                await service.fail(
+                    reserved, reason="rate_limit_exhausted", category=status.value
+                )
+            else:
+                status = DeliveryStatus.RETRY_SCHEDULED
+                delay = _retry_delay(exc, reserved.attempts + 1)
+                await delivery.finish(
+                    reserved.notification_id,
+                    status="retry",
+                    error="rate_limited",
+                    retry_after=delay,
+                )
+                await service.retry(reserved, delay_seconds=delay)
+        elif isinstance(
+            exc, (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound)
+        ):
+            status = _classify_delivery_error(exc)
+            await delivery.finish(
+                reserved.notification_id, status="failed", error=status.value
+            )
+            await service.fail(reserved, reason=status.value, category=status.value)
+        else:
+            # A timeout or disconnected response does not prove that Telegram
+            # rejected the message. Manual status review must come before resend.
+            status = DeliveryStatus.UNKNOWN
+            await delivery.finish(
+                reserved.notification_id, status="unknown", error=error
+            )
+            await service.fail(reserved, reason=error, category="unknown")
+    else:
+        status = DeliveryStatus.DELIVERED
+        # If outcome persistence fails, leave the Redis reservation recoverable;
+        # its existing durable 'sending' claim prevents a duplicate Telegram send.
+        await delivery.finish(reserved.notification_id, status="delivered")
+        await service.acknowledge(reserved)
+    if recorder is not None:
+        await _record_delivery_safely(
+            recorder,
+            reserved.notification_id,
+            reserved.chat_id,
+            reserved.created_at,
+            status,
+            error,
+        )
+    return NotificationDeliveryResult(
+        reserved.notification_id,
+        reserved.notification,
+        status,
+        reserved.attempts + 1,
+        error,
+    )
+
+
 async def notifications_listener(
     bot: Bot,
     *,
@@ -174,6 +296,7 @@ async def notifications_listener(
                 if acquired:
                     # Only the elected consumer may recover in-flight rows. This
                     # keeps a rolling second replica from stealing active work.
+                    await CampaignDeliveryService().reconcile_stale()
                     await service.recover_processing()
                     await send_pending_notifications(
                         bot,
@@ -236,6 +359,9 @@ async def _persist_delivery_status(
                 error=error,
                 observed_at=observed_at,
             )
+        if notification_id.startswith(CAMPAIGN_PREFIX):
+            # The campaign guard persists its stricter outcome independently.
+            return
         if status is DeliveryStatus.RETRY_SCHEDULED:
             await repos["billing"].touch_notification_outbox(
                 dedupe_key=notification_id,

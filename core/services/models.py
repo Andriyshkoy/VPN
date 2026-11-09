@@ -62,6 +62,8 @@ class User:
     created: datetime
     balance: Decimal
     referral_code: str
+    unlimited_balance: bool = False
+    exclude_from_business_metrics: bool = False
 
     @classmethod
     def from_orm(cls, obj):
@@ -72,6 +74,10 @@ class User:
             created=obj.created,
             balance=obj.balance,
             referral_code=obj.referral_code,
+            unlimited_balance=getattr(obj, "unlimited_balance", False),
+            exclude_from_business_metrics=getattr(
+                obj, "exclude_from_business_metrics", False
+            ),
         )
 
 

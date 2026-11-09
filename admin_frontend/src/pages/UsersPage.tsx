@@ -41,7 +41,7 @@ export function UsersPage() {
   const columns: Column<User>[] = [
     { key: 'user', header: 'Пользователь', render: (user) => <div className="identity-cell"><span className="avatar">{userLabel(user).replace('@', '').slice(0, 1).toUpperCase()}</span><span><Link className="primary-link" to={`/users/${user.id}`}>{userLabel(user)}</Link><small>ID {user.id}{user.tg_id ? ` · TG ${user.tg_id}` : ''}</small></span></div> },
     { key: 'status', header: 'Статус', render: (user) => <StatusBadge value={user.status ?? 'active'} /> },
-    ...(canReadBalance ? [{ key: 'balance', header: 'Баланс', align: 'end' as const, render: (user: User) => <strong>{formatMoney(user.balance)}</strong> }] : []),
+    ...(canReadBalance ? [{ key: 'balance', header: 'Баланс', align: 'end' as const, render: (user: User) => <strong title={user.unlimited_balance ? `Сохранённый кошелёк: ${formatMoney(user.balance)}` : undefined}>{user.unlimited_balance ? '∞' : formatMoney(user.balance)}</strong> }] : []),
     { key: 'configs', header: 'Конфигурации', align: 'center', render: (user) => <span>{formatNumber(user.active_configs_count ?? user.configs_count ?? 0)}<small className="cell-note"> активных</small></span> },
     ...(canReadReferrals ? [{ key: 'inviter', header: 'Пригласил', render: (user: User) => user.inviter_id ? <Link to={`/users/${user.inviter_id}`}>{user.inviter_username ? `@${user.inviter_username}` : `#${user.inviter_id}`}</Link> : '—' }] : []),
     { key: 'created', header: 'Регистрация', render: (user) => formatDateTime(user.created_at) },

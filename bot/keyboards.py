@@ -8,7 +8,9 @@ from aiogram.types import (
 )
 
 MENU_BALANCE = "💰 Баланс"
-MENU_CONFIGS = "🗂 Мои конфиги"
+MENU_CONFIGS = "🔑 Мои ключи"
+MENU_CONFIGS_LEGACY = "🗂 Мои конфиги"
+MENU_SUBSCRIPTION = "💎 Подписка"
 MENU_TOP_UP = "💳 Пополнить"
 MENU_INSTRUCTIONS = "📚 Инструкции"
 MENU_REFERRALS = "🎁 Реферальная программа"
@@ -31,14 +33,17 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [
-                KeyboardButton(text=MENU_BALANCE),
+                KeyboardButton(text=MENU_SUBSCRIPTION),
                 KeyboardButton(text=MENU_CONFIGS),
             ],
             [
+                KeyboardButton(text=MENU_BALANCE),
                 KeyboardButton(text=MENU_TOP_UP),
-                KeyboardButton(text=MENU_INSTRUCTIONS),
             ],
-            [KeyboardButton(text=MENU_REFERRALS)],
+            [
+                KeyboardButton(text=MENU_INSTRUCTIONS),
+                KeyboardButton(text=MENU_REFERRALS),
+            ],
         ],
         resize_keyboard=True,
         is_persistent=True,

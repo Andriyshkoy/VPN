@@ -6,8 +6,10 @@ from datetime import datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from sqlalchemy import select
 
 import core.db as db
+from core.db.models import User
 from core.db.unit_of_work import uow
 from core.exceptions import (
     InsufficientBalanceError,
@@ -75,6 +77,26 @@ IdempotencyKey = Annotated[
     str,
     Header(alias="Idempotency-Key", min_length=8, max_length=160),
 ]
+
+
+async def _account_flags(user_ids: list[int]) -> dict[int, dict]:
+    if not user_ids:
+        return {}
+    async with db.async_session() as session:
+        rows = await session.execute(
+            select(
+                User.id, User.unlimited_balance, User.exclude_from_business_metrics
+            ).where(User.id.in_(user_ids))
+        )
+        return {
+            row.id: {
+                "unlimited_balance": bool(row.unlimited_balance),
+                "exclude_from_business_metrics": bool(
+                    row.exclude_from_business_metrics
+                ),
+            }
+            for row in rows
+        }
 
 
 async def _audit_balance_rejection(
@@ -160,7 +182,18 @@ async def list_users(
         limit=limit,
         offset=offset,
     )
+    account_flags = await _account_flags([item["id"] for item in payload["items"]])
     for item in payload["items"]:
+        flags = account_flags.get(item["id"], {})
+        if AdminPermission.BALANCE_READ in principal.permissions:
+            item["unlimited_balance"] = flags.get("unlimited_balance", False)
+            item["balance_display"] = (
+                "∞" if item["unlimited_balance"] else item["balance"]
+            )
+        if AdminPermission.FINANCE_READ in principal.permissions:
+            item["exclude_from_business_metrics"] = flags.get(
+                "exclude_from_business_metrics", False
+            )
         if AdminPermission.BALANCE_READ not in principal.permissions:
             item.pop("balance", None)
             item.pop("credited_total", None)
@@ -177,6 +210,17 @@ async def get_user(user_id: int, principal: UsersRead):
     if payload is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
+    flags = (await _account_flags([user_id])).get(user_id, {})
+    if AdminPermission.BALANCE_READ in principal.permissions:
+        payload["unlimited_balance"] = flags.get("unlimited_balance", False)
+        payload["finance"]["unlimited_balance"] = payload["unlimited_balance"]
+        payload["finance"]["balance_display"] = (
+            "∞" if payload["unlimited_balance"] else payload["finance"]["balance"]
+        )
+    if AdminPermission.FINANCE_READ in principal.permissions:
+        payload["exclude_from_business_metrics"] = flags.get(
+            "exclude_from_business_metrics", False
         )
     if AdminPermission.BALANCE_READ not in principal.permissions:
         payload.pop("finance", None)

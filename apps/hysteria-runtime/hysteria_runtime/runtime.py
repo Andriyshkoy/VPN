@@ -23,6 +23,7 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 MAX_BODY = 16384
 MAX_STATS = 4 * 1024 * 1024
 META = "_vpn_collector"
+CAPABILITIES = {"max_sessions": True, "version": 1, "policy_source": "mongo_max_sessions"}
 
 
 class RuntimeStateError(Exception):
@@ -55,7 +56,7 @@ def authorize(collection, auth, now=None):
         row = collection.find_one({"_id": username})
     except Exception:
         raise RuntimeStateError("mongo_unavailable") from None
-    if row is None or row.get("blocked"):
+    if row is None or row.get("blocked") or row.get("_vpn_session_close_pending") is True:
         return {"ok": False}
     secret = row.get("password")
     if not isinstance(secret, str):
@@ -65,8 +66,16 @@ def authorize(collection, auth, now=None):
             return {"ok": False}
     except UnicodeError:
         return {"ok": False}
+    # This is an authentication policy only. The patched server reserves and
+    # releases the slot atomically for the whole QUIC connection, not streams/IPs.
+    sessions = row.get("max_sessions")
+    if sessions is not None and (not isinstance(sessions, int) or isinstance(sessions, bool) or not 1 <= sessions <= 128):
+        return {"ok": False}
+    accepted = {"ok": True, "id": username}
+    if sessions is not None:
+        accepted["max_sessions"] = int(sessions)
     if row.get("unlimited_user") is True:
-        return {"ok": True, "id": username}
+        return accepted
     try:
         limit = nonnegative_int(row.get("max_download_bytes", 0))
         days = nonnegative_int(row.get("expiration_days", 0))
@@ -85,7 +94,7 @@ def authorize(collection, auth, now=None):
                 return {"ok": False}
     except (RuntimeStateError, ValueError, TypeError, OverflowError):
         return {"ok": False}
-    return {"ok": True, "id": username}
+    return accepted
 
 
 def apply_snapshot(collection, epoch, traffic, online, today=None):
@@ -215,7 +224,7 @@ class BoundedServer(ThreadingHTTPServer):
         pass
 
 
-def make_handler(collection, ping):
+def make_handler(collection, ping, engine_supported=None):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -238,7 +247,9 @@ def make_handler(collection, ping):
             self.wfile.write(raw)
 
         def do_GET(self):
-            if self.path == "/healthz":
+            if self.path == "/capabilities":
+                self.send_json(200, CAPABILITIES)
+            elif self.path == "/healthz":
                 self.send_json(200, {"status": "ok"})
             elif self.path == "/readyz":
                 try:
@@ -282,6 +293,13 @@ def make_handler(collection, ping):
             except RuntimeStateError:
                 self.send_json(503, {"ok": False})
             else:
+                if response.get("ok") is True and response.get("max_sessions") is not None:
+                    try:
+                        supported = engine_supported is not None and engine_supported() is True
+                    except Exception:
+                        supported = False
+                    if not supported:
+                        response = {"ok": False}
                 self.send_json(200, response)
 
     return Handler
@@ -319,6 +337,18 @@ def fetch_stats(config, suffix):
         raise RuntimeStateError("stats_unavailable") from None
 
 
+def engine_caps(config):
+    """A saved session limit must never become unlimited after a downgrade."""
+    try:
+        value = fetch_stats(config, "/capabilities")
+        return (value.get("max_sessions") is True
+                and value.get("session_scope") == "auth_id_per_server_instance"
+                and value.get("enforcement") == "atomic_quic_connection"
+                and type(value.get("version")) is int and value["version"] == 1)
+    except (RuntimeStateError, ValueError, TypeError, AttributeError):
+        return False
+
+
 def collect_once(collection, config):
     epoch_path = Path(config.get("epoch_file", "/run/vpn-stack/hysteria-epoch"))
     try:
@@ -349,7 +379,8 @@ def main():
             port = config.get("listen_port", 28262)
             if type(port) is not int or not 1024 <= port <= 65535:
                 raise RuntimeStateError("listen_port_invalid")
-            with BoundedServer((host, port), make_handler(collection, lambda: client.admin.command("ping"))) as server:
+            with BoundedServer((host, port), make_handler(collection, lambda: client.admin.command("ping"),
+                                                       lambda: engine_caps(config))) as server:
                 server.serve_forever(poll_interval=.5)
         else:
             interval = config.get("interval_seconds", 60)

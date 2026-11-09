@@ -109,6 +109,7 @@ async def test_uow(monkeypatch, engine):
             "telegram_updates",
             "telegram_user_actions",
             "vpn_access_bindings",
+            "subscriptions",
         }
         await repos["users"].add(User(tg_id=1))
 

@@ -236,6 +236,14 @@ def test_activation_days_not_silently_ignored(connected):
     assert api.calls == []
 
 
+def test_session_limit_not_silently_ignored(connected):
+    adapter, api = connected
+    for method in (adapter.create, adapter.update):
+        with pytest.raises(BackendConflict, match="max_sessions_unsupported"):
+            method(NAME, expires_at=None, traffic_limit_bytes=0, max_sessions=1)
+    assert api.calls == []
+
+
 def test_raw_upstream_errors_are_not_exposed(connected):
     adapter, api = connected
     def failed(_):

@@ -1,0 +1,1271 @@
+diff --git a/core/server/config.go b/core/server/config.go
+index 1cf8bd3..bddb437 100644
+--- a/core/server/config.go
++++ b/core/server/config.go
+@@ -229,6 +229,26 @@ type Authenticator interface {
+ 	Authenticate(addr net.Addr, auth string, tx uint64) (ok bool, id string)
+ }
+ 
++// SessionLimitAuthenticator optionally adds an admission policy to an authenticator.
++// Zero means unlimited. The limit counts authenticated QUIC connections, not streams
++// or IP addresses. Existing Authenticator implementations remain unlimited.
++type SessionLimitAuthenticator interface {
++	AuthenticateWithSessionLimit(addr net.Addr, auth string, tx uint64) (ok bool, id string, maxSessions int)
++}
++
++// SessionController closes all currently authenticated sessions for an auth ID.
++// The auth backend must durably revoke the credential before calling CloseSessions.
++// Pending auth results that started before the close are invalidated as well.
++type SessionController interface {
++	CloseSessions(ids []string) int
++	SessionLimitSupported() bool
++}
++
++// SessionControllerSetter allows a management handler to bind to this server.
++type SessionControllerSetter interface {
++	SetSessionController(SessionController)
++}
++
+ // EventLogger is an interface that provides logging logic.
+ type EventLogger interface {
+ 	Connect(addr net.Addr, id string, tx uint64)
+diff --git a/core/server/server.go b/core/server/server.go
+index c3fb6d7..305c6cf 100644
+--- a/core/server/server.go
++++ b/core/server/server.go
+@@ -8,6 +8,7 @@ import (
+ 	"math/rand"
+ 	"net/http"
+ 	"sync"
++	"sync/atomic"
+ 	"time"
+ 
+ 	"github.com/apernet/quic-go"
+@@ -90,17 +91,23 @@ func NewServer(config *Config) (Server, error) {
+ 		}
+ 		return nil, err
+ 	}
+-	return &serverImpl{
++	s := &serverImpl{
+ 		config:   config,
+ 		tr:       tr,
+ 		listener: listener,
+-	}, nil
++		sessions: newSessionRegistry(),
++	}
++	if setter, ok := config.TrafficLogger.(SessionControllerSetter); ok {
++		setter.SetSessionController(s)
++	}
++	return s, nil
+ }
+ 
+ type serverImpl struct {
+ 	config   *Config
+ 	tr       *quic.Transport
+ 	listener *quic.Listener
++	sessions *sessionRegistry
+ }
+ 
+ func (s *serverImpl) Serve() error {
+@@ -122,14 +129,17 @@ func (s *serverImpl) Close() error {
+ }
+ 
+ func (s *serverImpl) handleClient(conn *quic.Conn) {
+-	handler := newH3sHandler(s.config, conn)
++	handler := newH3sHandler(s.config, conn, s.sessions)
+ 	h3s := http3.Server{
+ 		Handler:          handler,
+ 		StreamDispatcher: handler.ProxyStreamHijacker,
+ 	}
+ 	err := h3s.ServeQUICConn(conn)
+-	// If the client is authenticated, we need to log the disconnect event
+-	if handler.authenticated {
++	// Close before releasing the slot. A late/in-flight auth callback cannot
++	// reserve after finish, since both paths serialize on authMutex.
++	_ = conn.CloseWithError(closeErrCodeOK, "")
++	authenticated := handler.finish()
++	if authenticated {
+ 		if tl := s.config.TrafficLogger; tl != nil {
+ 			tl.LogOnlineState(handler.authID, false)
+ 		}
+@@ -137,34 +147,59 @@ func (s *serverImpl) handleClient(conn *quic.Conn) {
+ 			el.Disconnect(conn.RemoteAddr(), handler.authID, err)
+ 		}
+ 	}
+-	_ = conn.CloseWithError(closeErrCodeOK, "")
++}
++
++func (s *serverImpl) SessionLimitSupported() bool {
++	_, supported := s.config.Authenticator.(SessionLimitAuthenticator)
++	return supported
++}
++
++func (s *serverImpl) CloseSessions(ids []string) int {
++	return s.sessions.close(ids)
+ }
+ 
+ type h3sHandler struct {
+ 	config *Config
+ 	conn   *quic.Conn
+ 
+-	authenticated bool
+-	authMutex     sync.Mutex
+-	authID        string
+-	connID        uint32 // a random id for dump streams
++	authenticated  atomic.Bool
++	authMutex      sync.Mutex
++	closed         bool
++	sessions       *sessionRegistry
++	releaseSession func()
++	authID         string
++	connID         uint32 // a random id for dump streams
+ 
+ 	udpSM *udpSessionManager // Only set after authentication
+ }
+ 
+-func newH3sHandler(config *Config, conn *quic.Conn) *h3sHandler {
++func newH3sHandler(config *Config, conn *quic.Conn, sessions *sessionRegistry) *h3sHandler {
+ 	return &h3sHandler{
+-		config: config,
+-		conn:   conn,
+-		connID: rand.Uint32(),
++		config:   config,
++		conn:     conn,
++		connID:   rand.Uint32(),
++		sessions: sessions,
+ 	}
+ }
+ 
++// finish synchronizes with auth callbacks and releases each lease exactly once.
++func (h *h3sHandler) finish() bool {
++	h.authMutex.Lock()
++	defer h.authMutex.Unlock()
++	h.closed = true
++	authenticated := h.authenticated.Swap(false)
++	if h.releaseSession != nil {
++		h.releaseSession()
++		h.releaseSession = nil
++	}
++	return authenticated
++}
++
+ func (h *h3sHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 	if r.Method == http.MethodPost && r.Host == protocol.URLHost && r.URL.Path == protocol.URLPath {
+ 		h.authMutex.Lock()
+ 		defer h.authMutex.Unlock()
+-		if h.authenticated {
++		if h.authenticated.Load() {
+ 			// Already authenticated
+ 			protocol.AuthResponseToHeader(w.Header(), protocol.AuthResponse{
+ 				UDPEnabled: !h.config.DisableUDP,
+@@ -174,13 +209,30 @@ func (h *h3sHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 			w.WriteHeader(protocol.StatusAuthOK)
+ 			return
+ 		}
++		if h.closed || h.conn.Context().Err() != nil {
++			h.masqHandler(w, r)
++			return
++		}
+ 		authReq := protocol.AuthRequestFromHeader(r.Header)
+ 		actualTx := authReq.Rx
+-		ok, id := h.config.Authenticator.Authenticate(h.conn.RemoteAddr(), authReq.Auth, actualTx)
++		started := h.sessions.generation()
++		var ok bool
++		var id string
++		var maxSessions int
++		if policy, supported := h.config.Authenticator.(SessionLimitAuthenticator); supported {
++			ok, id, maxSessions = policy.AuthenticateWithSessionLimit(h.conn.RemoteAddr(), authReq.Auth, actualTx)
++		} else {
++			ok, id = h.config.Authenticator.Authenticate(h.conn.RemoteAddr(), authReq.Auth, actualTx)
++		}
++		// Recheck after the external callback: the peer may have disconnected.
++		if ok && !h.closed && h.conn.Context().Err() == nil && maxSessions >= 0 && maxSessions <= 128 {
++			h.releaseSession, ok = h.sessions.reserve(id, h.conn, maxSessions, started)
++		} else {
++			ok = false
++		}
+ 		if ok {
+-			// Set authenticated flag
+-			h.authenticated = true
+ 			h.authID = id
++			h.authenticated.Store(true)
+ 			if h.config.IgnoreClientBandwidth {
+ 				// Ignore client bandwidth and use the configured congestion controller.
+ 				congestion.UseConfigured(h.conn, h.config.CongestionConfig.Type, h.config.CongestionConfig.BBRProfile)
+@@ -238,7 +290,7 @@ func (h *h3sHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ }
+ 
+ func (h *h3sHandler) ProxyStreamHijacker(ft http3.FrameType, stream *quic.Stream, err error) (bool, error) {
+-	if err != nil || !h.authenticated {
++	if err != nil || !h.authenticated.Load() {
+ 		return false, nil
+ 	}
+ 
+diff --git a/extras/auth/http.go b/extras/auth/http.go
+index 379a8d7..092d7f7 100644
+--- a/extras/auth/http.go
++++ b/extras/auth/http.go
+@@ -18,6 +18,7 @@ const (
+ )
+ 
+ var _ server.Authenticator = &HTTPAuthenticator{}
++var _ server.SessionLimitAuthenticator = &HTTPAuthenticator{}
+ 
+ var errInvalidStatusCode = errors.New("invalid status code")
+ 
+@@ -47,8 +48,9 @@ type httpAuthRequest struct {
+ }
+ 
+ type httpAuthResponse struct {
+-	OK bool   `json:"ok"`
+-	ID string `json:"id"`
++	OK          bool   `json:"ok"`
++	ID          string `json:"id"`
++	MaxSessions *int   `json:"max_sessions,omitempty"`
+ }
+ 
+ func (a *HTTPAuthenticator) post(req *httpAuthRequest) (*httpAuthResponse, error) {
+@@ -77,6 +79,11 @@ func (a *HTTPAuthenticator) post(req *httpAuthRequest) (*httpAuthResponse, error
+ }
+ 
+ func (a *HTTPAuthenticator) Authenticate(addr net.Addr, auth string, tx uint64) (ok bool, id string) {
++	ok, id, _ = a.AuthenticateWithSessionLimit(addr, auth, tx)
++	return
++}
++
++func (a *HTTPAuthenticator) AuthenticateWithSessionLimit(addr net.Addr, auth string, tx uint64) (ok bool, id string, maxSessions int) {
+ 	req := &httpAuthRequest{
+ 		Addr: addr.String(),
+ 		Auth: auth,
+@@ -84,7 +91,13 @@ func (a *HTTPAuthenticator) Authenticate(addr net.Addr, auth string, tx uint64)
+ 	}
+ 	resp, err := a.post(req)
+ 	if err != nil {
+-		return false, ""
++		return false, "", 0
++	}
++	if resp.MaxSessions != nil {
++		maxSessions = *resp.MaxSessions
++		if maxSessions < 0 || maxSessions > 128 {
++			return false, "", 0
++		}
+ 	}
+-	return resp.OK, resp.ID
++	return resp.OK, resp.ID, maxSessions
+ }
+diff --git a/extras/auth/http_test.go b/extras/auth/http_test.go
+index 2437763..01a6893 100644
+--- a/extras/auth/http_test.go
++++ b/extras/auth/http_test.go
+@@ -1,36 +1,36 @@
+ package auth
+ 
+ import (
++	"encoding/json"
+ 	"net"
+-	"os/exec"
++	"net/http"
++	"net/http/httptest"
+ 	"testing"
+-	"time"
+ 
+ 	"github.com/stretchr/testify/assert"
+ )
+ 
+ func TestHTTPAuthenticator(t *testing.T) {
+-	// Run the Python test auth server
+-	cmd := exec.Command("python", "http_test.py")
+-	err := cmd.Start()
+-	assert.NoError(t, err)
+-	defer cmd.Process.Kill()
+-
+-	time.Sleep(1 * time.Second) // Wait for the server to start
+-
+-	auth := NewHTTPAuthenticator("http://127.0.0.1:5000/auth", false)
+-
+-	ok, id := auth.Authenticate(&net.UDPAddr{
+-		IP:   net.ParseIP("1.2.3.4"),
+-		Port: 34567,
+-	}, "idk", 123)
++	// Keep the upstream request/response compatibility test self-contained.
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		var req httpAuthRequest
++		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
++			w.WriteHeader(http.StatusBadRequest)
++			return
++		}
++		response := httpAuthResponse{}
++		if req.Addr == "123.123.123.123:5566" && req.Auth == "wahaha" && req.Tx == 12345 {
++			response.OK = true
++			response.ID = "some_unique_id"
++		}
++		_ = json.NewEncoder(w).Encode(response)
++	}))
++	defer srv.Close()
++	auth := NewHTTPAuthenticator(srv.URL, false)
++	ok, id := auth.Authenticate(&net.UDPAddr{IP: net.ParseIP("1.2.3.4"), Port: 34567}, "idk", 123)
+ 	assert.False(t, ok)
+ 	assert.Equal(t, "", id)
+-
+-	ok, id = auth.Authenticate(&net.UDPAddr{
+-		IP:   net.ParseIP("123.123.123.123"),
+-		Port: 5566,
+-	}, "wahaha", 12345)
++	ok, id = auth.Authenticate(&net.UDPAddr{IP: net.ParseIP("123.123.123.123"), Port: 5566}, "wahaha", 12345)
+ 	assert.True(t, ok)
+ 	assert.Equal(t, "some_unique_id", id)
+ }
+diff --git a/extras/trafficlogger/http.go b/extras/trafficlogger/http.go
+index b6d9597..3452daf 100644
+--- a/extras/trafficlogger/http.go
++++ b/extras/trafficlogger/http.go
+@@ -4,6 +4,7 @@ import (
+ 	"cmp"
+ 	"encoding/json"
+ 	"fmt"
++	"io"
+ 	"net/http"
+ 	"slices"
+ 	"strconv"
+@@ -36,12 +37,13 @@ func NewTrafficStatsServer(secret string) TrafficStatsServer {
+ }
+ 
+ type trafficStatsServerImpl struct {
+-	Mutex     sync.RWMutex
+-	StatsMap  map[string]*trafficStatsEntry
+-	OnlineMap map[string]int
+-	StreamMap map[server.HyStream]*server.StreamStats
+-	KickMap   map[string]struct{}
+-	Secret    string
++	Mutex             sync.RWMutex
++	StatsMap          map[string]*trafficStatsEntry
++	OnlineMap         map[string]int
++	StreamMap         map[server.HyStream]*server.StreamStats
++	KickMap           map[string]struct{}
++	Secret            string
++	SessionController server.SessionController
+ }
+ 
+ type trafficStatsEntry struct {
+@@ -99,11 +101,58 @@ func (s *trafficStatsServerImpl) UntraceStream(stream server.HyStream) {
+ 	delete(s.StreamMap, stream)
+ }
+ 
++// SetSessionController is called once by NewServer before serving management requests.
++func (s *trafficStatsServerImpl) SetSessionController(controller server.SessionController) {
++	s.Mutex.Lock()
++	defer s.Mutex.Unlock()
++	s.SessionController = controller
++}
++
+ func (s *trafficStatsServerImpl) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 	if s.Secret != "" && r.Header.Get("Authorization") != s.Secret {
+ 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+ 		return
+ 	}
++	if (r.Method == http.MethodGet && r.URL.Path == "/capabilities") || (r.Method == http.MethodPost && r.URL.Path == "/close") {
++		// Session control is never exposed without a management secret.
++		if s.Secret == "" {
++			http.Error(w, "session control requires authentication", http.StatusServiceUnavailable)
++			return
++		}
++		s.Mutex.RLock()
++		controller := s.SessionController
++		s.Mutex.RUnlock()
++		if controller == nil {
++			http.Error(w, "session controller unavailable", http.StatusServiceUnavailable)
++			return
++		}
++		if r.URL.Path == "/capabilities" {
++			w.Header().Set("Content-Type", "application/json")
++			_ = json.NewEncoder(w).Encode(map[string]any{"max_sessions": controller.SessionLimitSupported(), "close_by_auth_id": true, "session_scope": "auth_id_per_server_instance", "enforcement": "atomic_quic_connection", "version": 1})
++		} else {
++			var ids []string
++			dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
++			if err := dec.Decode(&ids); err != nil || len(ids) == 0 || len(ids) > 1024 {
++				http.Error(w, "expected 1..1024 auth IDs", http.StatusBadRequest)
++				return
++			}
++			var extra any
++			if err := dec.Decode(&extra); err != io.EOF {
++				http.Error(w, "unexpected JSON data", http.StatusBadRequest)
++				return
++			}
++			for _, id := range ids {
++				if id == "" {
++					http.Error(w, "empty auth ID", http.StatusBadRequest)
++					return
++				}
++			}
++			count := controller.CloseSessions(ids)
++			w.Header().Set("Content-Type", "application/json")
++			_ = json.NewEncoder(w).Encode(map[string]int{"closed": count})
++		}
++		return
++	}
+ 	if r.Method == http.MethodGet && r.URL.Path == "/" {
+ 		_, _ = w.Write([]byte(indexHTML))
+ 		return
+diff --git a/core/server/session_limit.go b/core/server/session_limit.go
+new file mode 100644
+index 0000000..274d7ef
+--- /dev/null
++++ b/core/server/session_limit.go
+@@ -0,0 +1,69 @@
++package server
++
++import (
++	"sync"
++
++	"github.com/apernet/quic-go"
++)
++
++// sessionRegistry is owned by one server instance. Counts include unlimited
++// connections so a newly constrained admission cannot ignore existing sessions.
++// Revoke generations are retained until restart to fence stale auth callbacks.
++type sessionRegistry struct {
++	mu       sync.Mutex
++	seq      uint64
++	closedAt map[string]uint64
++	active   map[string]map[*quic.Conn]struct{}
++}
++
++func newSessionRegistry() *sessionRegistry {
++	return &sessionRegistry{closedAt: make(map[string]uint64), active: make(map[string]map[*quic.Conn]struct{})}
++}
++
++func (s *sessionRegistry) generation() uint64 {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	return s.seq
++}
++
++func (s *sessionRegistry) reserve(id string, conn *quic.Conn, max int, started uint64) (func(), bool) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	if s.closedAt[id] > started || (max > 0 && len(s.active[id]) >= max) {
++		return nil, false
++	}
++	if s.active[id] == nil {
++		s.active[id] = make(map[*quic.Conn]struct{})
++	}
++	s.active[id][conn] = struct{}{}
++	var once sync.Once
++	return func() {
++		once.Do(func() {
++			s.mu.Lock()
++			defer s.mu.Unlock()
++			delete(s.active[id], conn)
++			if len(s.active[id]) == 0 {
++				delete(s.active, id)
++			}
++		})
++	}, true
++}
++
++func (s *sessionRegistry) close(ids []string) int {
++	s.mu.Lock()
++	s.seq++
++	conns := make(map[*quic.Conn]struct{})
++	for _, id := range ids {
++		s.closedAt[id] = s.seq
++		for conn := range s.active[id] {
++			conns[conn] = struct{}{}
++		}
++	}
++	s.mu.Unlock()
++	// Do not release reservations here: the connection lifecycle owns its lease.
++	// CloseWithError ends the actual connection before finish can free the slot.
++	for conn := range conns {
++		_ = conn.CloseWithError(closeErrCodeTrafficLimitReached, "credential revoked")
++	}
++	return len(conns)
++}
+diff --git a/core/server/session_limit_integration_test.go b/core/server/session_limit_integration_test.go
+new file mode 100644
+index 0000000..9a25558
+--- /dev/null
++++ b/core/server/session_limit_integration_test.go
+@@ -0,0 +1,537 @@
++package server_test
++
++import (
++	"bytes"
++	"context"
++	"crypto/ecdsa"
++	"crypto/elliptic"
++	"crypto/rand"
++	"crypto/tls"
++	"crypto/x509"
++	"crypto/x509/pkix"
++	"fmt"
++	"io"
++	"math/big"
++	"net"
++	"net/http"
++	"net/url"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/apernet/hysteria/core/v2/client"
++	"github.com/apernet/hysteria/core/v2/internal/protocol"
++	"github.com/apernet/hysteria/core/v2/server"
++	"github.com/apernet/quic-go"
++	"github.com/apernet/quic-go/http3"
++)
++
++// These tests use actual native QUIC connections, AUTH requests and TCP streams.
++// They deliberately do not infer sessions from traffic counters or source IPs.
++type nativePolicyAuth struct {
++	onAuth func(string)
++}
++
++func (a *nativePolicyAuth) Authenticate(addr net.Addr, auth string, tx uint64) (bool, string) {
++	ok, id, _ := a.AuthenticateWithSessionLimit(addr, auth, tx)
++	return ok, id
++}
++
++func (a *nativePolicyAuth) AuthenticateWithSessionLimit(_ net.Addr, auth string, _ uint64) (bool, string, int) {
++	if a.onAuth != nil {
++		a.onAuth(auth)
++	}
++	switch auth {
++	case "basic", "blocked":
++		return true, "basic-user", 1
++	case "other":
++		return true, "other-user", 1
++	case "plus":
++		return true, "plus-user", 0
++	case "invalid-negative":
++		return true, "basic-user", -1
++	case "invalid-too-large":
++		return true, "basic-user", 129
++	default:
++		return false, "basic-user", 1
++	}
++}
++
++type nativeLegacyAuth struct{}
++
++func (nativeLegacyAuth) Authenticate(_ net.Addr, auth string, _ uint64) (bool, string) {
++	return auth == "legacy", "legacy-user"
++}
++
++type nativeFixture struct {
++	addr net.Addr
++	srv  server.Server
++}
++
++func nativeCertificate(t *testing.T) tls.Certificate {
++	t.Helper()
++	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
++	if err != nil {
++		t.Fatal(err)
++	}
++	template := &x509.Certificate{
++		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "localhost"},
++		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
++		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
++		DNSNames: []string{"localhost"}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
++	}
++	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
++	if err != nil {
++		t.Fatal(err)
++	}
++	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
++}
++
++func newNativeFixture(t *testing.T, auth server.Authenticator) *nativeFixture {
++	t.Helper()
++	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	srv, err := server.NewServer(&server.Config{
++		Conn: pc, TLSConfig: server.TLSConfig{Certificates: []tls.Certificate{nativeCertificate(t)}},
++		Authenticator: auth, DisableUDP: true,
++		QUICConfig: server.QUICConfig{MaxIdleTimeout: 4 * time.Second},
++	})
++	if err != nil {
++		_ = pc.Close()
++		t.Fatal(err)
++	}
++	done := make(chan struct{})
++	go func() { defer close(done); _ = srv.Serve() }()
++	t.Cleanup(func() {
++		_ = srv.Close()
++		select {
++		case <-done:
++		case <-time.After(3 * time.Second):
++			t.Error("server Serve did not stop")
++		}
++	})
++	return &nativeFixture{addr: pc.LocalAddr(), srv: srv}
++}
++
++func (f *nativeFixture) connect(auth string) (client.Client, error) {
++	c, _, err := client.NewClient(&client.Config{
++		ServerAddr: f.addr, Auth: auth,
++		TLSConfig:  client.TLSConfig{ServerName: "localhost", InsecureSkipVerify: true}, // ephemeral test certificate
++		QUICConfig: client.QUICConfig{MaxIdleTimeout: 4 * time.Second, KeepAlivePeriod: 2 * time.Second},
++	})
++	return c, err
++}
++
++func (f *nativeFixture) mustConnect(t *testing.T, auth string) client.Client {
++	t.Helper()
++	c, err := f.connect(auth)
++	if err != nil {
++		t.Fatalf("connect %q: %v", auth, err)
++	}
++	t.Cleanup(func() { _ = c.Close() })
++	return c
++}
++
++func (f *nativeFixture) reconnect(t *testing.T, auth string) client.Client {
++	t.Helper()
++	deadline := time.Now().Add(3 * time.Second)
++	var lastErr error
++	for time.Now().Before(deadline) {
++		c, err := f.connect(auth)
++		if err == nil {
++			t.Cleanup(func() { _ = c.Close() })
++			return c
++		}
++		lastErr = err
++		time.Sleep(10 * time.Millisecond)
++	}
++	t.Fatalf("slot not released for %q: %v", auth, lastErr)
++	return nil
++}
++
++func nativeEchoOrigin(t *testing.T) string {
++	t.Helper()
++	ln, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = ln.Close() })
++	go func() {
++		for {
++			c, err := ln.Accept()
++			if err != nil {
++				return
++			}
++			go func() { defer c.Close(); _, _ = io.Copy(c, c) }()
++		}
++	}()
++	return ln.Addr().String()
++}
++
++func nativeEcho(c client.Client, addr string, payload []byte) error {
++	stream, err := c.TCP(addr)
++	if err != nil {
++		return err
++	}
++	defer stream.Close()
++	_ = stream.SetDeadline(time.Now().Add(3 * time.Second))
++	if _, err := stream.Write(payload); err != nil {
++		return err
++	}
++	got := make([]byte, len(payload))
++	if _, err := io.ReadFull(stream, got); err != nil {
++		return err
++	}
++	if !bytes.Equal(got, payload) {
++		return fmt.Errorf("echo differs: got %q, want %q", got, payload)
++	}
++	return nil
++}
++
++func TestSessionLimitNativeFirstWinsStreamsAndReconnect(t *testing.T) {
++	f := newNativeFixture(t, &nativePolicyAuth{})
++	origin := nativeEchoOrigin(t)
++	first := f.mustConnect(t, "basic")
++	if second, err := f.connect("basic"); err == nil {
++		_ = second.Close()
++		t.Fatal("second client with max_sessions=1 was admitted")
++	}
++	other := f.mustConnect(t, "other")
++	if err := nativeEcho(other, origin, []byte("other user remains independent")); err != nil {
++		t.Fatal(err)
++	}
++	const streams = 12
++	errs := make(chan error, streams)
++	for i := 0; i < streams; i++ {
++		go func(i int) { errs <- nativeEcho(first, origin, []byte(fmt.Sprintf("parallel stream %d", i))) }(i)
++	}
++	for i := 0; i < streams; i++ {
++		if err := <-errs; err != nil {
++			t.Fatalf("first client's concurrent TCP stream: %v", err)
++		}
++	}
++	_ = first.Close()
++	_ = first.Close() // repeated cleanup must not release another client's slot
++	reconnected := f.reconnect(t, "basic")
++	if err := nativeEcho(reconnected, origin, []byte("reconnected")); err != nil {
++		t.Fatal(err)
++	}
++	if extra, err := f.connect("basic"); err == nil {
++		_ = extra.Close()
++		t.Fatal("duplicate release allowed a second live client")
++	}
++}
++
++func TestSessionLimitNativeUnlimitedAndLegacyCompatibility(t *testing.T) {
++	for _, tc := range []struct {
++		name string
++		auth server.Authenticator
++		key  string
++	}{{"policy_zero", &nativePolicyAuth{}, "plus"}, {"legacy_interface", nativeLegacyAuth{}, "legacy"}} {
++		t.Run(tc.name, func(t *testing.T) {
++			f := newNativeFixture(t, tc.auth)
++			origin := nativeEchoOrigin(t)
++			for i := 0; i < 4; i++ {
++				c := f.mustConnect(t, tc.key)
++				if err := nativeEcho(c, origin, []byte(fmt.Sprintf("unlimited client %d", i))); err != nil {
++					t.Fatal(err)
++				}
++			}
++		})
++	}
++}
++
++func TestSessionLimitNativeParallelAdmissionRace(t *testing.T) {
++	f := newNativeFixture(t, &nativePolicyAuth{})
++	const contenders = 24
++	start := make(chan struct{})
++	type attempt struct {
++		c   client.Client
++		err error
++	}
++	results := make(chan attempt, contenders)
++	for i := 0; i < contenders; i++ {
++		go func() {
++			<-start
++			c, err := f.connect("basic")
++			results <- attempt{c, err}
++		}()
++	}
++	close(start)
++	var winners []client.Client
++	for i := 0; i < contenders; i++ {
++		select {
++		case result := <-results:
++			if result.err == nil {
++				winners = append(winners, result.c)
++			}
++		case <-time.After(10 * time.Second):
++			t.Fatal("parallel admission attempt stalled")
++		}
++	}
++	defer func() {
++		for _, c := range winners {
++			_ = c.Close()
++		}
++	}()
++	if len(winners) != 1 {
++		t.Fatalf("max_sessions=1 admitted %d simultaneous clients, want exactly 1", len(winners))
++	}
++	if err := nativeEcho(winners[0], nativeEchoOrigin(t), []byte("winner stays connected")); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestSessionLimitNativeDeniedAuthDoesNotConsumeSlot(t *testing.T) {
++	f := newNativeFixture(t, &nativePolicyAuth{})
++	for _, key := range []string{"bad-password", "invalid-negative", "invalid-too-large"} {
++		if c, err := f.connect(key); err == nil {
++			_ = c.Close()
++			t.Fatalf("invalid auth/policy %q admitted", key)
++		}
++	}
++	f.mustConnect(t, "basic")
++}
++
++type nativeRawH3 struct {
++	conn *quic.Conn
++	h3   *http3.Transport
++}
++
++func (f *nativeFixture) rawH3(t *testing.T) *nativeRawH3 {
++	t.Helper()
++	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	tr := &quic.Transport{Conn: pc}
++	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
++	defer cancel()
++	conn, err := tr.Dial(ctx, f.addr, &tls.Config{
++		InsecureSkipVerify: true, ServerName: "localhost", NextProtos: []string{http3.NextProtoH3},
++	}, &quic.Config{
++		EnableDatagrams: true, MaxDatagramFrameSize: protocol.MaxDatagramFrameSize,
++		AssumePeerMaxDatagramFrameSize: protocol.MaxDatagramFrameSize, DisablePathManager: true,
++	})
++	if err != nil {
++		_ = tr.Close()
++		_ = pc.Close()
++		t.Fatal(err)
++	}
++	h3 := &http3.Transport{Dial: func(context.Context, string, *tls.Config, *quic.Config) (*quic.Conn, error) {
++		return conn, nil
++	}}
++	t.Cleanup(func() { _ = conn.CloseWithError(0x100, ""); _ = h3.Close(); _ = tr.Close(); _ = pc.Close() })
++	return &nativeRawH3{conn: conn, h3: h3}
++}
++
++func (c *nativeRawH3) auth(key string) (int, error) {
++	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
++	defer cancel()
++	req := &http.Request{
++		Method: http.MethodPost,
++		URL:    &url.URL{Scheme: "https", Host: protocol.URLHost, Path: protocol.URLPath},
++		Header: make(http.Header),
++	}
++	protocol.AuthRequestToHeader(req.Header, protocol.AuthRequest{Auth: key})
++	resp, err := c.h3.RoundTrip(req.WithContext(ctx))
++	if err != nil {
++		return 0, err
++	}
++	defer resp.Body.Close()
++	return resp.StatusCode, nil
++}
++
++func TestSessionLimitNativeDuplicateAuthDoesNotDoubleReserve(t *testing.T) {
++	f := newNativeFixture(t, &nativePolicyAuth{})
++	raw := f.rawH3(t)
++	for i := 0; i < 2; i++ {
++		if status, err := raw.auth("basic"); err != nil || status != protocol.StatusAuthOK {
++			t.Fatalf("AUTH #%d on same connection: status %d, err %v", i+1, status, err)
++		}
++	}
++	if c, err := f.connect("basic"); err == nil {
++		_ = c.Close()
++		t.Fatal("second connection admitted while duplicate-auth first remains open")
++	}
++	_ = raw.conn.CloseWithError(0x100, "")
++	f.reconnect(t, "basic")
++}
++
++func TestSessionLimitNativeAuthInFlightDisconnectDoesNotLeak(t *testing.T) {
++	entered, release := make(chan struct{}), make(chan struct{})
++	var once sync.Once
++	t.Cleanup(func() { once.Do(func() { close(release) }) })
++	var blocked atomic.Bool
++	f := newNativeFixture(t, &nativePolicyAuth{onAuth: func(key string) {
++		if key == "blocked" && blocked.CompareAndSwap(false, true) {
++			close(entered)
++			<-release
++		}
++	}})
++	raw := f.rawH3(t)
++	done := make(chan struct{})
++	go func() { defer close(done); _, _ = raw.auth("blocked") }()
++	select {
++	case <-entered:
++	case <-time.After(3 * time.Second):
++		t.Fatal("AUTH callback did not begin")
++	}
++	_ = raw.conn.CloseWithError(0x100, "disconnect during HTTP auth")
++	once.Do(func() { close(release) })
++	select {
++	case <-done:
++	case <-time.After(3 * time.Second):
++		t.Fatal("AUTH round trip did not finish after connection close")
++	}
++	f.reconnect(t, "basic")
++}
++
++func TestSessionLimitNativeCloseAllByAuthID(t *testing.T) {
++	f := newNativeFixture(t, &nativePolicyAuth{})
++	control, ok := f.srv.(interface{ CloseSessions([]string) int })
++	if !ok {
++		t.Fatal("server does not expose CloseSessions")
++	}
++	origin := nativeEchoOrigin(t)
++	var sameID []client.Client
++	for i := 0; i < 3; i++ {
++		sameID = append(sameID, f.mustConnect(t, "plus"))
++	}
++	other := f.mustConnect(t, "other")
++	if closed := control.CloseSessions([]string{"plus-user"}); closed != len(sameID) {
++		t.Fatalf("CloseSessions closed %d clients, want %d", closed, len(sameID))
++	}
++	for _, c := range sameID {
++		if err := nativeEcho(c, origin, []byte("revoked")); err == nil {
++			t.Error("revoked live connection still transfers TCP data")
++		}
++	}
++	if err := nativeEcho(other, origin, []byte("independent user")); err != nil {
++		t.Fatal(err)
++	}
++	if closed := control.CloseSessions([]string{"nonexistent"}); closed != 0 {
++		t.Fatalf("closing absent ID returned %d", closed)
++	}
++	// A close is not a sticky ban: durable auth revocation belongs to the caller.
++	f.reconnect(t, "plus")
++}
++
++func TestSessionLimitNativeCloseInvalidatesInFlightAuth(t *testing.T) {
++	entered, release := make(chan struct{}), make(chan struct{})
++	var once sync.Once
++	t.Cleanup(func() { once.Do(func() { close(release) }) })
++	f := newNativeFixture(t, &nativePolicyAuth{onAuth: func(key string) {
++		if key == "blocked" {
++			close(entered)
++			<-release
++		}
++	}})
++	control, ok := f.srv.(interface{ CloseSessions([]string) int })
++	if !ok {
++		t.Fatal("server does not expose CloseSessions")
++	}
++	raw := f.rawH3(t)
++	type response struct {
++		status int
++		err    error
++	}
++	done := make(chan response, 1)
++	go func() { status, err := raw.auth("blocked"); done <- response{status, err} }()
++	select {
++	case <-entered:
++	case <-time.After(3 * time.Second):
++		t.Fatal("AUTH callback did not begin")
++	}
++	control.CloseSessions([]string{"basic-user"})
++	once.Do(func() { close(release) })
++	select {
++	case result := <-done:
++		if result.err == nil && result.status == protocol.StatusAuthOK {
++			t.Fatal("stale in-flight authentication admitted after CloseSessions")
++		}
++	case <-time.After(3 * time.Second):
++		t.Fatal("in-flight authentication did not finish")
++	}
++	f.reconnect(t, "basic")
++}
++
++// Drop only this client's packets, without iptables, privileged networking or
++// external hosts. Closing its socket then cannot send CONNECTION_CLOSE to the
++// server, so cleanup must come from the actual QUIC idle timeout.
++type nativeDropPacketConn struct {
++	net.PacketConn
++	drop atomic.Bool
++}
++
++func (c *nativeDropPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
++	if c.drop.Load() {
++		return len(p), nil
++	}
++	return c.PacketConn.WriteTo(p, addr)
++}
++
++type nativeDropConnFactory struct{ conn *nativeDropPacketConn }
++
++func (f *nativeDropConnFactory) New(net.Addr) (net.PacketConn, error) {
++	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
++	if err != nil {
++		return nil, err
++	}
++	f.conn = &nativeDropPacketConn{PacketConn: pc}
++	return f.conn, nil
++}
++
++func TestSessionLimitNativeLostNetworkReleasesAtIdleTimeout(t *testing.T) {
++	f := newNativeFixture(t, &nativePolicyAuth{})
++	factory := &nativeDropConnFactory{}
++	c, _, err := client.NewClient(&client.Config{
++		ConnFactory: factory, ServerAddr: f.addr, Auth: "basic",
++		TLSConfig:  client.TLSConfig{ServerName: "localhost", InsecureSkipVerify: true},
++		QUICConfig: client.QUICConfig{MaxIdleTimeout: 4 * time.Second, KeepAlivePeriod: 2 * time.Second},
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = c.Close() })
++	factory.conn.drop.Store(true)
++	_ = c.Close()
++	if other, err := f.connect("basic"); err == nil {
++		_ = other.Close()
++		t.Fatal("lost-network client slot released before the server detected closure")
++	}
++	deadline := time.Now().Add(8 * time.Second)
++	for time.Now().Before(deadline) {
++		next, err := f.connect("basic")
++		if err == nil {
++			t.Cleanup(func() { _ = next.Close() })
++			if err := nativeEcho(next, nativeEchoOrigin(t), []byte("after idle timeout")); err != nil {
++				t.Fatal(err)
++			}
++			return
++		}
++		time.Sleep(50 * time.Millisecond)
++	}
++	t.Fatal("lost-network slot was not released after the server's 4s QUIC idle timeout")
++}
++
++func TestSessionLimitNativeInstalledAuthenticatorCapability(t *testing.T) {
++	for _, tc := range []struct {
++		name      string
++		auth      server.Authenticator
++		supported bool
++	}{
++		{"policy", &nativePolicyAuth{}, true}, {"legacy", nativeLegacyAuth{}, false},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			f := newNativeFixture(t, tc.auth)
++			provider, ok := f.srv.(interface{ SessionLimitSupported() bool })
++			if !ok || provider.SessionLimitSupported() != tc.supported {
++				t.Fatalf("installed authenticator capability=%v, want %v", provider, tc.supported)
++			}
++		})
++	}
++}
+diff --git a/extras/auth/http_session_limit_test.go b/extras/auth/http_session_limit_test.go
+new file mode 100644
+index 0000000..276d946
+--- /dev/null
++++ b/extras/auth/http_session_limit_test.go
+@@ -0,0 +1,42 @@
++package auth
++
++import (
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"testing"
++)
++
++func TestHTTPSessionLimitPolicy(t *testing.T) {
++	cases := []struct {
++		name, body string
++		ok         bool
++		limit      int
++	}{
++		{"legacy", `{"ok":true,"id":"u"}`, true, 0},
++		{"null", `{"ok":true,"id":"u","max_sessions":null}`, true, 0},
++		{"zero", `{"ok":true,"id":"u","max_sessions":0}`, true, 0},
++		{"one", `{"ok":true,"id":"u","max_sessions":1}`, true, 1},
++		{"upper", `{"ok":true,"id":"u","max_sessions":128}`, true, 128},
++		{"negative", `{"ok":true,"id":"u","max_sessions":-1}`, false, 0},
++		{"overflow", `{"ok":true,"id":"u","max_sessions":129}`, false, 0},
++		{"bool", `{"ok":true,"id":"u","max_sessions":true}`, false, 0},
++		{"float", `{"ok":true,"id":"u","max_sessions":1.0}`, false, 0},
++		{"string", `{"ok":true,"id":"u","max_sessions":"1"}`, false, 0},
++		{"denied", `{"ok":false,"id":"u","max_sessions":1}`, false, 1},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(tc.body)) }))
++			defer srv.Close()
++			a := NewHTTPAuthenticator(srv.URL, false)
++			ok, id, limit := a.AuthenticateWithSessionLimit(&net.UDPAddr{}, "secret", 0)
++			if ok != tc.ok || limit != tc.limit {
++				t.Fatalf("got ok=%v id=%q limit=%d", ok, id, limit)
++			}
++			if ok && id != "u" {
++				t.Fatalf("id=%q", id)
++			}
++		})
++	}
++}
+diff --git a/extras/auth/http_native_session_limit_test.go b/extras/auth/http_native_session_limit_test.go
+new file mode 100644
+index 0000000..a6187e4
+--- /dev/null
++++ b/extras/auth/http_native_session_limit_test.go
+@@ -0,0 +1,99 @@
++package auth
++
++import (
++	"crypto/ecdsa"
++	"crypto/elliptic"
++	"crypto/rand"
++	"crypto/tls"
++	"crypto/x509"
++	"encoding/json"
++	"math/big"
++	"net"
++	"net/http/httptest"
++	"net/url"
++	"os"
++	"testing"
++	"time"
++
++	"github.com/apernet/hysteria/core/v2/client"
++	"github.com/apernet/hysteria/core/v2/server"
++	"github.com/apernet/hysteria/extras/v2/trafficlogger"
++)
++
++// The CI harness sets this URL to the real Python runtime and disposable MongoDB.
++// No deployed server or credential is accepted by this native integration test.
++func TestHTTPSessionLimitRuntimeMongoNative(t *testing.T) {
++	endpoint := os.Getenv("HYS_NATIVE_AUTH_URL")
++	if endpoint == "" {
++		t.Skip("HYS_NATIVE_AUTH_URL absent: disposable Mongo/runtime fixture not running")
++	}
++	u, err := url.Parse(endpoint)
++	if err != nil || u.Scheme != "http" || u.Hostname() != "127.0.0.1" {
++		t.Fatal("fixture auth URL must be HTTP loopback")
++	}
++	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
++	if err != nil {
++		t.Fatal(err)
++	}
++	template := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
++	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
++	if err != nil {
++		t.Fatal(err)
++	}
++	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	stats := trafficlogger.NewTrafficStatsServer("native-fixture-secret")
++	statsHTTP := httptest.NewServer(stats)
++	defer statsHTTP.Close()
++	srv, err := server.NewServer(&server.Config{Conn: pc, TLSConfig: server.TLSConfig{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}}, Authenticator: NewHTTPAuthenticator(endpoint, false), TrafficLogger: stats, DisableUDP: true})
++	if err != nil {
++		_ = pc.Close()
++		t.Fatal(err)
++	}
++	engineReady := os.Getenv("HYS_NATIVE_ENGINE_READY")
++	if engineReady == "" {
++		_ = srv.Close()
++		t.Fatal("HYS_NATIVE_ENGINE_READY required for actual runtime capability check")
++	}
++	metadata, _ := json.Marshal(map[string]string{"stats_url": statsHTTP.URL, "stats_secret": "native-fixture-secret"})
++	if err := os.WriteFile(engineReady, metadata, 0600); err != nil {
++		_ = srv.Close()
++		t.Fatal(err)
++	}
++	defer os.Remove(engineReady)
++	go func() { _ = srv.Serve() }()
++	defer srv.Close()
++	connect := func(credential string) (client.Client, error) {
++		c, _, err := client.NewClient(&client.Config{ServerAddr: pc.LocalAddr(), Auth: credential, TLSConfig: client.TLSConfig{InsecureSkipVerify: true}})
++		return c, err
++	}
++	first, err := connect("native_limited:fixture-password")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer first.Close()
++	if second, err := connect("native_limited:fixture-password"); err == nil {
++		second.Close()
++		t.Fatal("Mongo BSON max_sessions=1 admitted a second native QUIC client")
++	}
++	for _, credential := range []string{"native_unlimited:fixture-password", "native_unlimited:fixture-password", "native_other:fixture-password"} {
++		c, err := connect(credential)
++		if err != nil {
++			t.Fatalf("%s: %v", credential, err)
++		}
++		defer c.Close()
++	}
++	_ = first.Close()
++	deadline := time.Now().Add(3 * time.Second)
++	for time.Now().Before(deadline) {
++		c, err := connect("native_limited:fixture-password")
++		if err == nil {
++			_ = c.Close()
++			return
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++	t.Fatal("Mongo/runtime/native client slot was not released after disconnect")
++}
+diff --git a/extras/trafficlogger/http_session_control_test.go b/extras/trafficlogger/http_session_control_test.go
+new file mode 100644
+index 0000000..54e49a3
+--- /dev/null
++++ b/extras/trafficlogger/http_session_control_test.go
+@@ -0,0 +1,86 @@
++package trafficlogger
++
++import (
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++)
++
++type testController struct {
++	ids         []string
++	unsupported bool
++}
++
++func (c *testController) SessionLimitSupported() bool { return !c.unsupported }
++
++func (c *testController) CloseSessions(ids []string) int { c.ids = ids; return 3 }
++
++func TestSessionCapabilitiesRequireControllerAndSecret(t *testing.T) {
++	for _, tc := range []struct {
++		secret, auth string
++		attached     bool
++		status       int
++	}{
++		{"", "", true, 503}, {"s", "", true, 401}, {"s", "wrong", true, 401}, {"s", "s", false, 503}, {"s", "s", true, 200},
++	} {
++		s := NewTrafficStatsServer(tc.secret).(*trafficStatsServerImpl)
++		if tc.attached {
++			s.SetSessionController(&testController{})
++		}
++		req := httptest.NewRequest("GET", "/capabilities", nil)
++		req.Header.Set("Authorization", tc.auth)
++		w := httptest.NewRecorder()
++		s.ServeHTTP(w, req)
++		if w.Code != tc.status {
++			t.Fatalf("%+v: status=%d", tc, w.Code)
++		}
++		if w.Code == 200 {
++			var got map[string]any
++			_ = json.Unmarshal(w.Body.Bytes(), &got)
++			if got["max_sessions"] != true || got["close_by_auth_id"] != true || got["session_scope"] != "auth_id_per_server_instance" {
++				t.Fatalf("%v", got)
++			}
++		}
++	}
++}
++
++func TestSessionCloseControl(t *testing.T) {
++	for _, body := range []string{`null`, `[]`, `[""]`, `{}`, `["u"] {}`, `[true]`} {
++		s := NewTrafficStatsServer("s").(*trafficStatsServerImpl)
++		c := &testController{}
++		s.SetSessionController(c)
++		req := httptest.NewRequest("POST", "/close", strings.NewReader(body))
++		req.Header.Set("Authorization", "s")
++		w := httptest.NewRecorder()
++		s.ServeHTTP(w, req)
++		if w.Code != http.StatusBadRequest || c.ids != nil {
++			t.Fatalf("body=%s status=%d calls=%v", body, w.Code, c.ids)
++		}
++	}
++	s := NewTrafficStatsServer("s").(*trafficStatsServerImpl)
++	c := &testController{}
++	s.SetSessionController(c)
++	req := httptest.NewRequest("POST", "/close", strings.NewReader(`["u","v"]`))
++	req.Header.Set("Authorization", "s")
++	w := httptest.NewRecorder()
++	s.ServeHTTP(w, req)
++	if w.Code != 200 || len(c.ids) != 2 || strings.TrimSpace(w.Body.String()) != `{"closed":3}` {
++		t.Fatalf("%d %s %v", w.Code, w.Body.String(), c.ids)
++	}
++}
++
++func TestSessionCapabilityReflectsInstalledAuthenticator(t *testing.T) {
++	s := NewTrafficStatsServer("s").(*trafficStatsServerImpl)
++	s.SetSessionController(&testController{unsupported: true})
++	r := httptest.NewRequest("GET", "/capabilities", nil)
++	r.Header.Set("Authorization", "s")
++	w := httptest.NewRecorder()
++	s.ServeHTTP(w, r)
++	var got map[string]any
++	_ = json.Unmarshal(w.Body.Bytes(), &got)
++	if w.Code != 200 || got["max_sessions"] != false || got["close_by_auth_id"] != true {
++		t.Fatalf("%d %v", w.Code, got)
++	}
++}

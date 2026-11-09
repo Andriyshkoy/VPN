@@ -12,8 +12,8 @@ trap 'rm -f "$EVENTS_FILE" "$RUNTIME_ENV_FILE" "$EXPORTER_SQL_FILE"' EXIT
 # shellcheck source=../deploy/production_canary.sh
 source "$REPO_ROOT/deploy/production_canary.sh"
 
-[[ "$EXPECTED_REVISION" == "g5c9d2e3f4a5" ]]
-[[ "$EXPECTED_PREVIOUS_REVISION" == "f4b8c1d2e3a4" ]]
+[[ "$EXPECTED_REVISION" == "h6d0e3f4a5b6" ]]
+[[ "$EXPECTED_PREVIOUS_REVISION" == "g5c9d2e3f4a5" ]]
 [[ "$POSTGRES_EXPORTER_ROLE" == "vpn_exporter" ]]
 grep -F 'readonly SUSPENSION_RECONCILE=' \
     "$REPO_ROOT/deploy/production_canary.sh" >/dev/null

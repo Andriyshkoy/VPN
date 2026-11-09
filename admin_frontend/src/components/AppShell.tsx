@@ -7,10 +7,12 @@ import {
   Gauge,
   GitFork,
   LogOut,
+  Mail,
   Menu,
   ScrollText,
   ServerCog,
   Users,
+  WalletCards,
   X,
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
@@ -21,6 +23,8 @@ const navigation = [
   { to: '/', label: 'Обзор', icon: Gauge, end: true, anyOf: ['dashboard:read'] },
   { to: '/users', label: 'Пользователи', icon: Users, anyOf: ['users:read'] },
   { to: '/finance', label: 'Финансы', icon: CircleDollarSign, anyOf: ['finance:read'] },
+  { to: '/subscriptions', label: 'Подписки', icon: WalletCards, anyOf: ['subscriptions:read'] },
+  { to: '/campaigns', label: 'Рассылки', icon: Mail, anyOf: ['campaigns:read'] },
   { to: '/referrals', label: 'Рефералы', icon: GitFork, anyOf: ['referrals:read'] },
   { to: '/configs', label: 'Конфигурации', icon: FileKey2, anyOf: ['configs:read'] },
   { to: '/servers', label: 'Серверы', icon: ServerCog, anyOf: ['servers:read'] },
