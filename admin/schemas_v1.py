@@ -168,6 +168,16 @@ class NodeProfileResponse(BaseModel):
     config_id: int
     access_id: str
     service_id: Literal["hysteria", "vless-reality"]
-    format: Literal["uri"] = "uri"
-    uri: str = Field(repr=False)
+    format: Literal["uri", "singbox-json"] = "uri"
+    uri: str | None = Field(default=None, repr=False)
+    content: str | None = Field(default=None, repr=False)
     contains_secret: Literal[True] = True
+
+    @model_validator(mode="after")
+    def typed_profile(self):
+        if self.format == "uri":
+            if not self.uri or self.content is not None:
+                raise ValueError("invalid_uri_profile")
+        elif self.service_id != "hysteria" or self.uri is not None or not self.content:
+            raise ValueError("invalid_json_profile")
+        return self

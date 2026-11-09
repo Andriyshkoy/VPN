@@ -74,8 +74,16 @@ it is distinct from a manual suspension. A top-up restores only compatible
 mapped credentials of an expired account, never manually suspended accounts or
 retired OpenVPN credentials.
 
-Ordinary metadata never includes a connection URI. Only `export` returns
-`SubscriptionProfile(service_id, uri)`; the URI is excluded from its repr.
+Ordinary metadata never includes a credential. Only `export` returns a typed
+`SubscriptionProfile(service_id, uri=None, format="uri", content=None)`;
+both secret fields are excluded from its repr. VLESS uses `format="uri"` and
+`uri`. Hysteria defaults to `format="singbox-json"` and a JSON string in
+`content`, with `uri=null`. The payload contains one Hysteria outbound with
+`tls.insecure=false` and `certificate_sha256: [base64(SHA256(leaf DER))]`.
+This explicit format preserves server verification in Hiddify 5.5.5, whose raw
+Hysteria URI parser ignores `pinSHA256`. The native URI remains available only
+through the private node/config export's explicit `profile_format="native-uri"`
+option; the bot and admin UI use the secure default.
 
 `SubscriptionUnavailableError` is an `InvalidOperationError` with a safe
 `reason_code`: `no_active_node` or `session_limit_unavailable`. Other invalid

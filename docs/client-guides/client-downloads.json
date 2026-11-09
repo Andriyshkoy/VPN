@@ -142,14 +142,31 @@
     }
   },
   "import": {
-    "primary": "clipboard_uri",
+    "primary": "clipboard_or_json_file",
     "subscription_deeplink_template": "hiddify://install-config?url={percent_encoded_https_subscription_url}&name={percent_encoded_title}",
     "deeplink_source": "https://github.com/hiddify/hiddify-app/blob/v5.5.5/lib/utils/link_parsers.dart",
     "deeplink_tests": "https://github.com/hiddify/hiddify-app/blob/v5.5.5/test/utils/link_parsers_test.dart",
     "subscription_https_recommended": true,
     "subscription_transport_note": "Для нашего сервиса используйте HTTPS-подписки. Официальный how-to говорит HTTPS-only, но исходники v5.5.5 принимают HTTP; поведение HTTP на каждой ОС отдельно не тестировалось.",
     "subscription_parser_source": "https://github.com/hiddify/hiddify-app/blob/v5.5.5/lib/features/profile/data/profile_parser.dart",
-    "url_validator_source": "https://github.com/hiddify/hiddify-app/blob/v5.5.5/lib/utils/validators.dart"
+    "url_validator_source": "https://github.com/hiddify/hiddify-app/blob/v5.5.5/lib/utils/validators.dart",
+    "service_profiles": {
+      "hysteria": {
+        "format": "singbox-json",
+        "filename": "hiddify-hysteria.json",
+        "clipboard": "complete_json_including_outer_braces",
+        "tls_insecure": false,
+        "tls_certificate_pin_preserved": true
+      },
+      "vless-reality": {
+        "format": "uri",
+        "scheme": "vless",
+        "clipboard": "complete_uri"
+      }
+    },
+    "file_import_source": "https://github.com/hiddify/hiddify-app/blob/7804cadac01419f31b1ec7802d9e1be599e66de2/lib/features/profile/add/widgets/fix_btns.dart",
+    "clipboard_import_source": "https://github.com/hiddify/hiddify-app/blob/7804cadac01419f31b1ec7802d9e1be599e66de2/lib/features/profile/notifier/profile_notifier.dart",
+    "hysteria_tls_source": "https://github.com/hiddify/hiddify-sing-box/blob/1614c5edb52dd44a4cc079201ba1e790fdfad8a0/common/tls/std_client.go"
   },
   "guides": {
     "index": "README.md",

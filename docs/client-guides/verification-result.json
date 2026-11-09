@@ -9,7 +9,11 @@
   "private_assets_verified": 17,
   "online_release": "v5.5.5",
   "errors": [],
-  "checked_at_utc": "2026-11-09T13:32:02.123521+00:00",
+  "checked_at_utc": "2026-11-09T13:53:38.878320+00:00",
   "command": "python3 docs/client-guides/verify_guides.py --online --private-bundle <operator-local-preview>",
-  "public_policy": "No raster files or capture receipts in public Git; official Markdown image origins only."
+  "public_policy": "No raster files or capture receipts in public Git; official Markdown image origins only.",
+  "service_profile_formats": {
+    "hysteria": "singbox-json, full document with TLS certificate pin",
+    "vless-reality": "vless URI"
+  }
 }

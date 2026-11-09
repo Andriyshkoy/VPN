@@ -53,6 +53,19 @@ def verify(*, online: bool = False, private_bundle: Path | None = None) -> dict:
     expected_platforms = {"android", "ios", "windows", "macos", "linux", "tv"}
     if set(catalog["platforms"]) != expected_platforms:
         errors.append("Unexpected platform catalog")
+    profiles = catalog["import"].get("service_profiles", {})
+    hys = profiles.get("hysteria", {})
+    vless = profiles.get("vless-reality", {})
+    if (
+        hys.get("format") != "singbox-json"
+        or hys.get("filename") != "hiddify-hysteria.json"
+        or hys.get("clipboard") != "complete_json_including_outer_braces"
+        or hys.get("tls_insecure") is not False
+        or hys.get("tls_certificate_pin_preserved") is not True
+    ):
+        errors.append("Hysteria Hiddify export must be a complete pinned JSON profile")
+    if vless.get("format") != "uri" or vless.get("scheme") != "vless":
+        errors.append("VLESS Hiddify export must remain a vless URI")
     assets: dict[str, dict] = {}
     public_images: set[str] = set()
     private_verified = 0
@@ -104,6 +117,10 @@ def verify(*, online: bool = False, private_bundle: Path | None = None) -> dict:
     image_count = 0
     for path in sorted(ROOT.glob("*.md")):
         content = path.read_text()
+        if "hysteria2://" in content or "hy2://" in content:
+            errors.append(
+                f"Raw Hysteria URI must not be a Hiddify import flow: {path.name}"
+            )
         for match in re.finditer(r"(!?)\[([^\]]*)\]\(([^)]+)\)", content):
             is_image, alt, target = match.groups()
             parsed = urlsplit(target)

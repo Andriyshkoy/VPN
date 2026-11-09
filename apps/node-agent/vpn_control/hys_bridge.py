@@ -4,6 +4,7 @@ The public API runs unprivileged. Only this process reads the existing node's
 Hysteria configuration and MongoDB, and no command/password is accepted over RPC.
 """
 import argparse
+import base64
 from dataclasses import asdict
 import datetime as dt
 import grp
@@ -127,7 +128,8 @@ def snapshot(row, now=None):
         except (TypeError, ValueError, OverflowError):
             raise BackendUnavailable("hysteria_invalid_expiry_state") from None
     status = "active"
-    if row.get("blocked") or row.get("_vpn_session_close_pending") is True:
+    if (row.get("blocked") or row.get("_vpn_session_close_pending") is True
+            or "_vpn_policy_close_pending" in row):
         status = "suspended"
     elif expiry is not None and int(now.timestamp()) >= expiry:
         status = "expired"
@@ -361,6 +363,8 @@ class LegacyHysteria:
                 self._require_session_capability(session_limit(row))
                 if row.get("_vpn_session_close_pending") is True:
                     raise BackendUnavailable("hysteria_session_close_pending")
+                if "_vpn_policy_close_pending" in row:
+                    raise BackendUnavailable("hysteria_policy_close_pending")
             if status == "active" and snapshot(candidate).status != "active":
                 raise BackendConflict("access_policy_inactive")
             self.collection.update_one({"_id": username, "note": marker(username)},
@@ -398,6 +402,8 @@ class LegacyHysteria:
             self._require_session_capability(session_limit(row))
             if row.get("_vpn_session_close_pending") is True:
                 raise BackendUnavailable("hysteria_session_close_pending")
+            if "_vpn_policy_close_pending" in row:
+                raise BackendUnavailable("hysteria_policy_close_pending")
             if snapshot(row).status != "active":
                 raise BackendConflict("profile_requires_active_access")
             config = self._config()
@@ -424,6 +430,28 @@ class LegacyHysteria:
             if ":" in host and not host.startswith("["):
                 host = "[" + host + "]"
             return "hysteria2://" + auth + "@" + host + ":" + str(self.public_port) + "/?" + query + "#" + quote(self.profile_label, safe="")
+
+    def profile_json(self, username):
+        """Hiddify's raw URI parser drops certificate pins; JSON preserves them."""
+        with self.lock:
+            # Reuse all authorization, policy-fence, certificate ownership and
+            # supported-obfuscation checks of the explicit native URI export.
+            native = urlsplit(self.profile(username))
+            query = dict(parse_qsl(native.query, strict_parsing=True))
+            try:
+                pin = base64.b64encode(bytes.fromhex(query["pinSHA256"])).decode("ascii")
+                row = self._row(username, True)
+                outbound = {
+                    "type": "hysteria2", "tag": self.profile_label,
+                    "server": self.public_host.strip("[]"), "server_port": self.public_port,
+                    "password": username + ":" + row["password"],
+                    "obfs": {"type": "salamander", "password": query["obfs-password"]},
+                    "tls": {"enabled": True, "server_name": self.tls_sni,
+                            "insecure": False, "certificate_sha256": [pin]},
+                }
+            except (KeyError, TypeError, ValueError):
+                raise BackendUnavailable("hysteria_profile_configuration_invalid") from None
+            return json.dumps({"outbounds": [outbound]}, ensure_ascii=False, separators=(",", ":"))
 
     def health(self):
         self.collection.database.command("ping")
@@ -457,7 +485,7 @@ class LegacyHysteria:
 
 
 OPERATIONS = {
-    "health": set(), "get": {"username"}, "profile": {"username"}, "revoke": {"username"},
+    "health": set(), "get": {"username"}, "profile": {"username"}, "profile_json": {"username"}, "revoke": {"username"},
     "set_status": {"username", "status"},
     "create": {"username", "expires_at", "traffic_limit_bytes", "activation_days"},
     "update": {"username", "expires_at", "traffic_limit_bytes", "activation_days"},

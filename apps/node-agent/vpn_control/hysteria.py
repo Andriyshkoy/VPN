@@ -120,6 +120,18 @@ class HysteriaBackend:
             raise BackendUnavailable("hysteria_bridge_invalid_profile")
         return result
 
+    def profile_json(self, username):
+        result = self._call("profile_json", username)
+        if not isinstance(result, str) or not 1 <= len(result.encode("utf-8")) <= 32768:
+            raise BackendUnavailable("hysteria_bridge_invalid_profile")
+        try:
+            value = json.loads(result)
+            if not isinstance(value, dict) or not isinstance(value.get("outbounds"), list):
+                raise ValueError
+        except (ValueError, TypeError):
+            raise BackendUnavailable("hysteria_bridge_invalid_profile") from None
+        return result
+
     def health(self):
         result = self._call("health")
         if not isinstance(result, dict) or type(result.get("ready")) is not bool:

@@ -1,4 +1,5 @@
 import copy
+import base64
 from dataclasses import asdict
 import datetime as dt
 import json
@@ -619,6 +620,15 @@ class ProfileCertificateTests(unittest.TestCase):
             self.assertEqual(query["pinSHA256"], [hashlib.sha256(expected).hexdigest()])
             self.assertEqual(query["obfs-password"], ["obfs-secret"])
             self.assertEqual(uri.hostname, "example.invalid")
+            before = copy.deepcopy(collection.rows)
+            exported = json.loads(backend.profile_json(USER))
+            outbound = exported["outbounds"][0]
+            self.assertIs(outbound["tls"]["insecure"], False)
+            self.assertEqual(outbound["tls"]["certificate_sha256"],
+                             [base64.b64encode(hashlib.sha256(expected).digest()).decode("ascii")])
+            self.assertEqual(outbound["password"], USER + ":private-password")
+            self.assertEqual(outbound["obfs"], {"type": "salamander", "password": "obfs-secret"})
+            self.assertEqual(collection.rows, before)
 
 
 if __name__ == "__main__":

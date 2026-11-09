@@ -87,6 +87,18 @@ export interface Payment {
   confirmed_at?: string | null
 }
 
+interface NodeProfileIdentity {
+  config_id: number
+  access_id: string
+  service_id: 'hysteria' | 'vless-reality'
+  contains_secret: true
+}
+
+export type NodeProfile = NodeProfileIdentity & (
+  | { format: 'uri'; uri: string; content?: null }
+  | { format: 'singbox-json'; uri?: null; content: string }
+)
+
 export interface VpnConfig {
   id: string | number
   service_id?: string | null

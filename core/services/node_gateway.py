@@ -7,6 +7,8 @@ and secrets never form part of access metadata or exception messages.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import ipaddress
 import json
 import re
@@ -80,9 +82,10 @@ class NodeAccess:
 class NodeProfile:
     access_id: str
     service_id: str
-    uri: str = field(repr=False)
+    uri: str | None = field(default=None, repr=False)
     format: str = "uri"
     contains_secret: bool = True
+    content: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -563,16 +566,34 @@ class NodeAgentGateway:
     async def revoke_access(self, access_id: str, *, operation_id: str) -> NodeAccess:
         return await self._transition(access_id, operation_id, "revoke")
 
-    async def export_profile(self, access_id: str) -> NodeProfile:
+    async def export_profile(
+        self, access_id: str, *, profile_format: str = "auto"
+    ) -> NodeProfile:
+        if profile_format not in {"auto", "native-uri"}:
+            raise APIConfigurationError("Unsupported node profile format")
         identifier = _uuid(access_id)
-        value = await self._request("GET", f"/v1/accesses/{identifier}/profile")
+        suffix = "?format=native-uri" if profile_format == "native-uri" else ""
+        value = await self._request("GET", f"/v1/accesses/{identifier}/profile{suffix}")
         uri, service = value.get("uri"), value.get("service_id")
         if (
             value.get("access_id") != identifier
             or not isinstance(service, str)
             or service not in _SERVICES
-            or value.get("format") != "uri"
             or value.get("contains_secret") is not True
+        ):
+            raise _protocol_error()
+        if value.get("format") == "singbox-json":
+            content = value.get("content")
+            if service != "hysteria" or profile_format != "auto" or uri is not None:
+                raise _protocol_error()
+            self._validate_json_profile(content)
+            return NodeProfile(
+                identifier, service, format="singbox-json", content=content
+            )
+        if (
+            value.get("format") != "uri"
+            or value.get("content") is not None
+            or (service == "hysteria" and profile_format != "native-uri")
             or not isinstance(uri, str)
             or len(uri) > 16384
             or any(c in uri for c in "\r\n")
@@ -592,6 +613,91 @@ class NodeAgentGateway:
         ):
             raise _protocol_error()
         return NodeProfile(identifier, service, uri)
+
+    @staticmethod
+    def _validate_json_profile(content: Any) -> None:
+        """Accept only our bounded, pinned Hysteria profile; never log secrets."""
+
+        def pairs(items):
+            result = {}
+            for key, item in items:
+                if key in result:
+                    raise ValueError("duplicate_json_key")
+                result[key] = item
+            return result
+
+        def nonempty(value, maximum):
+            return (
+                isinstance(value, str)
+                and 0 < len(value) <= maximum
+                and not any(ord(char) < 32 for char in value)
+            )
+
+        try:
+            if (
+                not isinstance(content, str)
+                or not 1 <= len(content.encode("utf-8")) <= 32768
+            ):
+                raise ValueError
+            value = json.loads(content, object_pairs_hook=pairs)
+            if not isinstance(value, dict) or set(value) != {"outbounds"}:
+                raise ValueError
+            outbounds = value["outbounds"]
+            if not isinstance(outbounds, list) or len(outbounds) != 1:
+                raise ValueError
+            outbound = outbounds[0]
+            fields = {"type", "tag", "server", "server_port", "password", "obfs", "tls"}
+            if not isinstance(outbound, dict) or set(outbound) != fields:
+                raise ValueError
+            if (
+                outbound["type"] != "hysteria2"
+                or not nonempty(outbound["tag"], 128)
+                or not nonempty(outbound["server"], 253)
+                or any(char in outbound["server"] for char in "/?#@ ")
+                or type(outbound["server_port"]) is not int
+                or not 1 <= outbound["server_port"] <= 65535
+                or not nonempty(outbound["password"], 8192)
+                or ":" not in outbound["password"]
+            ):
+                raise ValueError
+            obfs = outbound["obfs"]
+            if (
+                not isinstance(obfs, dict)
+                or set(obfs) != {"type", "password"}
+                or obfs["type"] != "salamander"
+                or not nonempty(obfs["password"], 8192)
+            ):
+                raise ValueError
+            tls = outbound["tls"]
+            if (
+                not isinstance(tls, dict)
+                or set(tls)
+                != {"enabled", "server_name", "insecure", "certificate_sha256"}
+                or tls["enabled"] is not True
+                or tls["insecure"] is not False
+                or not nonempty(tls["server_name"], 253)
+                or any(char in tls["server_name"] for char in "/?#@ ")
+            ):
+                raise ValueError
+            pins = tls["certificate_sha256"]
+            if (
+                not isinstance(pins, list)
+                or len(pins) != 1
+                or not isinstance(pins[0], str)
+            ):
+                raise ValueError
+            raw = base64.b64decode(pins[0], validate=True)
+            if len(raw) != 32 or base64.b64encode(raw).decode("ascii") != pins[0]:
+                raise ValueError
+        except (
+            ValueError,
+            TypeError,
+            KeyError,
+            UnicodeError,
+            RecursionError,
+            binascii.Error,
+        ):
+            raise _protocol_error() from None
 
     async def get_usage(self, access_id: str) -> NodeUsage:
         identifier = _uuid(access_id)

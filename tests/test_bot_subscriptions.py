@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -92,7 +93,8 @@ def flow(monkeypatch):
         resume=AsyncMock(return_value=view()),
         export=AsyncMock(
             return_value=SubscriptionProfile(
-                "hysteria", "hysteria2://key@example.com:443/?sni=x&insecure=0"
+                "vless-reality",
+                "vless://key@example.com:443/?security=reality&type=tcp",
             )
         ),
     )
@@ -234,33 +236,99 @@ async def test_regeneration_requires_confirmation_and_same_button_rotates_once_k
 
 @pytest.mark.asyncio
 async def test_secret_export_has_no_callback_keyboard_and_never_enters_audit(flow):
-    callback = Callback("sub:profile:hysteria")
+    callback = Callback("sub:profile:vless-reality")
     context = TelegramActionAuditContext("callback.received", "handled", {})
     await subscriptions.subscription_callback(callback, flow.state, context)
-    flow.service.export.assert_awaited_once_with(7, "hysteria")
+    flow.service.export.assert_awaited_once_with(7, "vless-reality")
     text, kwargs = callback.message.calls[0]
-    assert "hysteria2://key@" in text and "&amp;insecure=0" in text
+    assert "vless://key@" in text and "&amp;type=tcp" in text
     assert "reply_markup" not in kwargs
     assert "protect_content" not in kwargs  # users must be able to copy the URI
     text, kwargs = callback.message.calls[1]
-    assert "hysteria2://" not in text
+    assert "vless://" not in text
     assert kwargs["reply_markup"] is not None
-    assert context.metadata == {"service_id": "hysteria"}
+    assert context.metadata == {"service_id": "vless-reality"}
     assert "key@" not in repr(context)
     assert callback.message.edits == []
 
 
 @pytest.mark.asyncio
 async def test_long_uri_is_delivered_intact_as_copyable_file(flow):
-    uri = "hysteria2://key@example.com:443/?padding=" + "a" * 4000
-    flow.service.export.return_value = SubscriptionProfile("hysteria", uri)
-    callback = Callback("sub:profile:hysteria")
+    uri = "vless://key@example.com:443/?padding=" + "a" * 4000
+    flow.service.export.return_value = SubscriptionProfile("vless-reality", uri)
+    callback = Callback("sub:profile:vless-reality")
     await subscriptions.subscription_callback(callback, flow.state)
     document, kwargs = callback.message.documents[0]
     assert document.data == uri.encode()
-    assert document.filename == "hiddify-hysteria.txt"
+    assert document.filename == "hiddify-vless-reality.txt"
     assert "reply_markup" not in kwargs
     assert uri not in str(callback.message.calls)
+
+
+@pytest.mark.asyncio
+async def test_hysteria_json_is_a_secret_file_and_copyable_content_without_callbacks(
+    flow,
+):
+    content = json.dumps(
+        {
+            "outbounds": [
+                {
+                    "type": "hysteria2",
+                    "password": "user:private<&>",
+                    "tls": {
+                        "enabled": True,
+                        "insecure": False,
+                        "certificate_sha256": "a" * 64,
+                    },
+                }
+            ]
+        }
+    )
+    flow.service.export.return_value = SubscriptionProfile(
+        "hysteria", uri=None, format="singbox-json", content=content
+    )
+    callback = Callback("sub:profile:hysteria")
+    context = TelegramActionAuditContext("callback.received", "handled", {})
+    await subscriptions.subscription_callback(callback, flow.state, context)
+    document, kwargs = callback.message.documents[0]
+    assert document.filename == "hiddify-hysteria.json"
+    assert document.data == content.encode()
+    assert "reply_markup" not in kwargs and "protect_content" not in kwargs
+    text, kwargs = callback.message.calls[0]
+    assert "JSON для Hiddify" in text and "private&lt;&amp;&gt;" in text
+    assert "reply_markup" not in kwargs
+    instruction, kwargs = callback.message.calls[1]
+    assert "фигурные скобки" in instruction and "«Файл»" in instruction
+    assert content not in instruction and kwargs["reply_markup"] is not None
+    assert context.metadata == {"service_id": "hysteria"}
+    assert "private" not in repr(context)
+
+
+@pytest.mark.asyncio
+async def test_long_json_remains_intact_in_file_without_oversized_message(flow):
+    content = json.dumps({"outbounds": [], "fixture": "<&>" * 2000})
+    flow.service.export.return_value = SubscriptionProfile(
+        "hysteria", uri=None, format="singbox-json", content=content
+    )
+    callback = Callback("sub:profile:hysteria")
+    await subscriptions.subscription_callback(callback, flow.state)
+    assert callback.message.documents[0][0].data == content.encode()
+    assert callback.message.documents[0][0].filename.endswith(".json")
+    assert len(callback.message.calls) == 1
+    assert content not in str(callback.message.calls)
+
+
+@pytest.mark.asyncio
+async def test_hysteria_uri_downgrade_is_not_exported_to_hiddify(flow):
+    flow.service.export.return_value = SubscriptionProfile(
+        "hysteria",
+        "hysteria2://private@example.com:1935/?insecure=1&pinSHA256=" + "a" * 64,
+    )
+    callback = Callback("sub:profile:hysteria")
+    await subscriptions.subscription_callback(callback, flow.state)
+    assert callback.message.calls == [] and callback.message.documents == []
+    assert callback.answers[-1][1] == {"show_alert": True}
+    assert "private" not in str(callback.answers)
 
 
 @pytest.mark.asyncio

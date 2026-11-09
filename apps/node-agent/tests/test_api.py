@@ -66,6 +66,16 @@ class FakeBackend:
             raise BackendConflict("profile_requires_active_user")
         return self.profiles[username]
 
+    def profile_json(self, username):
+        if self.users[username].status != "active":
+            raise BackendConflict("profile_requires_active_user")
+        return json.dumps({"outbounds": [{"type": "hysteria2", "tag": "Fixture",
+            "server": "node.invalid", "server_port": 1935,
+            "password": "CLIENT-SECRET-" + username,
+            "obfs": {"type": "salamander", "password": "test-obfs"},
+            "tls": {"enabled": True, "server_name": "node.invalid", "insecure": False,
+                    "certificate_sha256": ["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="]}}]})
+
     def health(self):
         return {"ready": self.ready, "data_plane_verified": False}
 
@@ -175,15 +185,17 @@ def test_lifecycle_and_secret_export(setup, service):
     assert "CLIENT-SECRET" not in json.dumps(listing)
     assert client.get(f"/v1/accesses/{access_id}/profile", headers=headers(READ)).status_code == 403
     exported = client.get(f"/v1/accesses/{access_id}/profile", headers=headers(EXPORT))
-    assert exported.status_code == 200 and "CLIENT-SECRET" in exported.json()["uri"]
+    field = "content" if service == "hysteria" else "uri"
+    assert exported.status_code == 200 and "CLIENT-SECRET" in exported.json()[field]
+    assert exported.json()["format"] == ("singbox-json" if service == "hysteria" else "uri")
     assert exported.headers["cache-control"] == "no-store"
     assert b"CLIENT-SECRET" not in settings.database.read_bytes()
-    before = exported.json()["uri"]
+    before = exported.json()[field]
     assert client.post(f"/v1/accesses/{access_id}/suspend", headers=headers(key="suspend-0001")).json()["access"]["status"] == "suspended"
     assert client.get(f"/v1/accesses/{access_id}/profile", headers=headers()).status_code == 409
     assert client.patch(f"/v1/accesses/{access_id}", headers=headers(key="limits-00001"), json={"traffic_limit_bytes": 2048}).json()["access"]["status"] == "suspended"
     assert client.post(f"/v1/accesses/{access_id}/resume", headers=headers(key="resume-00001")).json()["access"]["status"] == "active"
-    assert client.get(f"/v1/accesses/{access_id}/profile", headers=headers()).json()["uri"] == before
+    assert client.get(f"/v1/accesses/{access_id}/profile", headers=headers()).json()[field] == before
     assert client.get(f"/v1/accesses/{access_id}/usage", headers=headers(READ)).json()["billing_authoritative"] is False
     assert client.delete(f"/v1/accesses/{access_id}", headers=headers(key="revoke-00001")).json()["access"]["status"] == "revoked"
     assert client.get(f"/v1/accesses/{access_id}/profile", headers=headers()).status_code == 409

@@ -652,7 +652,12 @@ class SubscriptionService:
                 )
             config_id = cfg.id
         profile = await self._config_service.export_profile(config_id)
-        return SubscriptionProfile(service_id=service_id, uri=profile.uri)
+        return SubscriptionProfile(
+            service_id=service_id,
+            uri=profile.uri,
+            format=profile.format,
+            content=profile.content,
+        )
 
     async def prepare_entitlement(self, *, repos, user_id, desired_state, kind):
         """Suspend all old access, restore only compatible product credentials."""

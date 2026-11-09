@@ -10,11 +10,6 @@ on:
       - .github/workflows/hysteria-session-limit.yml
   push:
     branches: [main]
-    paths:
-      - engines/hysteria/**
-      - apps/hysteria-runtime/**
-      - apps/node-agent/**
-      - .github/workflows/hysteria-session-limit.yml
   workflow_dispatch:
 
 permissions:
@@ -66,6 +61,22 @@ jobs:
           kill "$fixture_pid"
           wait "$fixture_pid"
           trap - EXIT
+      - name: Require quota and expiry to close real native streams
+        env:
+          PYTHONPATH: apps/hysteria-runtime:apps/hysteria-runtime/tests
+          HYS_RUNTIME_TEST_MONGO: mongodb://127.0.0.1:27017/
+          HYS_RUNTIME_TEST_ENGINE: ${{ github.workspace }}/engines/hysteria/dist/hysteria-linux-amd64
+        run: |
+          "$RUNNER_TEMP/hys-native-venv/bin/python" - <<'PY'
+          import unittest
+
+          suite = unittest.defaultTestLoader.discover(
+              "apps/hysteria-runtime/tests", pattern="test_native_enforcement.py"
+          )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if result.testsRun < 2 or result.skipped or not result.wasSuccessful():
+              raise SystemExit("Native quota/expiry and first-use enforcement must both pass without skips")
+          PY
       - name: Upload prepared engine and exact checksum manifest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

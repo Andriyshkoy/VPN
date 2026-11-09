@@ -1,9 +1,9 @@
 # Hysteria compatibility runtime
 
-Standalone authentication and delayed traffic collection for **new isolated
-nodes and staging**. Existing production Blitz authentication, scheduler and
-MongoDB are not replaced by deploying this source. No production migration is
-performed by this application.
+Standalone authentication, delayed traffic accounting and quota/expiry session
+enforcement. Installing this source does not perform a production migration or
+switch an existing Blitz service. Adoption requires the separately reviewed
+upgrade and accounting-handoff operation.
 
 Requires Python 3.12 and dependencies in `requirements.lock`.
 
@@ -28,7 +28,9 @@ It preserves valid legacy account semantics: blocked users are denied,
 password comparison is constant-time, `unlimited_user` bypasses quotas and
 dates, zero quota and zero days mean unlimited, and expiry uses UTC day
 precision. Missing first-use dates do not prevent authentication. Invalid
-numeric state and malformed nonempty dates fail closed. Auth requests and
+numeric state and malformed nonempty dates fail closed. Missing, null and empty
+first-use dates retain the legacy unactivated policy and are not silently
+rewritten or treated as expired. Auth requests and
 readiness checks never activate users or modify counters. `GET /healthz`
 checks process liveness; `GET /readyz` checks MongoDB. Bodies are bounded to
 16 KiB, chunked requests are rejected and errors do not contain credentials.
@@ -38,7 +40,9 @@ sessions, or an integer from 1 to 128. Valid BSON `Int64` values are supported;
 booleans, zero and malformed policies deny authentication. A limited account's
 auth response includes `max_sessions`, including for `unlimited_user` accounts.
 This does not activate an account or write counters. `GET /capabilities` reports
-`max_sessions: true`, `version: 1` and `policy_source: mongo_max_sessions` without
+`max_sessions: true`, `version: 1`, `policy_source: mongo_max_sessions`,
+`quota_expiry_enforcement: true`, `policy_close_fence: true` and
+`enforcement_version: 1` without
 authenticating an account or querying MongoDB.
 
 The runtime supplies policy; the patched Hysteria server enforces simultaneous
@@ -54,8 +58,11 @@ Each limited HTTP authentication also verifies the current engine's protected
 statistics `/capabilities` endpoint. Only an exact supported capability grants
 access. A missing endpoint, downgrade, invalid response, or unavailable checker
 denies the limited account, so a saved limit cannot silently become unlimited.
-Unlimited accounts keep their legacy authentication behavior and do not depend
-on this engine capability check.
+Accounts without session, traffic or day limits keep their legacy authentication
+behavior. Finite traffic/day policies also require the actual engine's protected
+`close_by_auth_id` capability for every accepted authentication. Rolling back to
+an old engine while retaining this runtime denies those finite policies as well
+as Basic session limits; it must not silently weaken their enforcement.
 
 While tightening an existing session limit, the bridge may persist
 `_vpn_session_close_pending: true` until native connection closure succeeds.
@@ -63,13 +70,17 @@ Authentication fails closed while this marker is present, including for
 `unlimited_user` accounts. The collector preserves it; the bridge clears it
 after a successful close so a failed operation can safely be retried.
 
-The collector calls only `/traffic?clear=false` and `/online`. Upload/download
+For accounting, the collector calls `/traffic?clear=false` and `/online`. Upload/download
 deltas and a per-user epoch/counter cursor are committed in one MongoDB atomic
 compare-and-set update. Replaying a snapshot after an uncertain write does
 not add its bytes again. `$inc` preserves concurrent counter changes, while
 policy fields such as password, blocked state, expiry and quota are untouched.
-Only activity observed for an account **without** `account_creation_date`
-initializes that date. A present `null` date is retained for compatibility.
+Only first activity observed for an account with a missing, null or empty
+`account_creation_date` initializes that date. Authentication and idle collection
+do not start it. Activation and the traffic delta commit together under a CAS
+which also compares the previous date; concurrent collectors or administrative
+activation cannot reset an existing date. Nonempty valid or invalid dates are
+never silently rewritten.
 
 Every Hysteria process start must atomically write a **new unique epoch** to
 the shared `epoch_file` before opening its statistics listener. The collector
@@ -85,9 +96,39 @@ recover bytes discarded by the server. The default interval is 60 seconds.
 Changing interval does not create a durable per-packet audit log. Polling,
 MongoDB outages and process restarts can delay first-use and usage observation.
 
-This runtime never invokes `/kick`. Quotas and suspension deny fresh
-authentication; termination of already-open streams is not guaranteed. The
-legacy Hysteria next-traffic kick flag is unsuitable for reversible suspension.
+After accounting, the collector checks quota, UTC day expiry and manual blocked
+state, including idle users. It atomically records a separate
+`_vpn_policy_close_pending` token before authenticated `POST /close`. Every auth
+request denies while that field is present, even if a concurrent administrator
+extends the quota or enables unlimited traffic. A confirmed close removes only
+the matching token and records its engine epoch/policy/snapshot acknowledgement.
+An ambiguous HTTP or Mongo acknowledgement leaves a retryable fence; close is
+idempotent. One user's close failure does not prevent attempting others.
+
+The acknowledgement suppresses replay of the same accounting snapshot; later
+collector snapshots may close a still-denied account again. The enforcer never
+changes `blocked`, `unlimited_user`, password, quota, activation date or usage
+counters. It preserves the bridge's independent `_vpn_session_close_pending`
+marker. The bridge reports runtime-pending accounts as suspended and refuses
+activation/profile export until the runtime completes closure. This runtime
+never invokes the sticky `/kick` endpoint.
+
+Enforcement is delayed by the collection interval and dependency outages. It is
+not a per-packet hard traffic cap. Accounting cursor errors remain visible;
+already expired/blocked users are still considered for connection closure.
+
+For an existing collector handoff only:
+
+```sh
+python -m hysteria_runtime collector --config /private/runtime.json --once --accounting-only
+```
+
+This explicit one-shot mode commits deltas without capability calls, closure or
+policy fences, so it can drain the old engine's final non-clearing snapshot.
+It is rejected in auth mode or without `--once`. Stop the old destructive
+collector and quiesce old ingress/online sessions before taking the final tail;
+otherwise bytes transferred between the snapshot and restart cannot be recovered.
+Every replacement engine process still needs a fresh epoch.
 
 Schema compatibility reference:
 [Blitz auth source](https://github.com/ReturnFI/Blitz/blob/5f86cc90c8eb17369585a1c0942a7539507a9d61/core/scripts/auth/user_auth.go).
@@ -127,3 +168,21 @@ statistics listener into that file before authenticating limited users. The
 fixture rereads this file and checks the actual engine capability for each
 limited authentication; a missing or invalid file denies access. The JSON
 must contain exactly those two fields, with no MongoDB URI or credentials.
+
+The independent quota/expiry integration test additionally opens a real native
+QUIC SOCKS stream against a local echo origin, changes the synthetic Mongo
+policy, runs the actual collector and verifies the existing stream closes while
+the password, flags and traffic totals survive. It uses the normal runtime
+HTTP handler, strict local CA verification and protected engine endpoints:
+
+```sh
+HYS_RUNTIME_TEST_MONGO='mongodb://127.0.0.1:27017/' \
+HYS_RUNTIME_TEST_ENGINE="$PWD/engines/hysteria/dist/hysteria-linux-amd64" \
+PYTHONPATH=apps/hysteria-runtime:apps/hysteria-runtime/tests \
+python -m unittest discover -s apps/hysteria-runtime/tests -p test_native_enforcement.py -v
+```
+
+Both environment variables are mandatory for that test to execute. CI must set
+them after building the exact tested engine; an unconfigured skip is not
+acceptance evidence. The fixture binds loopback, creates a randomly named Mongo
+database, and drops only that database on completion.

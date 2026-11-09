@@ -114,9 +114,19 @@ class AccessListResponse(RequestModel):
 class ProfileResponse(RequestModel):
     access_id: str
     service_id: ServiceId
-    format: Literal["uri"]
-    uri: str
+    format: Literal["uri", "singbox-json"]
+    uri: str | None = Field(default=None, repr=False, max_length=16384)
+    content: str | None = Field(default=None, repr=False, max_length=32768)
     contains_secret: Literal[True]
+
+    @model_validator(mode="after")
+    def profile_payload(self):
+        if self.format == "uri":
+            if not self.uri or self.content is not None:
+                raise ValueError("invalid_uri_profile")
+        elif self.service_id != "hysteria" or self.uri is not None or not self.content:
+            raise ValueError("invalid_json_profile")
+        return self
 
 
 class UsageResponse(RequestModel):

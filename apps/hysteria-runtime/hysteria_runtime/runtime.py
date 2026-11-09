@@ -1,11 +1,12 @@
-"""Mongo-schema-compatible Hysteria auth/collector for new isolated nodes.
+"""Mongo-compatible Hysteria authorization, accounting and session enforcement.
 
-Production adoption does not switch an existing auth or traffic collector.
-This implementation never calls the destructive traffic clear or kick APIs.
+Counters are never cleared. Policy revocation fences new authorization in Mongo
+before requesting the patched engine's synchronous connection-close operation.
 """
 import argparse
 import datetime as dt
 import fcntl
+import hashlib
 import hmac
 import ipaddress
 import json
@@ -15,6 +16,7 @@ import socket
 import stat
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
@@ -23,7 +25,13 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 MAX_BODY = 16384
 MAX_STATS = 4 * 1024 * 1024
 META = "_vpn_collector"
-CAPABILITIES = {"max_sessions": True, "version": 1, "policy_source": "mongo_max_sessions"}
+POLICY_PENDING = "_vpn_policy_close_pending"
+POLICY_CLOSED = "_vpn_policy_closed"
+CAPABILITIES = {"max_sessions": True, "version": 1, "policy_source": "mongo_max_sessions",
+                "quota_expiry_enforcement": True, "policy_close_fence": True,
+                "enforcement_version": 1}
+POLICY_FIELDS = ("blocked", "unlimited_user", "max_sessions", "max_download_bytes",
+                 "expiration_days", "account_creation_date", "upload_bytes", "download_bytes")
 
 
 class RuntimeStateError(Exception):
@@ -38,6 +46,42 @@ def nonnegative_int(value):
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise RuntimeStateError("invalid_counter")
     return int(value)
+
+
+def policy_denial(row, now=None):
+    """Return a finite denial code without mutating legacy account policy."""
+    if row.get("blocked"):
+        return "blocked"
+    sessions = row.get("max_sessions")
+    if sessions is not None and (not isinstance(sessions, int) or isinstance(sessions, bool)
+                                 or not 1 <= sessions <= 128):
+        return "invalid_policy"
+    if row.get("unlimited_user") is True:
+        return None
+    try:
+        limit = nonnegative_int(row.get("max_download_bytes", 0))
+        days = nonnegative_int(row.get("expiration_days", 0))
+        upload = nonnegative_int(row.get("upload_bytes", 0))
+        download = nonnegative_int(row.get("download_bytes", 0))
+        if limit and upload + download >= limit:
+            return "quota"
+        created = row.get("account_creation_date")
+        # Legacy auth treats absent/null/empty dates as first-use hold. Do not
+        # convert a retained legacy account into an invalid or expired policy.
+        if days and created is not None and created != "":
+            if not isinstance(created, str):
+                return "invalid_policy"
+            start = dt.datetime.strptime(created, "%Y-%m-%d").replace(tzinfo=dt.timezone.utc)
+            if start.strftime("%Y-%m-%d") != created:
+                return "invalid_policy"
+            current = now or dt.datetime.now(dt.timezone.utc)
+            if current.tzinfo is None:
+                return "invalid_policy"
+            if current >= start + dt.timedelta(days=days):
+                return "expired"
+    except (RuntimeStateError, ValueError, TypeError, OverflowError):
+        return "invalid_policy"
+    return None
 
 
 def authorize(collection, auth, now=None):
@@ -56,7 +100,8 @@ def authorize(collection, auth, now=None):
         row = collection.find_one({"_id": username})
     except Exception:
         raise RuntimeStateError("mongo_unavailable") from None
-    if row is None or row.get("blocked") or row.get("_vpn_session_close_pending") is True:
+    if (row is None or row.get("blocked") or row.get("_vpn_session_close_pending") is True
+            or POLICY_PENDING in row):
         return {"ok": False}
     secret = row.get("password")
     if not isinstance(secret, str):
@@ -74,27 +119,104 @@ def authorize(collection, auth, now=None):
     accepted = {"ok": True, "id": username}
     if sessions is not None:
         accepted["max_sessions"] = int(sessions)
-    if row.get("unlimited_user") is True:
-        return accepted
-    try:
-        limit = nonnegative_int(row.get("max_download_bytes", 0))
-        days = nonnegative_int(row.get("expiration_days", 0))
-        upload = nonnegative_int(row.get("upload_bytes", 0))
-        download = nonnegative_int(row.get("download_bytes", 0))
-        if limit and upload + download >= limit:
-            return {"ok": False}
-        created = row.get("account_creation_date")
-        if days and created:
-            if not isinstance(created, str):
-                return {"ok": False}
-            start = dt.datetime.strptime(created, "%Y-%m-%d").replace(tzinfo=dt.timezone.utc)
-            expiry = start + dt.timedelta(days=days)
-            now = now or dt.datetime.now(dt.timezone.utc)
-            if now.tzinfo is None or now >= expiry:
-                return {"ok": False}
-    except (RuntimeStateError, ValueError, TypeError, OverflowError):
+    if policy_denial(row, now=now) is not None:
         return {"ok": False}
     return accepted
+
+
+def _policy_fingerprint(row, reason):
+    value = {field: {"present": field in row, "value": row.get(field)} for field in POLICY_FIELDS}
+    value["reason"] = reason
+    try:
+        raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    except (TypeError, ValueError):
+        # Malformed legacy fields still deny and close; avoid exposing their
+        # values or requiring an unserializable policy to become auth-valid.
+        raw = repr(tuple((field, type(row.get(field)).__name__) for field in POLICY_FIELDS))
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _policy_query(row):
+    query = {"_id": row["_id"]}
+    for field in (*POLICY_FIELDS, POLICY_PENDING, POLICY_CLOSED):
+        query[field] = ({"$exists": True, "$eq": row[field]} if field in row
+                        else {"$exists": False})
+    state = row.get(META)
+    query[META + ".seq"] = ({"$exists": True, "$eq": state["seq"]}
+                               if isinstance(state, dict) and "seq" in state
+                               else {"$exists": False})
+    return query
+
+
+def enforce_policies(collection, epoch, close_sessions, now=None):
+    """Persist denial fences, close live connections, then acknowledge by token.
+
+    Policy, quota and accounting fields are never rewritten. An ambiguous write
+    or HTTP result retains the durable fence for the next pass; `/close` is safe
+    to repeat. Acknowledgement suppresses only replay of the same snapshot.
+    New snapshots retry closure even for still-expired idle users, avoiding an
+    old acknowledgement hiding newly admitted sessions after a policy change.
+    """
+    if not isinstance(epoch, str) or not epoch or len(epoch) > 256:
+        raise RuntimeStateError("collector_epoch_invalid")
+    try:
+        names = [row["_id"] for row in collection.find({}, {"_id": 1})]
+    except Exception:
+        raise RuntimeStateError("mongo_unavailable") from None
+    observed = closed = pending = 0
+    failed = False
+    for username in names:
+        observed += 1
+        try:
+            for _ in range(4):
+                row = collection.find_one({"_id": username})
+                if row is None:
+                    break
+                reason = policy_denial(row, now=now)
+                marker = row.get(POLICY_PENDING)
+                if POLICY_PENDING not in row and reason is None:
+                    if POLICY_CLOSED in row:
+                        result = collection.update_one(_policy_query(row), {"$unset": {POLICY_CLOSED: ""}})
+                        if not result.matched_count:
+                            continue
+                    break
+                state = row.get(META)
+                seq = nonnegative_int(state.get("seq", 0)) if isinstance(state, dict) else 0
+                fingerprint = _policy_fingerprint(row, reason)
+                acknowledgement = {"epoch": epoch, "policy": fingerprint, "seq": seq}
+                if POLICY_PENDING not in row and row.get(POLICY_CLOSED) == acknowledgement:
+                    break
+                if (not isinstance(marker, dict) or not isinstance(marker.get("token"), str)
+                        or not marker["token"] or len(marker["token"]) > 128):
+                    marker = {"token": uuid.uuid4().hex, "policy": fingerprint,
+                              "reason": reason or "pending"}
+                    result = collection.update_one(_policy_query(row), {"$set": {POLICY_PENDING: marker}})
+                    if not result.matched_count:
+                        continue
+                # The durable marker denies auth even if an administrator now
+                # extends the quota. Existing sessions close before readmission.
+                response = close_sessions([username])
+                if (not isinstance(response, dict) or type(response.get("closed")) is not int
+                        or response["closed"] < 0):
+                    raise RuntimeStateError("policy_close_unconfirmed")
+                closed += response["closed"]
+                result = collection.update_one({"_id": username, POLICY_PENDING + ".token": marker["token"]},
+                    {"$unset": {POLICY_PENDING: ""}, "$set": {POLICY_CLOSED: acknowledgement}})
+                if not result.matched_count:
+                    pending += 1
+                    failed = True
+                break
+            else:
+                pending += 1
+                failed = True
+        except Exception:
+            # Try every other user; one failed close must not starve unrelated
+            # expired accounts. Public logs contain only finite error codes.
+            pending += 1
+            failed = True
+    if failed:
+        raise RuntimeStateError("policy_close_unconfirmed")
+    return {"observed": observed, "closed": closed, "pending": pending}
 
 
 def apply_snapshot(collection, epoch, traffic, online, today=None):
@@ -145,7 +267,8 @@ def apply_snapshot(collection, epoch, traffic, online, today=None):
                 raise RuntimeStateError("collector_counter_regressed")
             delta_tx = current_tx - previous_tx if same_epoch else current_tx
             delta_rx = current_rx - previous_rx if same_epoch else current_rx
-            activated = "account_creation_date" in row
+            created = row.get("account_creation_date")
+            activated = created is not None and created != ""
             active = count > 0 or delta_tx > 0 or delta_rx > 0
             status = "Online" if count else "Offline" if activated or active else "On-hold"
             updates = {META: {"epoch": epoch, "tx": current_tx, "rx": current_rx, "seq": seq + 1},
@@ -153,6 +276,12 @@ def apply_snapshot(collection, epoch, traffic, online, today=None):
             if not activated and active:
                 updates["account_creation_date"] = day
             query = {"_id": username, META + ".seq": seq if "seq" in state else {"$exists": False}}
+            if "account_creation_date" in updates:
+                # Do not overwrite an activation set by another collector or
+                # administrator between this read and the atomic delta write.
+                query["account_creation_date"] = (
+                    {"$exists": True, "$eq": created}
+                    if "account_creation_date" in row else {"$exists": False})
             try:
                 result = collection.update_one(query, {"$inc": {"upload_bytes": delta_tx, "download_bytes": delta_rx},
                                                        "$set": updates})
@@ -224,7 +353,7 @@ class BoundedServer(ThreadingHTTPServer):
         pass
 
 
-def make_handler(collection, ping, engine_supported=None):
+def make_handler(collection, ping, engine_supported=None, close_supported=None):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -300,6 +429,21 @@ def make_handler(collection, ping, engine_supported=None):
                         supported = False
                     if not supported:
                         response = {"ok": False}
+                if response.get("ok") is True:
+                    try:
+                        username = value["auth"].split(":", 1)[0]
+                        row = collection.find_one({"_id": username})
+                        if (row is None or POLICY_PENDING in row
+                                or row.get("_vpn_session_close_pending") is True
+                                or policy_denial(row) is not None):
+                            response = {"ok": False}
+                        elif row.get("unlimited_user") is not True and (
+                            nonnegative_int(row.get("max_download_bytes", 0)) > 0
+                            or nonnegative_int(row.get("expiration_days", 0)) > 0
+                        ) and not (close_supported is not None and close_supported() is True):
+                            response = {"ok": False}
+                    except Exception:
+                        response = {"ok": False}
                 self.send_json(200, response)
 
     return Handler
@@ -310,7 +454,7 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def fetch_stats(config, suffix):
+def fetch_stats(config, suffix, *, payload=None):
     base = config.get("stats_url", "http://127.0.0.1:25413").rstrip("/")
     parsed = urlsplit(base)
     try:
@@ -323,7 +467,11 @@ def fetch_stats(config, suffix):
     secret = config.get("stats_secret")
     if not isinstance(secret, str) or not secret or "\r" in secret or "\n" in secret:
         raise RuntimeStateError("stats_secret_invalid")
-    request = Request(base + suffix, headers={"Authorization": secret})
+    body = None if payload is None else json.dumps(payload, separators=(",", ":")).encode()
+    headers = {"Authorization": secret}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    request = Request(base + suffix, headers=headers, data=body)
     try:
         with build_opener(ProxyHandler({}), NoRedirect()).open(request, timeout=5) as response:
             raw = response.read(MAX_STATS + 1)
@@ -349,7 +497,27 @@ def engine_caps(config):
         return False
 
 
-def collect_once(collection, config):
+def engine_close_caps(config):
+    try:
+        value = fetch_stats(config, "/capabilities")
+        return (value.get("close_by_auth_id") is True
+                and value.get("session_scope") == "auth_id_per_server_instance"
+                and value.get("enforcement") == "atomic_quic_connection"
+                and type(value.get("version")) is int and value["version"] == 1)
+    except (RuntimeStateError, ValueError, TypeError, AttributeError):
+        return False
+
+
+def close_sessions(config, usernames):
+    if (not isinstance(usernames, list) or not usernames
+            or any(not isinstance(name, str) or not name or len(name) > 256 for name in usernames)):
+        raise RuntimeStateError("policy_close_invalid_identity")
+    if not engine_close_caps(config):
+        raise RuntimeStateError("policy_close_unsupported")
+    return fetch_stats(config, "/close", payload=usernames)
+
+
+def collect_once(collection, config, *, accounting_only=False):
     epoch_path = Path(config.get("epoch_file", "/run/vpn-stack/hysteria-epoch"))
     try:
         epoch = epoch_path.read_text().strip()
@@ -359,7 +527,21 @@ def collect_once(collection, config):
             raise RuntimeStateError("collector_epoch_changed")
     except OSError:
         raise RuntimeStateError("collector_epoch_unavailable") from None
-    return apply_snapshot(collection, epoch, traffic, online)
+    try:
+        result = apply_snapshot(collection, epoch, traffic, online)
+    except RuntimeStateError:
+        # An invalid cursor for one account must not keep another already
+        # expired/blocked session alive. Preserve the original accounting error.
+        if not accounting_only:
+            try:
+                enforce_policies(collection, epoch, lambda names: close_sessions(config, names))
+            except RuntimeStateError:
+                pass
+        raise
+    if not accounting_only:
+        enforced = enforce_policies(collection, epoch, lambda names: close_sessions(config, names))
+        result.update({"closed": enforced["closed"], "policy_pending": enforced["pending"]})
+    return result
 
 
 def main():
@@ -367,7 +549,11 @@ def main():
     parser.add_argument("mode", choices=("auth", "collector"))
     parser.add_argument("--config", required=True)
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--accounting-only", action="store_true",
+                        help="One collector pass for a quiesced legacy-engine accounting handoff; does not close sessions")
     args = parser.parse_args()
+    if args.accounting_only and (args.mode != "collector" or not args.once):
+        parser.error("--accounting-only requires collector --once")
     client = None
     try:
         config = load_config(args.config)
@@ -380,7 +566,8 @@ def main():
             if type(port) is not int or not 1024 <= port <= 65535:
                 raise RuntimeStateError("listen_port_invalid")
             with BoundedServer((host, port), make_handler(collection, lambda: client.admin.command("ping"),
-                                                       lambda: engine_caps(config))) as server:
+                                                       lambda: engine_caps(config),
+                                                       lambda: engine_close_caps(config))) as server:
                 server.serve_forever(poll_interval=.5)
         else:
             interval = config.get("interval_seconds", 60)
@@ -391,7 +578,7 @@ def main():
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 while True:
                     try:
-                        result = collect_once(collection, config)
+                        result = collect_once(collection, config, accounting_only=args.accounting_only)
                     except RuntimeStateError as error:
                         print(json.dumps({"status": "unavailable", "code": error.code}), flush=True)
                         if args.once:

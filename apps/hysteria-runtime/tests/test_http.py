@@ -9,7 +9,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from hysteria_runtime.runtime import BoundedServer, RuntimeStateError, collect_once, engine_caps, load_config, make_handler
+from hysteria_runtime.runtime import BoundedServer, RuntimeStateError, collect_once, engine_caps, engine_close_caps, load_config, make_handler
 
 
 class FakeCollection:
@@ -30,6 +30,7 @@ class HTTPTests(unittest.TestCase):
         self.ping_fail = False
         self.engine_checker = lambda: True
         self.engine_checks = 0
+        self.close_checker = lambda: True
 
         def ping():
             if self.ping_fail:
@@ -40,7 +41,8 @@ class HTTPTests(unittest.TestCase):
             return self.engine_checker()
 
         self.server = BoundedServer(("127.0.0.1", 0),
-                                    make_handler(self.collection, ping, engine_supported=engine_supported))
+                                    make_handler(self.collection, ping, engine_supported=engine_supported,
+                                                 close_supported=lambda: self.close_checker()))
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
@@ -66,9 +68,9 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(json.loads(raw), {"ok": True, "id": "sample"})
         self.assertNotIn(b"private-secret", raw)
         self.assertEqual(headers["Cache-Control"], "no-store")
-        self.assertEqual(self.collection.reads, 1)
+        self.assertEqual(self.collection.reads, 2)
         self.assertEqual(self.request("GET", "/readyz")[0], 200)
-        self.assertEqual(self.collection.reads, 1)
+        self.assertEqual(self.collection.reads, 2)
 
     def test_database_failure_is_fail_closed_without_exception_text(self):
         self.collection.fail = True
@@ -82,7 +84,9 @@ class HTTPTests(unittest.TestCase):
         status, headers, raw = self.request("GET", "/capabilities")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(raw), {"max_sessions": True, "version": 1,
-                                          "policy_source": "mongo_max_sessions"})
+                                          "policy_source": "mongo_max_sessions",
+                                          "quota_expiry_enforcement": True, "policy_close_fence": True,
+                                          "enforcement_version": 1})
         self.assertEqual(headers["Cache-Control"], "no-store")
         self.assertEqual(self.collection.reads, 0)
         self.assertNotIn(b"private-secret", raw)
@@ -139,6 +143,7 @@ class HTTPTests(unittest.TestCase):
                 self.assertFalse(thread.is_alive())
 
     def test_unlimited_auth_does_not_call_engine_checker(self):
+        self.collection.find_one = lambda query: {"_id": "sample", "password": "private-secret"}
         def unexpected_checker():
             raise AssertionError("unlimited auth must not depend on session enforcement")
 
@@ -147,6 +152,20 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(raw), {"ok": True, "id": "sample"})
         self.assertEqual(self.engine_checks, 0)
+
+    def test_finite_quota_and_day_policy_require_actual_close_support(self):
+        for policy in ({"max_download_bytes": 100}, {"expiration_days": 7}):
+            self.collection.find_one = lambda query, policy=policy: {"_id": "sample", "password": "private-secret", **policy}
+            for supported in (True, False, None, 1, "true", True):
+                self.close_checker = lambda supported=supported: supported
+                status, _, raw = self.request("POST", "/auth", '{"auth":"sample:private-secret"}')
+                self.assertEqual(status, 200)
+                self.assertIs(json.loads(raw)["ok"], supported is True)
+
+    def test_pending_policy_fence_denies_even_after_quota_extension(self):
+        self.collection.find_one = lambda query: {"_id": "sample", "password": "private-secret",
+                                                  "unlimited_user": True, "_vpn_policy_close_pending": None}
+        self.assertEqual(json.loads(self.request("POST", "/auth", '{"auth":"sample:private-secret"}')[2]), {"ok": False})
 
     def test_engine_checker_is_rechecked_after_a_downgrade(self):
         self.collection.find_one = lambda query: {"_id": "sample", "password": "private-secret", "max_sessions": 1}
@@ -267,6 +286,21 @@ class EngineCapabilityTests(unittest.TestCase):
 
 
 class IOTests(unittest.TestCase):
+    def test_bad_accounting_cursor_does_not_starve_another_expired_account(self):
+        from test_runtime import MemoryCollection, account
+        collection = MemoryCollection(account(_id="bad-cursor", _vpn_collector=None),
+                                      account(_id="already-expired", expiration_days=1,
+                                              account_creation_date="2020-01-01"))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "epoch"
+            path.write_text("epoch1")
+            with patch("hysteria_runtime.runtime.fetch_stats", return_value={}), \
+                    patch("hysteria_runtime.runtime.close_sessions", return_value={"closed": 1}) as close:
+                with self.assertRaisesRegex(RuntimeStateError, "collector_cursor_invalid"):
+                    collect_once(collection, {"epoch_file": str(path)})
+            close.assert_called_once_with({"epoch_file": str(path)}, ["already-expired"])
+            self.assertNotIn("_vpn_policy_close_pending", collection.documents["already-expired"])
+
     def test_config_rejects_public_permissions_and_symlink(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"
@@ -308,7 +342,7 @@ class IOTests(unittest.TestCase):
                 return {}
 
             with patch("hysteria_runtime.runtime.fetch_stats", fetch), patch("hysteria_runtime.runtime.apply_snapshot", return_value={"updated": 0}):
-                collect_once(object(), {"epoch_file": str(path)})
+                collect_once(object(), {"epoch_file": str(path)}, accounting_only=True)
             self.assertEqual(calls, ["/traffic?clear=false", "/online"])
 
 

@@ -71,4 +71,6 @@ class SubscriptionView:
 @dataclass(frozen=True, slots=True)
 class SubscriptionProfile:
     service_id: str
-    uri: str = field(repr=False)
+    uri: str | None = field(default=None, repr=False)
+    format: str = "uri"
+    content: str | None = field(default=None, repr=False)

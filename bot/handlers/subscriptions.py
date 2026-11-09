@@ -19,7 +19,7 @@ from aiogram.types import (
 )
 
 from core.config import settings
-from core.exceptions import APIConnectionError, ServiceError
+from core.exceptions import APIConnectionError, InvalidOperationError, ServiceError
 from core.services import TelegramActionAuditContext
 from core.services.subscriptions import SubscriptionUnavailableError
 
@@ -339,21 +339,56 @@ async def subscription_callback(
             profile = await subscription_service.export(user.id, parts[2])
             # No inline keyboard on the secret message: callback updates embed
             # their original message and are persisted in the durable inbox.
-            if len(profile.uri) <= 3500:
-                await callback.message.answer(
-                    f"🔑 <b>{SERVICES[parts[2]]}</b>\n\n<pre>{html.escape(profile.uri)}</pre>",
-                    disable_web_page_preview=True,
-                )
-            else:
+            if profile.format == "singbox-json" and parts[2] == "hysteria":
+                if not isinstance(profile.content, str) or not profile.content:
+                    raise InvalidOperationError("Profile content is unavailable")
                 await callback.message.answer_document(
                     BufferedInputFile(
-                        profile.uri.encode("utf-8"),
-                        filename=f"hiddify-{parts[2]}.txt",
+                        profile.content.encode("utf-8"),
+                        filename=f"hiddify-{parts[2]}.json",
                     ),
-                    caption="Ключ длинный: откройте файл и скопируйте содержимое целиком.",
+                    caption="Профиль для Hiddify: импортируйте JSON целиком.",
                 )
+                secret_text = (
+                    f"🔑 <b>{SERVICES[parts[2]]} — JSON для Hiddify</b>\n\n"
+                    f"<pre>{html.escape(profile.content, quote=False)}</pre>"
+                )
+                if len(secret_text.encode("utf-16-le")) // 2 <= 4000:
+                    await callback.message.answer(
+                        secret_text, disable_web_page_preview=True
+                    )
+                instruction = (
+                    "Hysteria выдаётся JSON-профилем с проверкой сертификата сервера. "
+                    "Скопируйте JSON целиком, включая фигурные скобки. "
+                    "В Hiddify: «+» → «Из буфера обмена» или «+» → «Файл» для .json. "
+                    "Не преобразуйте его в обычную hysteria2:// ссылку и не пересылайте посторонним."
+                )
+            elif (
+                profile.format == "uri"
+                and parts[2] == "vless-reality"
+                and isinstance(profile.uri, str)
+            ):
+                if len(profile.uri) <= 3500:
+                    await callback.message.answer(
+                        f"🔑 <b>{SERVICES[parts[2]]}</b>\n\n<pre>{html.escape(profile.uri)}</pre>",
+                        disable_web_page_preview=True,
+                    )
+                else:
+                    await callback.message.answer_document(
+                        BufferedInputFile(
+                            profile.uri.encode("utf-8"),
+                            filename=f"hiddify-{parts[2]}.txt",
+                        ),
+                        caption="Ключ длинный: откройте файл и скопируйте содержимое целиком.",
+                    )
+                instruction = (
+                    "Скопируйте ключ целиком. В Hiddify: «+» → «Из буфера обмена». "
+                    "Не пересылайте ключ посторонним."
+                )
+            else:
+                raise InvalidOperationError("Profile format is unavailable")
             await callback.message.answer(
-                "Скопируйте ключ целиком. В Hiddify: «+» → «Из буфера обмена». Не пересылайте ключ посторонним.",
+                instruction,
                 reply_markup=_markup(
                     [
                         [_button("📚 Инструкции", "guide:menu")],

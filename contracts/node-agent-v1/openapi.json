@@ -1618,6 +1618,20 @@
               "format": "uuid",
               "title": "Access Id"
             }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "auto",
+                "native-uri"
+              ],
+              "type": "string",
+              "default": "auto",
+              "title": "Format"
+            }
           }
         ],
         "responses": {
@@ -2411,12 +2425,35 @@
           },
           "format": {
             "type": "string",
-            "const": "uri",
+            "enum": [
+              "uri",
+              "singbox-json"
+            ],
             "title": "Format"
           },
           "uri": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16384
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Uri"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32768
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content"
           },
           "contains_secret": {
             "type": "boolean",
@@ -2430,7 +2467,6 @@
           "access_id",
           "service_id",
           "format",
-          "uri",
           "contains_secret"
         ],
         "title": "ProfileResponse"

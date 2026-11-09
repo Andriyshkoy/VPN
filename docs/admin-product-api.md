@@ -32,6 +32,16 @@ Migration preserves finite balances, the ledger and both manual account flags.
 
 ## Manual account exceptions
 
+Profile export remains explicit and requires the existing `configs:export`
+permission: `GET /api/admin/v1/configs/{id}/profile`. VLESS returns
+`{format: "uri", uri: "vless://…", content: null}`. Hysteria returns
+`{format: "singbox-json", uri: null, content: "{\"outbounds\":[…]}"}`;
+the JSON contains a base64 SHA256 certificate pin and `tls.insecure=false`.
+Secret responses are `no-store`; neither field appears in ordinary metadata,
+audit details, exception text or DTO repr. The UI copies/downloads the typed
+content and rejects a legacy Hysteria URI instead of silently disabling TLS
+verification. Import Hysteria's complete JSON in Hiddify via Clipboard or file.
+
 `PATCH /api/admin/v1/users/{id}/unlimited-balance` requires `balance:write`
 (owner or finance). The body is `{enabled, expected_enabled, reason}`;
 booleans must be JSON booleans. `Idempotency-Key` is required. The account keeps

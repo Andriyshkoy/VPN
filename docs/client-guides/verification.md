@@ -41,7 +41,17 @@
 
 Бот может показывать официальный магазин и краткие шаги, а подробную помощь открывать по настраиваемому базовому URL. Несуществующий публичный домен помощи не задаётся. При включении материалов в web-сборку официальные иллюстрации остаются ссылками на первоисточник. Локальные preview-файлы не добавляются автоматически; секреты пользователя в контент или URL аналитики не попадают.
 
-Для HTTPS-подписки поддерживается шаблон `hiddify://install-config?url=<URL-encoded subscription>&name=<URL-encoded title>`. Кодировать нужно значения параметров по отдельности. Для индивидуального `hysteria2://` / `vless://` ключа основной путь — Clipboard; наличие HTTP-ссылки не требуется. Самопроизвольная автоматическая ротация между двумя отдельно добавленными профилями в инструкции не обещается.
+Для нашего **Hysteria** бот выдаёт JSON (`format: singbox-json`, файл `hiddify-hysteria.json`). Через **«+» → Clipboard** импортируется весь JSON, включая внешние фигурные скобки; **«+» → File** читает тот же JSON из файла. **VLESS + REALITY** остаётся ссылкой `vless://…`. Текстовый профиль не нужно превращать в HTTPS-адрес. Автоматическая ротация между двумя отдельно добавленными профилями не обещается.
+
+Проверка Hiddify 5.5.5 обнаружила, что конвертер короткой ссылки Hysteria не сохраняет pin сертификата. Поэтому для этого клиента выбран JSON с `tls.insecure: false` и `tls.certificate_sha256`, который хранит base64 SHA256 DER-сертификата. Параметры уже формирует сервер; пользователю не нужно вычислять или редактировать их. Проверенный Linux-клиент подключился с правильным pin и отклонил неправильный. Выполнение на физических Android/iOS/TV здесь не заявляется.
+
+Первичные источники закреплённой версии:
+
+- [Clipboard и импорт файла](https://github.com/hiddify/hiddify-app/blob/7804cadac01419f31b1ec7802d9e1be599e66de2/lib/features/profile/add/widgets/fix_btns.dart): JSON разрешён в File picker, прочитанное содержимое передаётся в общий обработчик.
+- [Обработчик Clipboard](https://github.com/hiddify/hiddify-app/blob/7804cadac01419f31b1ec7802d9e1be599e66de2/lib/features/profile/notifier/profile_notifier.dart) и [валидация локального профиля](https://github.com/hiddify/hiddify-app/blob/7804cadac01419f31b1ec7802d9e1be599e66de2/lib/features/profile/data/profile_repository.dart).
+- [Конвертер ссылок Hysteria](https://github.com/hiddify/ray2sing/blob/ed1a4b12297992de89adf2a7a91ce5ec397d4819/ray2sing/hysteria2.go), [парсер JSON](https://github.com/hiddify/hiddify-core/blob/ad83d7570c06c012ad0589896138e5c1bf299c50/v2/config/parser.go) и [проверка сертификата](https://github.com/hiddify/hiddify-sing-box/blob/1614c5edb52dd44a4cc079201ba1e790fdfad8a0/common/tls/std_client.go).
+
+Для отдельно выданной HTTPS-подписки поддерживается шаблон `hiddify://install-config?url=<URL-encoded subscription>&name=<URL-encoded title>`. Кодировать нужно значения параметров по отдельности. Этот механизм не заменяет описанный импорт индивидуальных JSON/URI-профилей.
 
 Проверка ссылок, происхождения и отсутствия raster-файлов в публикуемом дереве:
 

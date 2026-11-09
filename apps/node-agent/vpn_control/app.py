@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import time
+from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Query, Request
@@ -340,12 +341,16 @@ def create_app(settings=None, backends=None):
         return mutate(request, principal, "revoke", {}, access_id)
 
     @application.get("/v1/accesses/{access_id}/profile", tags=["profiles"], response_model=ProfileResponse, openapi_extra={"x-required-scopes": ["profiles:read"]})
-    def profile(request: Request, access_id: UUID, principal=Depends(export)):
+    def profile(request: Request, access_id: UUID, profile_format: Literal["auto", "native-uri"] = Query(default="auto", alias="format"), principal=Depends(export)):
         row = required_row(request, access_id)
         if row["status"] in ("revoked", "provisioning", "failed"):
             raise APIError(409, "profile_unavailable_for_state")
-        uri = safe_call(lambda: backend(request, row).profile(row["backend_username"]))
-        return {"access_id": row["id"], "service_id": row["service_id"], "format": "uri", "uri": uri, "contains_secret": True}
+        selected = backend(request, row)
+        if row["service_id"] == "hysteria" and profile_format == "auto":
+            content = safe_call(lambda: selected.profile_json(row["backend_username"]))
+            return {"access_id": row["id"], "service_id": row["service_id"], "format": "singbox-json", "uri": None, "content": content, "contains_secret": True}
+        uri = safe_call(lambda: selected.profile(row["backend_username"]))
+        return {"access_id": row["id"], "service_id": row["service_id"], "format": "uri", "uri": uri, "content": None, "contains_secret": True}
 
     @application.get("/v1/accesses/{access_id}/usage", tags=["accesses"], response_model=UsageResponse)
     def usage(request: Request, access_id: UUID, principal=Depends(read)):

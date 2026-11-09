@@ -291,11 +291,35 @@ class AccountingTests(unittest.TestCase):
         self.assertNotIn("account_creation_date", collection.documents[USER])
         self.assertEqual(collection.documents[USER]["status"], "On-hold")
 
-    def test_present_null_activation_is_not_silently_rewritten(self):
+    def test_null_and_empty_activation_start_once_only_after_observed_activity(self):
+        for created in (None, ""):
+            with self.subTest(created=created):
+                collection = MemoryCollection(account(account_creation_date=created))
+                apply_snapshot(collection, "epoch-one", {}, {}, today=TODAY)
+                self.assertEqual(collection.documents[USER]["account_creation_date"], created)
+                self.assertEqual(collection.documents[USER]["status"], "On-hold")
+                apply_snapshot(collection, "epoch-one", {USER: {"tx": 1, "rx": 0}}, {USER: 2}, today=TODAY)
+                self.assertEqual(collection.documents[USER]["account_creation_date"], "2026-11-09")
+                apply_snapshot(collection, "epoch-one", {USER: {"tx": 1, "rx": 0}}, {},
+                               today=TODAY + dt.timedelta(days=1))
+                self.assertEqual(collection.documents[USER]["account_creation_date"], "2026-11-09")
+                self.assertEqual(collection.documents[USER]["upload_bytes"], 1)
+
+    def test_concurrent_activation_date_is_not_overwritten_by_first_traffic(self):
         collection = MemoryCollection(account(account_creation_date=None))
-        apply_snapshot(collection, "epoch-one", {USER: {"tx": 1, "rx": 0}}, {USER: 2}, today=TODAY)
-        self.assertIsNone(collection.documents[USER]["account_creation_date"])
-        self.assertEqual(collection.documents[USER]["status"], "Online")
+        def activate(database):
+            database.documents[USER]["account_creation_date"] = "2026-10-31"
+        collection.before_update = activate
+        apply_snapshot(collection, "epoch-one", {USER: {"tx": 3, "rx": 5}}, {}, today=TODAY)
+        self.assertEqual(collection.documents[USER]["account_creation_date"], "2026-10-31")
+        self.assertEqual(collection.documents[USER]["upload_bytes"], 3)
+        self.assertEqual(collection.documents[USER]["download_bytes"], 5)
+
+    def test_nonempty_invalid_activation_is_not_rewritten_by_accounting(self):
+        collection = MemoryCollection(account(expiration_days=7, account_creation_date="invalid-date"))
+        apply_snapshot(collection, "epoch-one", {USER: {"tx": 3, "rx": 5}}, {}, today=TODAY)
+        self.assertEqual(collection.documents[USER]["account_creation_date"], "invalid-date")
+        self.assertEqual(successful_auth(collection), {"ok": False})
 
     def test_account_policy_and_password_survive_accounting(self):
         original = account(blocked=True, max_download_bytes=10000, expiration_days=14, max_sessions=1,
