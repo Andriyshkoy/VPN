@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from serve_native_fixture import local_mongo_uri, native_engine_supported, write_ready
+from serve_native_fixture import local_mongo_uri, native_engine_close_supported, native_engine_supported, write_ready
 
 
 class NativeFixtureSafetyTests(unittest.TestCase):
@@ -61,6 +61,22 @@ class NativeFixtureSafetyTests(unittest.TestCase):
                 self.assertIs(native_engine_supported(), True)
                 write_ready(ready, second)
                 self.assertIs(native_engine_supported(), False)
+                self.assertEqual([call.args[0] for call in check.call_args_list], [first, second])
+
+    def test_close_support_requires_the_actual_current_engine_ready_endpoint(self):
+        with patch.dict(os.environ, {}, clear=True), patch("serve_native_fixture.engine_close_caps") as check:
+            self.assertIs(native_engine_close_supported(), False)
+            check.assert_not_called()
+            with tempfile.TemporaryDirectory() as directory:
+                ready = Path(directory) / "engine.json"
+                os.environ["HYS_NATIVE_ENGINE_READY"] = str(ready)
+                first = {"stats_url": "http://127.0.0.1:12345", "stats_secret": "first-public-fixture-secret"}
+                second = {"stats_url": "http://127.0.0.1:23456", "stats_secret": "second-public-fixture-secret"}
+                check.side_effect = (True, False)
+                write_ready(ready, first)
+                self.assertIs(native_engine_close_supported(), True)
+                write_ready(ready, second)
+                self.assertIs(native_engine_close_supported(), False)
                 self.assertEqual([call.args[0] for call in check.call_args_list], [first, second])
 
 

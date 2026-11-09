@@ -17,7 +17,7 @@ from urllib.parse import parse_qsl, urlsplit
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from hysteria_runtime.runtime import BoundedServer, engine_caps, make_handler
+from hysteria_runtime.runtime import BoundedServer, engine_caps, engine_close_caps, make_handler
 
 
 PASSWORD = "fixture-password"
@@ -76,8 +76,8 @@ def interrupted(_signal, _frame):
     raise KeyboardInterrupt
 
 
-def native_engine_supported():
-    """Read the native harness's current statistics endpoint on every auth."""
+def native_engine_capability(check):
+    """Read the current protected native engine for each requested capability."""
     path = os.environ.get("HYS_NATIVE_ENGINE_READY")
     if not path:
         return False
@@ -89,9 +89,19 @@ def native_engine_supported():
         config = json.loads(raw)
         if not isinstance(config, dict) or set(config) != {"stats_url", "stats_secret"}:
             return False
-        return engine_caps(config) is True
+        return check(config) is True
     except (OSError, ValueError, TypeError):
         return False
+
+
+def native_engine_supported():
+    return native_engine_capability(engine_caps)
+
+
+def native_engine_close_supported():
+    # Fixture accounts retain their finite traffic quota. Use the same genuine
+    # protected engine endpoint instead of bypassing finite-policy enforcement.
+    return native_engine_capability(engine_close_caps)
 
 
 def main(argv=None):
@@ -133,7 +143,8 @@ def main(argv=None):
         database.users.insert_many(rows, ordered=True)
         server = BoundedServer(("127.0.0.1", arguments.port),
                                make_handler(database.users, lambda: database.command("ping"),
-                                            engine_supported=native_engine_supported))
+                                            engine_supported=native_engine_supported,
+                                            close_supported=native_engine_close_supported))
         metadata = {"auth_url": "http://127.0.0.1:" + str(server.server_port) + "/auth",
                     "users": {label: {"auth": name + ":" + PASSWORD, "id": name}
                               for label, name in USERS.items()},
