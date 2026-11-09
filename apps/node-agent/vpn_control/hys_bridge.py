@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import re
 import secrets
 import socket
 import socketserver
@@ -21,12 +22,72 @@ import struct
 import subprocess
 import threading
 import time
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 import urllib.request
 import urllib.error
 
 from .common import BackendAccess, BackendConflict, BackendError, BackendNotFound, BackendUnavailable
+from .config import private_json
 from .hysteria import MAX_MESSAGE, USERNAME
+
+
+def load_mongo_configuration(credentials_file=None):
+    """Load a loopback-only Mongo connection without exposing its credentials.
+
+    Existing NL installations retain the original unauthenticated local defaults.
+    A fresh node can supply an authenticated URI through a private credential file.
+    """
+    if credentials_file is None:
+        return {"uri": "mongodb://127.0.0.1:27017/", "database": "blitz_panel", "collection": "users"}
+    try:
+        value = private_json(Path(credentials_file))
+        if set(value) != {"uri", "database", "collection"}:
+            raise ValueError
+        for key in ("database", "collection"):
+            if not isinstance(value[key], str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,62}", value[key]):
+                raise ValueError
+        uri = value["uri"]
+        if (not isinstance(uri, str) or len(uri) > 8192
+                or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in uri)
+                or re.search(r"%(?![0-9a-fA-F]{2})", uri)):
+            raise ValueError
+        location = urlsplit(uri)
+        if (location.scheme != "mongodb" or location.hostname not in {"127.0.0.1", "::1", "localhost"}
+                or location.port is None or not 1 <= location.port <= 65535
+                or "," in location.netloc or location.fragment
+                or location.path not in {"", "/", "/" + value["database"]}
+                or (location.username is None) != (location.password is None)
+                or location.username == "" or location.password == ""):
+            raise ValueError
+        pairs = parse_qsl(location.query, keep_blank_values=True, strict_parsing=True)
+        options = dict(pairs)
+        if (len(options) != len(pairs) or set(options) - {"authSource", "authMechanism"}
+                or options.get("authSource", value["database"]) not in {"admin", value["database"]}
+                or options.get("authMechanism", "SCRAM-SHA-256") != "SCRAM-SHA-256"):
+            raise ValueError
+        return value
+    except (OSError, ValueError, TypeError, KeyError):
+        raise BackendUnavailable("hysteria_mongo_credentials_invalid") from None
+
+
+def connect_mongo(credentials_file=None, *, client_factory=None):
+    """Select the configured collection; all driver/setup failures stay secret-free."""
+    configuration = load_mongo_configuration(credentials_file)
+    client = None
+    try:
+        if client_factory is None:
+            import pymongo
+            client_factory = pymongo.MongoClient
+        client = client_factory(configuration["uri"], serverSelectionTimeoutMS=3000,
+                                connectTimeoutMS=3000, socketTimeoutMS=3000)
+        return client, client[configuration["database"]][configuration["collection"]]
+    except Exception:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+        raise BackendUnavailable("hysteria_mongo_connection_unavailable") from None
 
 
 def validate_username(username):
@@ -382,6 +443,7 @@ def main():
     parser.add_argument("--tls-sni", default="github.com")
     parser.add_argument("--profile-label", default="Hysteria")
     parser.add_argument("--certificate-file", help="Readable public TLS certificate, optionally delivered with LoadCredential")
+    parser.add_argument("--mongo-credentials-file", help="Private JSON connection settings for an authenticated local MongoDB")
     args = parser.parse_args()
     if os.geteuid() != 0:
         raise SystemExit("bridge_requires_root")
@@ -405,10 +467,11 @@ def main():
             else:
                 raise SystemExit("bridge_socket_already_active")
         path.unlink()
-    import pymongo  # Only the privileged helper's existing venv needs this dependency.
-    client = pymongo.MongoClient("mongodb://127.0.0.1:27017/", serverSelectionTimeoutMS=3000,
-                                 connectTimeoutMS=3000, socketTimeoutMS=3000)
-    backend = LegacyHysteria(client.blitz_panel.users, args.server_config,
+    try:
+        client, collection = connect_mongo(args.mongo_credentials_file)
+    except BackendUnavailable as error:
+        raise SystemExit(error.code) from None
+    backend = LegacyHysteria(collection, args.server_config,
                              public_host=args.public_host, public_port=args.public_port, tls_sni=args.tls_sni,
                              profile_label=args.profile_label, certificate_file=args.certificate_file)
     try:
