@@ -46,6 +46,8 @@ class AdminPermission(StrEnum):
     FINANCE_READ = "finance:read"
     CONFIGS_READ = "configs:read"
     CONFIGS_WRITE = "configs:write"
+    CONFIGS_PROVISION = "configs:provision"
+    CONFIGS_EXPORT = "configs:export"
     SERVERS_READ = "servers:read"
     SERVERS_WRITE = "servers:write"
     METRICS_READ = "metrics:read"
@@ -86,6 +88,8 @@ ROLE_PERMISSIONS: dict[AdminRole, frozenset[AdminPermission]] = {
             AdminPermission.USERS_READ,
             AdminPermission.CONFIGS_READ,
             AdminPermission.CONFIGS_WRITE,
+            AdminPermission.CONFIGS_PROVISION,
+            AdminPermission.CONFIGS_EXPORT,
             AdminPermission.SERVERS_READ,
             AdminPermission.SERVERS_WRITE,
             AdminPermission.METRICS_READ,

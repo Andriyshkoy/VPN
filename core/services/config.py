@@ -4,7 +4,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 from core.config import settings
-from core.exceptions import InvalidOperationError
+from core.exceptions import APIConfigurationError, InvalidOperationError
 
 from ._config_shared import _ConfigContext as _ConfigContext  # noqa: F401
 from .api_gateway import APIGateway
@@ -12,6 +12,8 @@ from .config_executor import ConfigLeasedExecutorMixin
 from .config_provisioning import ConfigProvisioningMixin
 from .config_queries import ConfigQueriesEntitlementsMixin
 from .models import Config as Config  # noqa: F401
+from .node_factory import node_gateway_options
+from .node_gateway import NodeAgentGateway
 
 
 class ConfigService(
@@ -67,6 +69,40 @@ class ConfigService(
         """Resolve the legacy patch point each time a Manager is contacted."""
 
         return APIGateway(ip, port, api_key)
+
+    @staticmethod
+    def _create_node_gateway(ip: str, port: int, api_key: str, *, node_id: str):
+        return NodeAgentGateway(
+            ip,
+            port,
+            api_key,
+            node_id=node_id,
+            **node_gateway_options(node_id, ip, port, api_key),
+        )
+
+    @staticmethod
+    async def _node_context_fields(repos, cfg) -> dict:
+        backend = getattr(cfg.server, "backend_type", "openvpn-manager")
+        if backend == "openvpn-manager":
+            return {}
+        if backend != "node-agent":
+            raise APIConfigurationError("Unsupported VPN backend")
+        binding = await repos["vpn_access_bindings"].get_for_config(cfg.id)
+        if (
+            binding is None
+            or binding.node_id != cfg.server.node_id
+            or binding.service_id != cfg.service_id
+            or binding.policy != cfg.access_policy
+        ):
+            raise APIConfigurationError("Node binding identity or policy mismatch")
+        return {
+            "backend_type": backend,
+            "node_id": binding.node_id,
+            "service_id": binding.service_id,
+            "access_policy": dict(binding.policy),
+            "remote_access_id": binding.remote_access_id,
+            "provision_operation_id": binding.provision_operation_id,
+        }
 
     def _now(self) -> datetime:
         return self._as_utc(self._clock())

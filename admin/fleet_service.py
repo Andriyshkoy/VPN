@@ -33,6 +33,9 @@ from core.services.fleet_placement import (
     managed_config_condition,
     manager_readiness_decision,
 )
+from core.services.node_factory import node_gateway_options
+from core.services.node_gateway import NodeAgentGateway
+from core.services.server import ServerService
 from core.services.vpn_drift import VPNDriftService
 
 from .fleet_schemas import (
@@ -64,6 +67,9 @@ class _ManagerTarget:
     port: int
     api_key: str
     manager_instance_id: str | None
+    backend_type: str = "openvpn-manager"
+    node_id: str | None = None
+    endpoint_revision: int = 1
 
 
 def _utcnow() -> datetime:
@@ -119,9 +125,11 @@ class AdminFleetService:
         self,
         *,
         gateway_factory: Callable[..., APIGateway] | None = None,
+        node_gateway_factory: Callable[..., NodeAgentGateway] | None = None,
         drift_service: VPNDriftService | None = None,
     ) -> None:
         self._gateway_factory = gateway_factory or APIGateway
+        self._node_gateway_factory = node_gateway_factory or NodeAgentGateway
         self._drift_service = drift_service or VPNDriftService(
             uow, gateway_factory=self._gateway_factory
         )
@@ -371,6 +379,9 @@ class AdminFleetService:
                     port=row.port,
                     api_key=row.api_key,
                     manager_instance_id=row.manager_instance_id,
+                    backend_type=getattr(row, "backend_type", "openvpn-manager"),
+                    node_id=getattr(row, "node_id", None),
+                    endpoint_revision=getattr(row, "endpoint_revision", 1),
                 )
                 for row in rows
             ]
@@ -525,7 +536,7 @@ class AdminFleetService:
         supplied = {
             key: value
             for key, value in supplied.items()
-            if value is not None or key in {"provider", "public_endpoint"}
+            if value is not None or key in {"provider", "public_endpoint", "node_id"}
         }
         if clear_max_configs:
             supplied["max_configs"] = None
@@ -537,7 +548,14 @@ class AdminFleetService:
                 if server is None:
                     raise ServerNotFoundError(f"Server {server_id} not found")
                 self._check_version(server, expected_version)
-                endpoint_fields = {"ip", "port", "api_key"}
+                ServerService.validate_backend_identity(
+                    supplied.get(
+                        "backend_type",
+                        getattr(server, "backend_type", "openvpn-manager"),
+                    ),
+                    supplied.get("node_id", getattr(server, "node_id", None)),
+                )
+                endpoint_fields = {"ip", "port", "api_key", "backend_type", "node_id"}
                 endpoint_changed = any(
                     field in supplied and supplied[field] != getattr(server, field)
                     for field in endpoint_fields
@@ -555,6 +573,9 @@ class AdminFleetService:
                     supplied["lifecycle_state"] = ServerLifecycleState.DISABLED.value
                     supplied["accepts_new_configs"] = False
                     supplied["manager_instance_id"] = None
+                    supplied["endpoint_revision"] = (
+                        getattr(server, "endpoint_revision", 1) + 1
+                    )
                 final_max = supplied.get("max_configs", server.max_configs)
                 final_reserve = supplied.get(
                     "capacity_reserve", server.capacity_reserve
@@ -748,6 +769,9 @@ class AdminFleetService:
                     port=server.port,
                     api_key=server.api_key,
                     manager_instance_id=server.manager_instance_id,
+                    backend_type=getattr(server, "backend_type", "openvpn-manager"),
+                    node_id=getattr(server, "node_id", None),
+                    endpoint_revision=getattr(server, "endpoint_revision", 1),
                 )
                 action_id = action.action_id
         except (ServerNotFoundError, InvalidOperationError) as exc:
@@ -763,6 +787,13 @@ class AdminFleetService:
             raise
 
         try:
+            if target.backend_type == "node-agent" and canonical in {
+                "refresh_inventory",
+                "audit_drift",
+            }:
+                raise InvalidOperationError(
+                    "OpenVPN inventory and drift actions are unsupported for node-agent"
+                )
             if canonical == "refresh_status":
                 result = await self._refresh_status(target)
             elif canonical == "refresh_inventory":
@@ -823,6 +854,10 @@ class AdminFleetService:
                 raise ServerNotFoundError(f"Server {target.id} not found")
             status_record = None
             instance_mismatch = False
+            if target.backend_type == "node-agent":
+                instance_mismatch = target.endpoint_revision != getattr(
+                    server, "endpoint_revision", 1
+                )
             if canonical in {"refresh_status", "refresh_inventory"}:
                 status_record = VPNServerStatus(
                     server_id=target.id,
@@ -866,6 +901,39 @@ class AdminFleetService:
             return await self._action_payload(session, action)
 
     async def _refresh_status(self, target: _ManagerTarget) -> dict[str, Any]:
+        if target.backend_type == "node-agent":
+            async with self._node_gateway_factory(
+                target.ip,
+                target.port,
+                target.api_key,
+                node_id=target.node_id,
+                **node_gateway_options(
+                    target.node_id, target.ip, target.port, target.api_key
+                ),
+            ) as gateway:
+                readiness = await gateway.ready()
+            snapshot = {
+                "backend_type": "node-agent",
+                "node_id": readiness.node_id,
+                "endpoint_revision": target.endpoint_revision,
+                "readiness": {
+                    "ready": readiness.ready,
+                    "database_ready": readiness.database_ready,
+                    "scope": "control_plane",
+                },
+                "services": dict(readiness.services),
+                "data_plane": {"status": "unknown", "verified": False},
+            }
+            return {
+                "snapshot": snapshot,
+                "result": {
+                    "backend_type": "node-agent",
+                    "node_id": readiness.node_id,
+                    "manager_ready": readiness.ready,
+                    "data_plane_status": "unknown",
+                    "data_plane_verified": False,
+                },
+            }
         async with self._gateway_factory(
             target.ip, target.port, target.api_key
         ) as gateway:
@@ -888,6 +956,10 @@ class AdminFleetService:
         }
 
     async def _refresh_inventory(self, target: _ManagerTarget) -> dict[str, Any]:
+        if target.backend_type == "node-agent":
+            raise InvalidOperationError(
+                "OpenVPN inventory is unsupported for node-agent"
+            )
         async with self._gateway_factory(
             target.ip, target.port, target.api_key
         ) as gateway:
@@ -1263,7 +1335,13 @@ class AdminFleetService:
             raise InvalidOperationError(
                 "Manager instance identity must match before activation"
             )
+        if decision.reason in {"node_identity_mismatch", "node_endpoint_mismatch"}:
+            raise InvalidOperationError("Node identity must match before activation")
         if not decision.allowed:
+            if getattr(server, "backend_type", "openvpn-manager") == "node-agent":
+                raise InvalidOperationError(
+                    "Node control plane must be ready before activation"
+                )
             raise InvalidOperationError(
                 "Manager and OpenVPN data plane must be healthy before activation"
             )
@@ -1340,6 +1418,14 @@ class AdminFleetService:
             "ip": server.ip,
             "port": server.port,
             "host": server.host,
+            "backend_type": getattr(server, "backend_type", "openvpn-manager"),
+            "node_id": getattr(server, "node_id", None),
+            "endpoint_revision": getattr(server, "endpoint_revision", 1),
+            "health_scope": (
+                "control_plane"
+                if getattr(server, "backend_type", "openvpn-manager") == "node-agent"
+                else "manager_and_openvpn"
+            ),
             "location": server.location,
             "provider": server.provider,
             "public_endpoint": server.public_endpoint,
@@ -1418,10 +1504,27 @@ class AdminFleetService:
         )
         return {
             "server_id": server.id,
+            "backend_type": getattr(server, "backend_type", "openvpn-manager"),
+            "node_id": getattr(server, "node_id", None),
+            "health_scope": (
+                "control_plane"
+                if getattr(server, "backend_type", "openvpn-manager") == "node-agent"
+                else "manager_and_openvpn"
+            ),
             "status": self._health(server, latest),
             "reachable": bool(latest and latest.success),
             "manager_ready": readiness.get("ready", False),
-            "openvpn_ready": data_plane.get("status") == "up",
+            "openvpn_ready": (
+                None
+                if getattr(server, "backend_type", "openvpn-manager") == "node-agent"
+                else data_plane.get("status") == "up"
+            ),
+            "data_plane_status": data_plane.get("status", "unknown"),
+            "data_plane_verified": (
+                False
+                if getattr(server, "backend_type", "openvpn-manager") == "node-agent"
+                else data_plane.get("status") == "up"
+            ),
             "online_sessions": data_plane.get("online_sessions"),
             "bytes_received": data_plane.get("bytes_received"),
             "bytes_sent": data_plane.get("bytes_sent"),
@@ -1466,6 +1569,11 @@ class AdminFleetService:
             _utcnow() - collected_at.astimezone(timezone.utc)
         ).total_seconds() > settings.admin_fleet_status_stale_seconds:
             return "stale"
+        if getattr(server, "backend_type", "openvpn-manager") == "node-agent":
+            decision = manager_readiness_decision(server, latest, now=_utcnow())
+            if decision.reason in {"node_identity_mismatch", "node_endpoint_mismatch"}:
+                return "instance_mismatch"
+            return "healthy" if decision.allowed else "unhealthy"
         if (
             latest.manager_instance_id
             and server.manager_instance_id

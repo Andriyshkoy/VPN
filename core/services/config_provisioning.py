@@ -17,6 +17,7 @@ from .fleet_placement import (
     placement_decision,
 )
 from .models import Config
+from .node_policy import normalize_node_policy
 
 
 class ConfigProvisioningMixin:
@@ -30,19 +31,55 @@ class ConfigProvisioningMixin:
         name: str,
         display_name: str,
         use_password: bool = False,
+        service_id: str | None = None,
+        access_policy: dict | None = None,
+        operation_id: str | None = None,
     ) -> Config:
-        operation_id = str(uuid.uuid4())
-        async with self._uow() as repos:
-            context = await self.prepare_config(
-                repos=repos,
-                operation_id=operation_id,
-                server_id=server_id,
-                owner_id=owner_id,
-                name=name,
-                display_name=display_name,
-                use_password=use_password,
+        try:
+            operation_id = (
+                str(uuid.UUID(operation_id)) if operation_id else str(uuid.uuid4())
             )
-        return await self.execute_prepared(context)
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise InvalidOperationError("Invalid VPN operation ID") from exc
+        request = None
+        if service_id is not None:
+            request = {
+                "server_id": server_id,
+                "owner_id": owner_id,
+                "name": name,
+                "display_name": self._validate_display_name(display_name),
+                "service_id": service_id,
+                "access_policy": normalize_node_policy(service_id, access_policy),
+            }
+        async with self._uow() as repos:
+            previous = await repos["vpn_operations"].get(operation_id=operation_id)
+            if previous is not None:
+                if (
+                    request is None
+                    or previous.kind != VPNOperationKind.PROVISION.value
+                    or previous.payload.get("node_request") != request
+                    or previous.config_id is None
+                ):
+                    raise InvalidOperationError("Provision operation ID conflicts")
+                config_id = previous.config_id
+            else:
+                context = await self.prepare_config(
+                    repos=repos,
+                    operation_id=operation_id,
+                    server_id=server_id,
+                    owner_id=owner_id,
+                    name=name,
+                    display_name=display_name,
+                    use_password=use_password,
+                    service_id=service_id,
+                    access_policy=access_policy,
+                )
+                config_id = context.config_id
+        await self._execute(operation_id)
+        result = await self.get(config_id)
+        if result is None:
+            raise ConfigNotFoundError("Provisioned configuration no longer exists")
+        return result
 
     async def prepare_config(
         self,
@@ -55,6 +92,8 @@ class ConfigProvisioningMixin:
         display_name: str,
         use_password: bool = False,
         operation_payload: dict | None = None,
+        service_id: str | None = None,
+        access_policy: dict | None = None,
     ) -> _ConfigContext:
         """Stage provision in the caller's transaction without doing network I/O."""
 
@@ -63,7 +102,7 @@ class ConfigProvisioningMixin:
         if not isinstance(name, str) or not name or len(name) > 128:
             raise InvalidOperationError("Invalid internal configuration name")
         try:
-            uuid.UUID(operation_id)
+            operation_id = str(uuid.UUID(operation_id))
         except (AttributeError, TypeError, ValueError) as exc:
             raise InvalidOperationError("Invalid VPN operation ID") from exc
 
@@ -85,6 +124,26 @@ class ConfigProvisioningMixin:
 
         payload = dict(operation_payload or {})
         payload["use_password"] = bool(use_password)
+        backend_type = getattr(server, "backend_type", "openvpn-manager")
+        policy = None
+        if backend_type == "node-agent":
+            if use_password:
+                raise InvalidOperationError(
+                    "Node services do not use OpenVPN passwords"
+                )
+            if not getattr(server, "node_id", None):
+                raise InvalidOperationError("Node identity is required")
+            policy = normalize_node_policy(service_id, access_policy)
+            payload["node_request"] = {
+                "server_id": server_id,
+                "owner_id": owner_id,
+                "name": name,
+                "display_name": display_name,
+                "service_id": service_id,
+                "access_policy": policy,
+            }
+        elif service_id is not None or access_policy is not None:
+            raise InvalidOperationError("Legacy Manager does not accept node policy")
         cfg = await repos["configs"].create(
             server_id,
             owner_id,
@@ -93,7 +152,18 @@ class ConfigProvisioningMixin:
             desired_state=VPNState.ACTIVE.value,
             actual_state=VPNState.PROVISIONING.value,
             operation_id=operation_id,
+            service_id=service_id,
+            access_policy=policy,
         )
+        if backend_type == "node-agent":
+            await repos["vpn_access_bindings"].create(
+                config_id=cfg.id,
+                server_id=server.id,
+                node_id=server.node_id,
+                service_id=service_id,
+                provision_operation_id=operation_id,
+                policy=policy,
+            )
         await repos["vpn_operations"].create(
             operation_id=operation_id,
             config_id=cfg.id,
@@ -115,6 +185,11 @@ class ConfigProvisioningMixin:
             operation_id=operation_id,
             kind=VPNOperationKind.PROVISION.value,
             payload=payload,
+            backend_type=backend_type,
+            node_id=getattr(server, "node_id", None),
+            service_id=service_id,
+            access_policy=policy,
+            provision_operation_id=operation_id if policy is not None else None,
         )
 
     async def execute_prepared(self, context: _ConfigContext) -> Config:

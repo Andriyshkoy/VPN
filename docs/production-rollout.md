@@ -163,7 +163,7 @@ docker compose --env-file .env --env-file release.env \
   --entrypoint alembic migrations check
 ```
 
-The sole current revision must be `f4b8c1d2e3a4`. Before starting any
+The sole current revision must be `g5c9d2e3f4a5`. Before starting any
 application process, reconcile `user.balance` against `sum(ledger_entry.amount)`,
 verify every user has one unique 32-character referral code, and confirm that
 the admin/fleet migrations did not change user, configuration, or aggregate
@@ -212,7 +212,7 @@ environment approval; no image is rebuilt or uploaded at this stage.
 On the host, `promote_full_production.sh` acquires the same deployment lock and
 requires both `current-release` and `current-admin-hub` to equal the requested
 full SHA. It also requires the immutable staged manifest to remain fail-closed,
-the database to be at `f4b8c1d2e3a4`, all staged images and running canary
+the database to be at `g5c9d2e3f4a5`, all staged images and running canary
 containers to match their registry digests and revision labels, and both
 Manager and Telegram read-only smokes to pass.
 
@@ -247,6 +247,15 @@ promotion. Existing queued notifications remain paused; due idempotent billing
 periods can run as soon as the worker and scheduler are enabled.
 
 ## Rollback
+
+After node-agent migration `g5c9d2e3f4a5`, old application code does not understand
+`backend_type` or durable node bindings. A code-only rollback must keep old
+provisioners, reconciler workers and schedulers stopped, or explicitly make
+node-agent servers unavailable to placement first. Otherwise legacy code can
+mistake a node-agent endpoint for an OpenVPN Manager. Retain binding history;
+the migration refuses a database downgrade while any binding exists. The
+historical `f4b8c1d2e3a4` compatibility floor below still applies to old OpenVPN
+application images and is not permission to discard the newer node identities.
 
 Prefer a code-only rollback while retaining schema head. After Telegram action
 schema revision `f4b8c1d2e3a4`, keep the admin control plane stopped unless its image

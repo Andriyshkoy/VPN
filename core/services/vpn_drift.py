@@ -217,6 +217,10 @@ class VPNDriftService:
             server = await repos["servers"].get(id=server_id)
             if server is None:
                 raise ServerNotFoundError(f"Server {server_id} not found")
+            if getattr(server, "backend_type", "openvpn-manager") == "node-agent":
+                raise InvalidOperationError(
+                    "OpenVPN inventory and drift repair are unsupported for node-agent"
+                )
             rows = await repos["configs"].list(server_id=server_id)
             target = _ServerTarget(
                 id=server.id,

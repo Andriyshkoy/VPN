@@ -1,66 +1,124 @@
 # Hub integration with Hysteria and REALITY
 
-This is a design for the next additive integration. The imported node-agent does
-not change Hub schemas, financial policy, bot handlers or the OpenVPN adapter.
+The Hub now supports an explicit `node-agent` backend alongside the unchanged
+`openvpn-manager` backend. This integration adds technical access management;
+customer products, prices, bot menus and payment policy are separate work.
 
-## Existing extension points
+## Persistent state
 
-| Location | Required change |
-| --- | --- |
-| `core/services/api_gateway.py` | Keep the OpenVPN `X-API-Key`, name and `.ovpn` contract; add a separate `NodeAgentGateway` for Bearer/access UUID/URI semantics |
-| `core/services/config.py::_create_gateway` | Choose the backend from explicit server metadata, preserving legacy callers and patch points |
-| `core/services/_config_shared.py::_ConfigContext` | Carry backend type, service ID, node ID and durable remote access identity |
-| `core/services/config_executor.py::_execute` | Persist the returned node access ID under the existing lease/fencing token |
-| `core/services/config_provisioning.py::prepare_config` | Persist immutable service and technical policy before any network request |
-| `core/services/config_queries.py::download_config` | Return a typed URI export for the new backend while retaining `.ovpn` for legacy configs |
-| `core/services/fleet_placement.py` | Add node-agent control-plane health without inventing OpenVPN PKI or client data-plane health |
+Migration `g5c9d2e3f4a5` follows the audited production revision
+`f4b8c1d2e3a4`. Existing servers default to `openvpn-manager`; existing configs,
+balances and ledger rows are retained. New server fields are `backend_type`,
+`node_id` and `endpoint_revision`. A changed endpoint, credential, backend or
+node identity increments the endpoint revision, invalidating old readiness.
 
-## Data and operation contract
+A new config carries `service_id` (`hysteria` or `vless-reality`) and a
+JSON-compatible technical policy. Hysteria accepts `activation_days`; VLESS
+accepts an aware `expires_at`. Quotas count bytes; zero means unlimited. The
+normalized creation policy is persisted before network calls and never
+recalculated from the retry time.
 
-Use an additive migration. `server.backend_type` defaults to `openvpn-manager`
-for existing rows. New node servers carry explicit node ID and API version;
-new access intents carry `service_id` (`hysteria` or `vless-reality`).
+`vpn_access_binding` retains node/service identity, the original provision
+operation UUID, policy, returned remote access UUID and observed state. Revoke
+keeps this mapping as a tombstone after the old `vpn_config` row is deleted.
+The downgrade refuses to discard nonempty binding history.
 
-Persist a `vpn_access_binding` or equivalent durable mapping from the Hub config
-to the returned node `access.id`, unique per server/remote ID. Preserve this
-mapping as a tombstone after revoke: the current executor deletes `vpn_config`
-on successful revoke, and discarding the remote identity would obstruct later
-reconciliation and restore.
+## Operations and recovery
 
-Use the existing persisted Hub operation UUID as `Idempotency-Key`. Save the
-exact method, route and technical policy in `vpn_operation.payload`; retries
-must not recalculate an expiry from the current time or select another node.
-`owner_ref=hub:config:<id>` helps reconciliation but is not a replacement for
-`remote_access_id` or tenant authorization.
+`ConfigService` preserves the existing durable operations, leases and fencing.
+Its node path uses a separate `NodeAgentGateway`; legacy OpenVPN requests and
+patch points remain unchanged. The Hub operation UUID is the node
+`Idempotency-Key`. `owner_ref=hub:config:<id>` supports reconciliation without
+embedding Telegram identities.
 
-The current executor ignores the result of `create_client`. The new adapter
-must persist the returned access ID atomically with operation completion under
-the fencing token. A worker that loses its lease cannot commit a binding.
-After timeout, replay the same operation and reconcile metadata; never issue a
-second identity merely because a profile download failed.
+After a timeout or a crash before completion, the worker replays the original
+provision key and body to recover the same remote UUID. The UUID is attached
+atomically with operation completion under the current fencing token. A stale
+worker cannot overwrite the binding. Cleanup after an exhausted ambiguous
+provision also recovers its original identity before revoking it.
 
-The old ambiguous-create fallback downloads an `.ovpn` file. That cannot be
-copied literally: the new profile endpoint can return `409` for suspended,
-limited or expired accesses. Provisioning confirmation and secret export are
-separate operations. Keep URI secrets out of operation payloads, errors, fleet
-snapshots and normal list responses.
+Node authentication/configuration failures remain retryable administrative
+problems. A later rejection after an ambiguous attempt is not treated as proof
+that no remote access existed. Unknown access bindings are never adopted or
+deleted automatically.
 
-Node states `expired` and `limited` need an explicit observed state/reason;
-they must not silently become `active` or financial suspension. Hysteria
-`activation_days` and VLESS `expires_at` have different precision. Subscription
-periods remain central product data. Delayed counters marked
-`billing_authoritative=false` must not drive new byte-based money deductions.
+A node provision only completes when the control plane is verified and no
+operation is pending. `failed`, `provisioning` and already-revoked provision
+results remain unresolved. A real `expired` or `limited` access retains that
+observed state; it does not become active or financial suspension. Technical
+operation completion alone is not evidence for charging or client traffic.
 
-## Acceptance before enabling the products
+## Operator API
 
-- Existing OpenVPN rows retain the previous adapter and behaviour.
-- Timeout after remote create and crash before local binding both recover one
-  remote UUID, without duplicate access or monetary mutation.
-- Stale leases cannot overwrite bindings; suspend/resume preserve the profile.
-- Revoke keeps a durable binding tombstone and denies fresh connections.
-- Node `/readyz` is presented as control-plane readiness, not working user traffic.
-- Additive migrations on a PostgreSQL copy preserve configs, balances and ledger.
+New permissions `configs:provision` and `configs:export` belong to OWNER and
+OPS. Ordinary config read/write roles do not gain secret export or technical
+issuance.
 
-Build on the existing lifecycle, operation lease, gateway and fleet-placement
-test suites. Prices, renewal rules, payment channels and activation of billing
-remain explicit product decisions; importing the node agent does not set them.
+- `POST /api/admin/v1/configs` accepts a UUID `Idempotency-Key`, owner/server IDs,
+  internal/display names, service, policy and an audit reason. It invokes the
+  technical ConfigService directly without BillingService or ledger mutation.
+  Completed operations return 201, queued operations 202, terminal failures 502.
+- `GET /api/admin/v1/configs/{id}/profile` explicitly exports a typed URI with
+  `Cache-Control: no-store`. Audit and ordinary metadata contain no URI.
+- Existing suspend/unsuspend/revoke actions dispatch to the selected backend.
+  `download_config()` remains the legacy OpenVPN bytes API; a node access must
+  use explicit URI export.
+
+Existing maintenance/provisioning gates still apply. This endpoint is not a
+customer purchase flow. Production autocharges and payment/provisioning gates
+must retain their reviewed values. Accept creation on isolated staging with a
+test user and zero-cost test settings, without polling the real Telegram bot.
+The historical `promote_full_production.sh` explicitly enables billing and
+payments in its own promotion scenario; do not run it as an incidental IaC
+update while the product remains paused.
+
+Legacy `ServerService.list(available_only=True)` remains OpenVPN-only; future
+node callers opt in with `backend_type="node-agent"`. Current bot menus and
+`.ovpn` download flows therefore cannot accidentally select a node server.
+
+## Management transport
+
+Remote nodes default to verified HTTPS. Dedicated optional settings
+`NODE_AGENT_CA_CERT_PATH`, `NODE_AGENT_CLIENT_CERT_PATH` and
+`NODE_AGENT_CLIENT_KEY_PATH` configure private trust and client identity;
+client certificate/key must be configured together. They do not reuse the
+OpenVPN Manager TLS settings.
+
+The current deployment can select the encrypted WireGuard management network
+through `NODE_AGENT_ENDPOINTS_FILE`. The private read-only JSON catalog has
+this shape; substitute a real opaque token outside Git:
+
+```json
+{"nl-1":{"base_url":"http://10.77.78.2:18010","token":"<operator token>","transport":"wireguard-http"}}
+```
+
+The file must be regular, not a symlink, mode 0400 or 0600, owned by root or the
+reader. Hub containers run as UID 10001, so a mounted catalog must be readable
+by that UID; root-owned 0600 is not readable by the app. The resolver checks the
+exact node ID, canonical literal IP/port and token against the database before
+allowing HTTP. A missing entry, changed endpoint/token, unsafe permissions or
+invalid catalog fails before network access. There is no blanket private-IP
+exception. Proxy environment variables and redirects are disabled.
+
+HTTPS trust material is omitted for explicitly selected WireGuard HTTP nodes,
+so future HTTPS nodes can share the same Hub without breaking the existing
+WireGuard path.
+
+## Health and acceptance
+
+Node readiness is stored as control-plane readiness, with `data_plane=unknown`
+and no fabricated OpenVPN PKI/Manager identity. Placement and activation require
+fresh successful readiness for the exact node and endpoint revision. OpenVPN
+inventory/drift/repair actions reject node servers explicitly.
+
+Coverage includes unchanged OpenVPN lifecycle, exact idempotent replays,
+timeout/crash recovery, stale-worker fencing, durable revoke tombstones,
+limited/expired states, scoped URI export, truthful health and management
+transport catalog validation. PostgreSQL migration and concurrency validation
+must also run in CI or isolated staging; SQLite is not a substitute for those
+checks. Native node traffic acceptance remains separate from Hub readiness.
+
+Code-only rollback after registering node servers requires stopping old
+provisioner/reconciler processes or keeping node servers unavailable: old code
+does not understand backend types. Preserve the additive database and binding
+history during rollback.

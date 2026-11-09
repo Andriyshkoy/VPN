@@ -9,6 +9,8 @@ class VPNState(StrEnum):
     SUSPENDED = "suspended"
     REVOKED = "revoked"
     FAILED = "failed"
+    EXPIRED = "expired"
+    LIMITED = "limited"
 
 
 class VPNOperationKind(StrEnum):

@@ -10,6 +10,7 @@ from .repo import (
     TelegramUpdateRepo,
     TelegramUserActionRepo,
     UserRepo,
+    VPNAccessBindingRepo,
     VPNOperationRepo,
 )
 
@@ -25,6 +26,7 @@ class Repositories(Mapping[str, object]):
     vpn_operations: VPNOperationRepo
     telegram_updates: TelegramUpdateRepo
     telegram_user_actions: TelegramUserActionRepo
+    vpn_access_bindings: VPNAccessBindingRepo
 
     def __getitem__(self, key: str):
         try:
@@ -42,11 +44,12 @@ class Repositories(Mapping[str, object]):
                 "vpn_operations",
                 "telegram_updates",
                 "telegram_user_actions",
+                "vpn_access_bindings",
             )
         )
 
     def __len__(self) -> int:
-        return 7
+        return 8
 
 
 @asynccontextmanager
@@ -60,4 +63,5 @@ async def uow():
             vpn_operations=VPNOperationRepo(session),
             telegram_updates=TelegramUpdateRepo(session),
             telegram_user_actions=TelegramUserActionRepo(session),
+            vpn_access_bindings=VPNAccessBindingRepo(session),
         )

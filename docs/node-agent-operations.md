@@ -44,6 +44,14 @@ configured NL SSH destination and must not be used as a generic fleet installer.
 IaC should orchestrate the bootstrap using inventory-specific settings.
 No server is changed by building or downloading this artifact.
 
+An existing node's bearer credentials must be adopted from the protected
+deployment records. A new checkout has no `private/` directory; running the
+transition installer there would generate new plaintext tokens while preserving
+the existing server-side hash catalogue. This is not token rotation and those
+new tokens would not authenticate. IaC must supply the matching existing
+credentials through its encrypted secret delivery, or perform a separately
+implemented explicit rotation.
+
 Hysteria currently depends on a legacy MongoDB/auth/scheduler stack and REALITY
 on Marzban. Their state, credentials, TLS/REALITY material and pinned dependencies
 must be adopted or restored separately. `clean_host_installer=false` in the
@@ -57,6 +65,8 @@ termination of already-open streams is not guaranteed. Hysteria activation and
 usage are delayed observations, not financial accounting clocks.
 
 Local test outcomes and live acceptance limitations are documented in
-[the acceptance guide](../apps/node-agent/acceptance/README.md). A separate
-central adapter and additive schema migration are needed before the Hub or bot
-can issue these products; see [the integration design](node-agent-integration.md).
+[the acceptance guide](../apps/node-agent/acceptance/README.md). The central
+adapter and additive binding migration are described in
+[the integration guide](node-agent-integration.md). Apply that migration and
+configure the protected management endpoint before enabling central issuance.
+The bot's product interface and financial policy are a separate rollout.
