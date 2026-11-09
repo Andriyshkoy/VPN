@@ -1,0 +1,23 @@
+{
+  "scope": "Transition adapters for the existing NL node; not a complete clean-host installer",
+  "marzban": {
+    "version": "0.8.4",
+    "upstream": "https://github.com/Gozargah/Marzban",
+    "api": "loopback REST",
+    "state": "existing manager SQLite and Xray template",
+    "credentials": "runtime LoadCredential; never part of this repository"
+  },
+  "hysteria_manager": {
+    "upstream": "https://github.com/ReturnFI/Blitz",
+    "source_revision": "5f86cc90c8eb17369585a1c0942a7539507a9d61",
+    "source_version": "2.5.0",
+    "source_license": "GPL-3.0",
+    "upstream_archived": true,
+    "state": "existing MongoDB blitz_panel.users",
+    "auth_component": "existing user_auth HTTP callback",
+    "auth_binary_sha256": "406bb74337fd13e4769eae6e2a3e3294d67b71ef88181f7d29b0d5d92fd75668",
+    "auth_build_modified": true,
+    "exact_binary_reproducibility_verified": false,
+    "clean_node_requirement": "Pin and provision supported manager/auth components or complete a separately tested auth migration; do not treat the current node-agent installer as a complete clean-host build."
+  }
+}

@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     vpn_manager_ca_cert_path: str = ""
     vpn_manager_client_cert_path: str = ""
     vpn_manager_client_key_path: str = ""
+    # Node-agent trust/identity is separate from the legacy Manager PKI.
+    node_agent_ca_cert_path: str = ""
+    node_agent_client_cert_path: str = ""
+    node_agent_client_key_path: str = ""
+    node_agent_endpoints_file: str = ""
     vpn_drift_repair_enabled: bool = False
     telegram_update_poll_timeout: int = Field(default=30, ge=1, le=50)
     telegram_update_batch_size: int = Field(default=100, ge=1, le=100)
@@ -107,6 +112,16 @@ class Settings(BaseSettings):
         if self.vpn_manager_tls_enabled and bool(cert_path) != bool(key_path):
             raise ValueError(
                 "VPN Manager client certificate and key must be configured together"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_node_agent_tls_settings(self) -> "Settings":
+        if bool(self.node_agent_client_cert_path.strip()) != bool(
+            self.node_agent_client_key_path.strip()
+        ):
+            raise ValueError(
+                "Node-agent client certificate and key must be configured together"
             )
         return self
 

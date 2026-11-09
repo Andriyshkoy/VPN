@@ -1,0 +1,9 @@
+{
+  "tokens": [
+    {
+      "id": "operator",
+      "sha256": "REPLACE_WITH_SHA256_OF_A_RANDOM_BEARER_TOKEN",
+      "scopes": ["access:read", "access:write", "profiles:read"]
+    }
+  ]
+}

@@ -1,8 +1,19 @@
 from __future__ import annotations
 
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, or_, select
 
 import core.db as db
@@ -15,7 +26,11 @@ from core.exceptions import APIGatewayError, ConfigNotFoundError, InvalidOperati
 from core.services.admin_queries import numeric_search_predicates, utc_iso
 from core.services.config import ConfigService
 
-from ..schemas_v1 import ConfigActionRequest
+from ..schemas_v1 import (
+    ConfigActionRequest,
+    NodeConfigCreateRequest,
+    NodeProfileResponse,
+)
 from ..security import (
     AdminPermission,
     AdminPrincipal,
@@ -34,6 +49,15 @@ ConfigsWrite = Annotated[
     AdminPrincipal,
     Depends(require_permission(AdminPermission.CONFIGS_WRITE)),
 ]
+ConfigsProvision = Annotated[
+    AdminPrincipal,
+    Depends(require_permission(AdminPermission.CONFIGS_PROVISION)),
+]
+ConfigsExport = Annotated[
+    AdminPrincipal,
+    Depends(require_permission(AdminPermission.CONFIGS_EXPORT)),
+]
+ProvisionKey = Annotated[UUID, Header(alias="Idempotency-Key")]
 
 
 def _item(row) -> dict:
@@ -57,6 +81,10 @@ def _item(row) -> dict:
         "operation_status": row.operation_status,
         "operation_attempts": int(row.operation_attempts or 0),
         "last_error": cfg.last_error,
+        "service_id": cfg.service_id,
+        "remote_access_id": (
+            cfg.access_binding.remote_access_id if cfg.access_binding else None
+        ),
         "updated_at": utc_iso(cfg.updated_at),
     }
 
@@ -69,7 +97,7 @@ async def list_configs(
     server_id: int | None = Query(default=None, ge=1),
     state: str | None = Query(
         default=None,
-        pattern="^(provisioning|active|suspended|revoked|failed)$",
+        pattern="^(provisioning|active|suspended|revoked|failed|expired|limited)$",
     ),
     operation_status: str | None = Query(
         default=None,
@@ -188,6 +216,173 @@ async def _record_action(
                 "error": error,
             },
         )
+
+
+async def _record_provision(
+    request: Request,
+    principal: AdminPrincipal,
+    data: NodeConfigCreateRequest,
+    *,
+    operation_id: str,
+    config_id: int | None,
+    outcome: str,
+    error: str | None = None,
+) -> None:
+    async with db.async_session() as session, session.begin():
+        add_audit_event(
+            session,
+            request,
+            action="config.provision",
+            actor_user_id=principal.user_id,
+            target_type="vpn_config",
+            target_id=config_id,
+            details={
+                "operation_id": operation_id,
+                "server_id": data.server_id,
+                "owner_id": data.owner_id,
+                "service_id": data.service_id,
+                "reason": data.reason,
+                "outcome": outcome,
+                "error": error,
+            },
+        )
+
+
+@router.post("", status_code=status.HTTP_201_CREATED)
+async def provision_node_config(
+    data: NodeConfigCreateRequest,
+    request: Request,
+    principal: ConfigsProvision,
+    idempotency_key: ProvisionKey,
+):
+    """Create an operator-managed technical access without a customer charge."""
+
+    operation_id = str(idempotency_key)
+    try:
+        result = await config_service.create_config(
+            server_id=data.server_id,
+            owner_id=data.owner_id,
+            name=data.name,
+            display_name=data.display_name,
+            service_id=data.service_id,
+            access_policy=data.access_policy.model_dump(mode="json"),
+            operation_id=operation_id,
+        )
+    except InvalidOperationError as exc:
+        await _record_provision(
+            request,
+            principal,
+            data,
+            operation_id=operation_id,
+            config_id=None,
+            outcome="rejected",
+            error=type(exc).__name__,
+        )
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except APIGatewayError as exc:
+        async with uow() as repos:
+            operation = await repos["vpn_operations"].get(operation_id=operation_id)
+            config_id = operation.config_id if operation else None
+            retryable = bool(
+                operation and operation.status in {"pending", "running", "failed"}
+            )
+        outcome = "queued_for_reconciliation" if retryable else "failed"
+        await _record_provision(
+            request,
+            principal,
+            data,
+            operation_id=operation_id,
+            config_id=config_id,
+            outcome=outcome,
+            error=type(exc).__name__,
+        )
+        return JSONResponse(
+            {"config_id": config_id, "operation_id": operation_id, "state": outcome},
+            status_code=202 if retryable else 502,
+            headers={"Cache-Control": "no-store"},
+        )
+    operation_status = result.operation_status
+    outcome = (
+        "completed"
+        if operation_status == "succeeded"
+        else (
+            "failed"
+            if operation_status in {"rejected", "exhausted", "superseded"}
+            else "queued_for_reconciliation"
+        )
+    )
+    await _record_provision(
+        request,
+        principal,
+        data,
+        operation_id=operation_id,
+        config_id=result.id,
+        outcome=outcome,
+    )
+    payload = {
+        "config_id": result.id,
+        "operation_id": operation_id,
+        "state": outcome,
+        "service_id": result.service_id,
+        "remote_access_id": result.remote_access_id,
+        "desired_state": result.desired_state,
+        "actual_state": result.actual_state,
+    }
+    if outcome != "completed":
+        return JSONResponse(
+            payload,
+            status_code=202 if outcome == "queued_for_reconciliation" else 502,
+            headers={"Cache-Control": "no-store"},
+        )
+    return payload
+
+
+@router.get("/{config_id}/profile", response_model=NodeProfileResponse)
+async def export_node_profile(
+    config_id: int,
+    request: Request,
+    response: Response,
+    principal: ConfigsExport,
+):
+    """Explicit secret export; ordinary config reads never include the URI."""
+
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    try:
+        profile = await config_service.export_profile(config_id)
+    except ConfigNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="Config not found",
+            headers={"Cache-Control": "no-store"},
+        ) from exc
+    except InvalidOperationError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+            headers={"Cache-Control": "no-store"},
+        ) from exc
+    except APIGatewayError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Profile export is unavailable",
+            headers={"Cache-Control": "no-store"},
+        ) from exc
+    await _record_action(
+        request,
+        principal,
+        config_id=config_id,
+        action="export_profile",
+        reason="Explicit operator secret export",
+        outcome="completed",
+    )
+    return NodeProfileResponse(
+        config_id=config_id,
+        access_id=profile.access_id,
+        service_id=profile.service_id,
+        uri=profile.uri,
+    )
 
 
 @router.post("/{config_id}/actions")

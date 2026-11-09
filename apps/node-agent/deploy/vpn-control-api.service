@@ -1,0 +1,57 @@
+[Unit]
+Description=NL VPN node agent API
+Requires=vpn-control-hys.service
+After=network-online.target vpn-control-hys.service vpn-managed.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=vpn-control
+Group=vpn-control
+WorkingDirectory=/opt/vpn-control/app
+Environment=PYTHONPATH=/opt/vpn-control/app
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=VPN_CONTROL_DB=/var/lib/vpn-control/control.sqlite3
+Environment=VPN_CONTROL_TOKENS_FILE=%d/tokens.json
+Environment=VPN_CONTROL_MARZBAN_CREDENTIALS_FILE=%d/marzban.json
+Environment=VPN_CONTROL_HYS_SOCKET=/run/vpn-control-hys/bridge.sock
+Environment=VPN_CONTROL_API_PORT=18010
+EnvironmentFile=-/etc/vpn-control/node.env
+LoadCredential=tokens.json:/etc/vpn-control/tokens.json
+LoadCredential=marzban.json:/opt/vpn-managed/secrets/operator.json
+ExecStart=/opt/vpn-control/venv/bin/python -m uvicorn vpn_control.app:app --host 127.0.0.1 --port ${VPN_CONTROL_API_PORT} --workers 1 --no-access-log --log-level warning
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=30
+TimeoutStopSec=20
+UMask=0077
+StateDirectory=vpn-control
+StateDirectoryMode=0700
+RuntimeDirectory=vpn-control
+RuntimeDirectoryMode=0700
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+IPAddressDeny=any
+IPAddressAllow=localhost
+CPUQuota=50%
+MemoryMax=256M
+TasksMax=128
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

@@ -23,6 +23,9 @@ class Server:
     manager_instance_id: str | None = None
     version: int = 1
     updated_at: datetime | None = None
+    backend_type: str = "openvpn-manager"
+    node_id: str | None = None
+    endpoint_revision: int = 1
 
     @classmethod
     def from_orm(cls, obj):
@@ -45,6 +48,9 @@ class Server:
             manager_instance_id=getattr(obj, "manager_instance_id", None),
             version=getattr(obj, "version", 1),
             updated_at=getattr(obj, "updated_at", None),
+            backend_type=getattr(obj, "backend_type", "openvpn-manager"),
+            node_id=getattr(obj, "node_id", None),
+            endpoint_revision=getattr(obj, "endpoint_revision", 1),
         )
 
 
@@ -85,9 +91,13 @@ class Config:
     last_error: str | None = None
     operation_status: str | None = None
     operation_attempts: int = 0
+    service_id: str | None = None
+    access_policy: dict | None = None
+    remote_access_id: str | None = None
 
     @classmethod
     def from_orm(cls, obj, *, operation=None):
+        binding = getattr(obj, "__dict__", {}).get("access_binding")
         return cls(
             id=obj.id,
             name=obj.name,
@@ -106,5 +116,10 @@ class Config:
             ),
             operation_attempts=(
                 int(getattr(operation, "attempts", 0)) if operation is not None else 0
+            ),
+            service_id=getattr(obj, "service_id", None),
+            access_policy=dict(getattr(obj, "access_policy", None) or {}),
+            remote_access_id=(
+                binding.remote_access_id if binding is not None else None
             ),
         )

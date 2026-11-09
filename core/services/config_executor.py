@@ -10,6 +10,7 @@ from inspect import Parameter, signature
 from core.config import settings
 from core.domain import VPNOperationKind, VPNOperationStatus, VPNState
 from core.exceptions import (
+    APIAuthenticationError,
     APIConfigurationError,
     APIConflictError,
     APIConnectionError,
@@ -25,6 +26,7 @@ from ._config_shared import (
     _TARGET_BY_KIND,
     _ConfigContext,
 )
+from .node_gateway import NodeAccess
 
 logger = logging.getLogger("core.services.config")
 
@@ -110,69 +112,12 @@ class ConfigLeasedExecutorMixin:
             await self._mark_failure(context, exc, rejected=True)
             raise exc
 
+        node_access = None
         try:
-            async with self._create_gateway(
-                context.server_ip,
-                context.server_port,
-                context.server_api_key,
-            ) as api:
-                if context.kind == VPNOperationKind.PROVISION.value:
-                    try:
-                        await self._call_mutation(
-                            api.create_client,
-                            context.name,
-                            use_password=bool(
-                                context.payload.get("use_password", False)
-                            ),
-                            operation_id=context.operation_id,
-                        )
-                    except (APIConflictError, APIConnectionError) as exc:
-                        try:
-                            # A retry may find a client created by an earlier
-                            # ambiguous attempt. Download proves convergence.
-                            await api.download_config(context.name)
-                        except (APINotFoundError, APIConnectionError):
-                            raise exc
-                elif context.kind == VPNOperationKind.SUSPEND.value:
-                    try:
-                        await self._call_mutation(
-                            api.suspend_client,
-                            context.name,
-                            operation_id=context.operation_id,
-                        )
-                    except APIConnectionError as exc:
-                        blocked = await api.list_blocked()
-                        if context.name not in blocked:
-                            raise exc
-                elif context.kind == VPNOperationKind.UNSUSPEND.value:
-                    try:
-                        await self._call_mutation(
-                            api.unsuspend_client,
-                            context.name,
-                            operation_id=context.operation_id,
-                        )
-                    except APIConnectionError as exc:
-                        blocked = await api.list_blocked()
-                        if context.name in blocked:
-                            raise exc
-                elif context.kind == VPNOperationKind.REVOKE.value:
-                    try:
-                        await self._call_mutation(
-                            api.revoke_client,
-                            context.name,
-                            operation_id=context.operation_id,
-                        )
-                    except APINotFoundError:
-                        pass
-                    except APIConnectionError as exc:
-                        try:
-                            await api.download_config(context.name)
-                        except APINotFoundError:
-                            pass
-                        except APIConnectionError:
-                            raise exc
-                        else:
-                            raise exc
+            if context.backend_type == "node-agent":
+                node_access = await self._execute_node_operation(context)
+            else:
+                await self._execute_legacy_operation(context)
         except asyncio.CancelledError:
             await asyncio.shield(
                 self._mark_failure(
@@ -183,9 +128,23 @@ class ConfigLeasedExecutorMixin:
             )
             raise
         except APIConfigurationError as exc:
+            if context.backend_type == "node-agent":
+                ambiguous = APIConnectionError(
+                    "Node configuration requires reconciliation"
+                )
+                await self._mark_failure(context, ambiguous, rejected=False)
+                raise ambiguous from exc
             await self._mark_failure(context, exc, rejected=True)
             raise
         except APIRequestRejectedError as exc:
+            if context.backend_type == "node-agent" and (
+                isinstance(exc, APIAuthenticationError)
+                or context.attempts > 1
+                or getattr(exc, "attempts", 1) > 1
+            ):
+                ambiguous = APIConnectionError("Node operation requires reconciliation")
+                await self._mark_failure(context, ambiguous, rejected=False)
+                raise ambiguous from exc
             await self._mark_failure(context, exc, rejected=True)
             raise
         except APIConnectionError as exc:
@@ -195,7 +154,129 @@ class ConfigLeasedExecutorMixin:
             await self._mark_failure(context, exc, rejected=False)
             raise
 
-        return await self._complete_success(context, target_state)
+        return await self._complete_success(
+            context, target_state, node_access=node_access
+        )
+
+    async def _execute_legacy_operation(self, context: _ConfigContext) -> None:
+        """Keep the existing OpenVPN wire contract and ambiguity checks intact."""
+
+        async with self._create_gateway(
+            context.server_ip,
+            context.server_port,
+            context.server_api_key,
+        ) as api:
+            if context.kind == VPNOperationKind.PROVISION.value:
+                try:
+                    await self._call_mutation(
+                        api.create_client,
+                        context.name,
+                        use_password=bool(context.payload.get("use_password", False)),
+                        operation_id=context.operation_id,
+                    )
+                except (APIConflictError, APIConnectionError) as exc:
+                    try:
+                        # A retry may find a client created by an earlier
+                        # ambiguous attempt. Download proves convergence.
+                        await api.download_config(context.name)
+                    except (APINotFoundError, APIConnectionError):
+                        raise exc
+            elif context.kind == VPNOperationKind.SUSPEND.value:
+                try:
+                    await self._call_mutation(
+                        api.suspend_client,
+                        context.name,
+                        operation_id=context.operation_id,
+                    )
+                except APIConnectionError as exc:
+                    blocked = await api.list_blocked()
+                    if context.name not in blocked:
+                        raise exc
+            elif context.kind == VPNOperationKind.UNSUSPEND.value:
+                try:
+                    await self._call_mutation(
+                        api.unsuspend_client,
+                        context.name,
+                        operation_id=context.operation_id,
+                    )
+                except APIConnectionError as exc:
+                    blocked = await api.list_blocked()
+                    if context.name in blocked:
+                        raise exc
+            elif context.kind == VPNOperationKind.REVOKE.value:
+                try:
+                    await self._call_mutation(
+                        api.revoke_client,
+                        context.name,
+                        operation_id=context.operation_id,
+                    )
+                except APINotFoundError:
+                    pass
+                except APIConnectionError as exc:
+                    try:
+                        await api.download_config(context.name)
+                    except APINotFoundError:
+                        pass
+                    except APIConnectionError:
+                        raise exc
+                    else:
+                        raise exc
+
+    async def _execute_node_operation(self, context: _ConfigContext) -> NodeAccess:
+        if (
+            not context.node_id
+            or not context.service_id
+            or not context.provision_operation_id
+        ):
+            raise APIConfigurationError("Node access binding is incomplete")
+        async with self._create_node_gateway(
+            context.server_ip,
+            context.server_port,
+            context.server_api_key,
+            node_id=context.node_id,
+        ) as api:
+            remote_id = context.remote_access_id
+            if context.kind == VPNOperationKind.PROVISION.value or remote_id is None:
+                # Replaying the original provision is also the recovery path when
+                # the response or the Hub transaction was lost before UUID commit.
+                created = await api.create_access(
+                    service_id=context.service_id,
+                    owner_ref=f"hub:config:{context.config_id}",
+                    policy=dict(context.access_policy or {}),
+                    operation_id=context.provision_operation_id,
+                )
+                remote_id = created.id
+            if context.kind == VPNOperationKind.SUSPEND.value:
+                await api.suspend_access(remote_id, operation_id=context.operation_id)
+            elif context.kind == VPNOperationKind.UNSUSPEND.value:
+                await api.resume_access(remote_id, operation_id=context.operation_id)
+            elif context.kind == VPNOperationKind.REVOKE.value:
+                await api.revoke_access(remote_id, operation_id=context.operation_id)
+            observed = await api.get_access(remote_id)
+            if (
+                observed.service_id != context.service_id
+                or observed.node_id != context.node_id
+            ):
+                raise APIConfigurationError("Node access identity mismatch")
+            if observed.operation_pending:
+                raise APIConnectionError("Node operation is still pending")
+            if not observed.control_plane_verified or observed.status in {
+                "failed",
+                "provisioning",
+            }:
+                raise APIConnectionError("Node access is not control-plane verified")
+            if (
+                context.kind == VPNOperationKind.PROVISION.value
+                and observed.status == "revoked"
+            ):
+                raise APIConnectionError("Node provision has already been revoked")
+            expected = _TARGET_BY_KIND[context.kind]
+            if (
+                context.kind != VPNOperationKind.PROVISION.value
+                and observed.status != expected
+            ):
+                raise APIConnectionError("Node operation outcome is not confirmed")
+            return observed
 
     async def _claim_context(
         self,
@@ -248,6 +329,7 @@ class ConfigLeasedExecutorMixin:
                     payload=claimed.payload,
                     lease_token=lease_token,
                     attempts=claimed.attempts,
+                    **(await self._node_context_fields(repos, cfg)),
                 ),
                 VPNOperationStatus.RUNNING.value,
             )
@@ -256,6 +338,8 @@ class ConfigLeasedExecutorMixin:
         self,
         context: _ConfigContext,
         target_state: str,
+        *,
+        node_access: NodeAccess | None = None,
     ) -> str:
         now = self._now()
         follow_up: str | None = None
@@ -271,6 +355,17 @@ class ConfigLeasedExecutorMixin:
             if cfg is None or cfg.operation_id != context.operation_id:
                 return VPNOperationStatus.SUCCEEDED.value
 
+            observed_state = target_state
+            if node_access is not None:
+                await repos["vpn_access_bindings"].attach_remote(
+                    cfg.id,
+                    node_access.id,
+                    observed_state=node_access.status,
+                )
+                observed_state = node_access.status
+                if observed_state == VPNState.REVOKED.value:
+                    await repos["vpn_access_bindings"].tombstone(cfg.id, now=now)
+
             if target_state == VPNState.REVOKED.value:
                 await repos["configs"].delete_if_operation(
                     context.config_id,
@@ -280,7 +375,7 @@ class ConfigLeasedExecutorMixin:
                 cfg = await repos["configs"].complete_transition(
                     context.config_id,
                     operation_id=context.operation_id,
-                    actual_state=target_state,
+                    actual_state=observed_state,
                 )
                 if cfg and cfg.desired_state != target_state:
                     follow_kind = _KIND_BY_TARGET.get(cfg.desired_state)
@@ -384,6 +479,7 @@ class ConfigLeasedExecutorMixin:
                 operation_id=cfg.operation_id or str(uuid.uuid4()),
                 kind=operation.kind if operation else "read",
                 payload=operation.payload if operation else {},
+                **(await self._node_context_fields(repos, cfg)),
             )
 
     def _retry_delay(self, attempts: int) -> int:

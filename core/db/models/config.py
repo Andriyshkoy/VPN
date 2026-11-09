@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.db import Base
@@ -11,6 +11,8 @@ from .user import User
 
 
 class VPN_Config(Base):
+
+    __table_args__ = {"sqlite_autoincrement": True}
 
     name: Mapped[str] = mapped_column(
         String(128), unique=True, nullable=False, index=True
@@ -29,6 +31,17 @@ class VPN_Config(Base):
     )
 
     display_name: Mapped[str] = mapped_column(String(128))
+    service_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    access_policy: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict, server_default="{}"
+    )
+    access_binding: Mapped["VPNAccessBinding | None"] = relationship(
+        "VPNAccessBinding",
+        back_populates="config",
+        uselist=False,
+        lazy="selectin",
+        passive_deletes=True,
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), server_default=func.now()

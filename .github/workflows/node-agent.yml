@@ -1,0 +1,67 @@
+name: Node agent
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - apps/node-agent/**
+      - contracts/node-agent-v1/**
+      - releases/node-agent.json
+      - .github/workflows/node-agent.yml
+  push:
+    branches: [main]
+    paths:
+      - apps/node-agent/**
+      - contracts/node-agent-v1/**
+      - releases/node-agent.json
+      - .github/workflows/node-agent.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: node-agent-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node-agent:
+    name: Node agent tests and native release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/node-agent
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/node-agent/requirements-dev.lock
+
+      - name: Install node-specific locked dependencies
+        run: python -m pip install --requirement requirements-dev.lock
+
+      - name: Test API, adapters, credentials and backups
+        run: python -m pytest -q tests deploy/test_backup.py
+
+      - name: Check the published OpenAPI contract
+        run: python scripts/check_contract.py
+
+      - name: Compile application and release scripts
+        run: python -m compileall -q vpn_control deploy scripts
+
+      - name: Build the native release and version manifest
+        run: python scripts/build_release.py
+
+      - name: Upload immutable native release
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: node-agent-native-${{ github.sha }}
+          path: apps/node-agent/dist/*
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily backup of NL node agent metadata
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 UTC
+RandomizedDelaySec=15m
+Persistent=true
+Unit=vpn-control-backup.service
+
+[Install]
+WantedBy=timers.target

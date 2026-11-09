@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 from typing import Callable, Sequence
 
@@ -20,6 +21,20 @@ class ServerService:
     def __init__(self, uow: Callable) -> None:
         self._uow = uow
 
+    @staticmethod
+    def validate_backend_identity(backend_type: str, node_id: str | None) -> None:
+        if backend_type not in {"openvpn-manager", "node-agent"}:
+            raise InvalidOperationError("Unsupported VPN backend type")
+        if backend_type == "node-agent":
+            if not isinstance(node_id, str) or not re.fullmatch(
+                r"[a-z0-9][a-z0-9-]{0,62}", node_id
+            ):
+                raise InvalidOperationError(
+                    "A valid node_id is required for node-agent"
+                )
+        elif node_id is not None:
+            raise InvalidOperationError("node_id is only supported for node-agent")
+
     async def get(self, server_id: int) -> Server | None:
         async with self._uow() as repos:
             server = await repos["servers"].get(id=server_id)
@@ -33,6 +48,7 @@ class ServerService:
         location: str | None = None,
         host: str | None = None,
         available_only: bool = False,
+        backend_type: str | None = None,
     ) -> Sequence[Server]:
         """Return servers filtered by the provided parameters."""
         filters: dict[str, object] = {}
@@ -40,6 +56,14 @@ class ServerService:
             filters["location"] = location
         if host is not None:
             filters["host"] = host
+        if backend_type is not None:
+            if backend_type not in {"openvpn-manager", "node-agent"}:
+                raise InvalidOperationError("Unsupported VPN backend type")
+            filters["backend_type"] = backend_type
+        elif available_only:
+            # Existing bot provisioning still consumes .ovpn profiles. New
+            # transports enter that flow only after an explicit UI migration.
+            filters["backend_type"] = "openvpn-manager"
 
         async with self._uow() as repos:
             # Availability filtering must happen before pagination, because a
@@ -79,7 +103,10 @@ class ServerService:
         provider: str | None = None,
         public_endpoint: str | None = None,
         manager_instance_id: str | None = None,
+        backend_type: str = "openvpn-manager",
+        node_id: str | None = None,
     ) -> Server:
+        self.validate_backend_identity(backend_type, node_id)
         async with self._uow() as repos:
             server = await repos["servers"].create(
                 name=name,
@@ -97,6 +124,8 @@ class ServerService:
                 provider=provider,
                 public_endpoint=public_endpoint,
                 manager_instance_id=manager_instance_id,
+                backend_type=backend_type,
+                node_id=node_id,
             )
             return Server.from_orm(server)
 
@@ -122,7 +151,14 @@ class ServerService:
             # Every legacy write participates in the same optimistic version
             # fence as the v1 fleet API.
             fields.pop("version", None)
-            endpoint_fields = {"ip", "port", "api_key"}
+            fields.pop("endpoint_revision", None)
+            self.validate_backend_identity(
+                fields.get(
+                    "backend_type", getattr(current, "backend_type", "openvpn-manager")
+                ),
+                fields.get("node_id", getattr(current, "node_id", None)),
+            )
+            endpoint_fields = {"ip", "port", "api_key", "backend_type", "node_id"}
             endpoint_changed = any(
                 key in fields and fields[key] != getattr(current, key)
                 for key in endpoint_fields
@@ -136,6 +172,9 @@ class ServerService:
                 fields["lifecycle_state"] = ServerLifecycleState.DISABLED.value
                 fields["accepts_new_configs"] = False
                 fields["manager_instance_id"] = None
+                fields["endpoint_revision"] = (
+                    getattr(current, "endpoint_revision", 1) + 1
+                )
             fields["version"] = getattr(current, "version", 1) + 1
             srv = await repos["servers"].update(server_id, **fields)
             return Server.from_orm(srv) if srv else None

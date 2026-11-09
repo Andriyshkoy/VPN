@@ -8,6 +8,7 @@ from datetime import datetime
 from core.config import settings
 from core.domain import VPNOperationKind, VPNOperationStatus, VPNState
 from core.exceptions import (
+    APIConfigurationError,
     ConfigNotFoundError,
     InvalidOperationError,
     ServerNotFoundError,
@@ -15,6 +16,7 @@ from core.exceptions import (
 
 from ._config_shared import _KIND_BY_TARGET, _NON_TERMINAL_STATUSES
 from .models import Config
+from .node_gateway import NodeProfile
 
 logger = logging.getLogger("core.services.config")
 
@@ -24,12 +26,38 @@ class ConfigQueriesEntitlementsMixin:
 
     async def download_config(self, config_id: int) -> bytes:
         context = await self._load_config_context(config_id)
+        if context.backend_type == "node-agent":
+            raise InvalidOperationError(
+                "Node services require explicit URI profile export"
+            )
         async with self._create_gateway(
             context.server_ip,
             context.server_port,
             context.server_api_key,
         ) as api:
             return await api.download_config(context.name)
+
+    async def export_profile(self, config_id: int) -> NodeProfile:
+        """Explicit secret export; ordinary config reads never fetch credentials."""
+
+        context = await self._load_config_context(config_id)
+        if context.backend_type != "node-agent" or not context.remote_access_id:
+            raise InvalidOperationError(
+                "An active node access is required for URI export"
+            )
+        async with self._create_node_gateway(
+            context.server_ip,
+            context.server_port,
+            context.server_api_key,
+            node_id=context.node_id,
+        ) as api:
+            profile = await api.export_profile(context.remote_access_id)
+        if (
+            profile.service_id != context.service_id
+            or profile.access_id != context.remote_access_id
+        ):
+            raise APIConfigurationError("Node profile identity mismatch")
+        return profile
 
     async def revoke_config(self, config_id: int) -> None:
         operation_id = await self._start_transition(
@@ -362,6 +390,8 @@ class ConfigQueriesEntitlementsMixin:
             # A definitive provision rejection never confirmed a remote
             # credential. Preserve operation/refund history but avoid the
             # legacy Manager's unknown-client 500 path.
+            if getattr(cfg.server, "backend_type", "openvpn-manager") == "node-agent":
+                await repos["vpn_access_bindings"].tombstone(cfg.id, now=now)
             await repos["configs"].delete_if_operation(
                 cfg.id,
                 operation_id=current.operation_id,

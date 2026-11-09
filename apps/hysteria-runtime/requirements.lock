@@ -1,0 +1,3 @@
+# Python 3.12. Versions checked against official PyPI on 2026-11-09.
+dnspython==2.9.2
+pymongo==4.19.0

@@ -27,6 +27,10 @@ class AdminServerCreate(BaseModel):
     host: str = Field(min_length=1, max_length=128)
     location: str = Field(min_length=1, max_length=128)
     api_key: str = Field(min_length=1, max_length=4096)
+    backend_type: Literal["openvpn-manager", "node-agent"] = "openvpn-manager"
+    node_id: str | None = Field(
+        default=None, min_length=1, max_length=63, pattern=r"^[a-z0-9][a-z0-9-]*$"
+    )
     monthly_cost: Decimal = Decimal("0.00")
     # Newly registered control-plane endpoints are quarantined until an
     # operator verifies Manager identity/health and explicitly activates them.
@@ -93,6 +97,10 @@ class AdminServerCreate(BaseModel):
 
     @model_validator(mode="after")
     def valid_capacity(self):
+        if self.backend_type == "node-agent" and self.node_id is None:
+            raise ValueError("node_id is required for node-agent")
+        if self.backend_type == "openvpn-manager" and self.node_id is not None:
+            raise ValueError("node_id is only supported for node-agent")
         if self.max_configs is not None and self.capacity_reserve >= self.max_configs:
             raise ValueError("capacity_reserve must be below max_configs")
         if self.lifecycle_state != "active" and self.accepts_new_configs:
@@ -110,6 +118,10 @@ class AdminServerUpdate(BaseModel):
     host: str | None = Field(default=None, min_length=1, max_length=128)
     location: str | None = Field(default=None, min_length=1, max_length=128)
     api_key: str | None = Field(default=None, min_length=1, max_length=4096)
+    backend_type: Literal["openvpn-manager", "node-agent"] | None = None
+    node_id: str | None = Field(
+        default=None, min_length=1, max_length=63, pattern=r"^[a-z0-9][a-z0-9-]*$"
+    )
     monthly_cost: Decimal | None = None
     max_configs: int | None = Field(default=None, ge=1, le=2_147_483_647)
     clear_max_configs: bool = False

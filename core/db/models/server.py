@@ -49,6 +49,9 @@ class Server(Base):
             name="ck_server_positive_placement_weight",
         ),
         CheckConstraint("version >= 1", name="ck_server_positive_version"),
+        CheckConstraint(
+            "endpoint_revision >= 1", name="ck_server_positive_endpoint_revision"
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(128))
@@ -61,6 +64,17 @@ class Server(Base):
     location: Mapped[str] = mapped_column(String(128))
 
     api_key: Mapped[str] = mapped_column(EncryptedString)
+
+    backend_type: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="openvpn-manager",
+        server_default="openvpn-manager",
+    )
+    node_id: Mapped[str | None] = mapped_column(String(63), nullable=True)
+    endpoint_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
 
     # Defaults keep existing installations and legacy insert paths working.
     lifecycle_state: Mapped[str] = mapped_column(

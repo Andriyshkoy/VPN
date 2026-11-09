@@ -87,6 +87,23 @@ def manager_readiness_decision(
     if age_seconds > maximum_age:
         return PlacementDecision(False, "health_check_required")
 
+    if getattr(server, "backend_type", "openvpn-manager") == "node-agent":
+        snapshot = latest.snapshot if isinstance(latest.snapshot, dict) else {}
+        if (
+            not getattr(server, "node_id", None)
+            or snapshot.get("backend_type") != "node-agent"
+            or snapshot.get("node_id") != server.node_id
+        ):
+            return PlacementDecision(False, "node_identity_mismatch")
+        if snapshot.get("endpoint_revision") != getattr(server, "endpoint_revision", 1):
+            return PlacementDecision(False, "node_endpoint_mismatch")
+        readiness = snapshot.get("readiness")
+        if not isinstance(readiness, dict) or readiness.get("ready") is not True:
+            return PlacementDecision(False, "node_unhealthy")
+        # This permits control-plane provisioning only. It deliberately does
+        # not turn readiness into an end-to-end transport observation.
+        return PlacementDecision(True)
+
     expected_instance = getattr(server, "manager_instance_id", None)
     if (
         not expected_instance

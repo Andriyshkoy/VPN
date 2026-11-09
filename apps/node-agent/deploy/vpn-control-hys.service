@@ -1,0 +1,51 @@
+[Unit]
+Description=Restricted Hysteria management bridge for NL node agent
+After=network-online.target hysteria-server.service hysteria-auth.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+Group=vpn-control
+WorkingDirectory=/etc/hysteria/core/scripts/hysteria2
+Environment=PYTHONPATH=/opt/vpn-control/app
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=VPN_CONTROL_PUBLIC_HOST=195.133.195.40
+Environment=VPN_CONTROL_HYSTERIA_PORT=1935
+Environment=VPN_CONTROL_HYS_SNI=github.com
+EnvironmentFile=-/etc/vpn-control/node.env
+ExecStart=/etc/hysteria/hysteria2_venv/bin/python -m vpn_control.hys_bridge --socket /run/vpn-control-hys/bridge.sock --group vpn-control --allowed-user vpn-control --server-config /etc/hysteria/config.json --certificate-file /etc/vpn-control/hysteria-peer.crt --public-host ${VPN_CONTROL_PUBLIC_HOST} --public-port ${VPN_CONTROL_HYSTERIA_PORT} --tls-sni ${VPN_CONTROL_HYS_SNI}
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=30
+TimeoutStopSec=15
+UMask=0077
+RuntimeDirectory=vpn-control-hys
+RuntimeDirectoryMode=0750
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+ReadWritePaths=/run/vpn-control-hys
+IPAddressDeny=any
+IPAddressAllow=localhost
+CPUQuota=25%
+MemoryMax=200M
+TasksMax=64
+LimitNOFILE=2048
+
+[Install]
+WantedBy=multi-user.target

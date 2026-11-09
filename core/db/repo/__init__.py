@@ -4,6 +4,7 @@ from .server import ServerRepo
 from .telegram_update import TelegramUpdateRepo
 from .telegram_user_action import TelegramUserActionRepo
 from .user import UserRepo
+from .vpn_access_binding import VPNAccessBindingRepo
 from .vpn_operation import VPNOperationRepo
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "TelegramUserActionRepo",
     "UserRepo",
     "VPNOperationRepo",
+    "VPNAccessBindingRepo",
 ]

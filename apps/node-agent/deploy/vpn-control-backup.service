@@ -1,0 +1,24 @@
+[Unit]
+Description=Consistent backup of NL node agent metadata
+After=vpn-control-api.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/vpn-control/venv/bin/python /opt/vpn-control/app/deploy/backup.py create
+UMask=0077
+NoNewPrivileges=yes
+# SQLite and its WAL belong to the non-root API UID; root needs DAC access
+# for a consistent online copy, including SQLite's shared-memory bookkeeping.
+CapabilityBoundingSet=CAP_DAC_OVERRIDE
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/backups/vpn-control /var/lib/vpn-control
+CPUQuota=20%
+MemoryMax=200M
+TasksMax=32
+TimeoutStartSec=120

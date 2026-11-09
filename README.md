@@ -6,8 +6,11 @@ administrative API. PostgreSQL is the source of truth; Redis is used for RQ,
 bot state, and notification delivery. Administrator identities, sessions and
 audit events are persisted in PostgreSQL.
 
-The repository contains the hub/control plane. VPN credentials are created and
-revoked by a separate OpenVPN Manager API registered in the hub as a server.
+The repository contains the Hub/control plane and a separately deployed native
+node agent for Hysteria and VLESS+REALITY. Legacy OpenVPN credentials continue
+to use the registered OpenVPN Manager API. The new node agent has its own API
+contract; central product integration is described in
+[the integration design](docs/node-agent-integration.md).
 
 ## Runtime components
 
@@ -18,12 +21,16 @@ revoked by a separate OpenVPN Manager API registered in the hub as a server.
 | Billing worker | `billing_daemon/rq_worker.py` | Executes RQ billing and reconciliation jobs |
 | Scheduler | `billing_daemon/scheduler.py` | Schedules stable billing periods and VPN reconciliation |
 | Core | `core/` | Domain rules, services, SQLAlchemy models/repositories, Manager adapter |
+| VPN node agent | `apps/node-agent/` | Private local API and restricted bridge managing Hysteria/REALITY accesses on one VPN host |
 | Migrations | `alembic/` | PostgreSQL schema migrations |
 | Admin frontend | `admin_frontend/` | React/TypeScript operations console |
 | Reverse proxy | `nginx/` | Serves the local frontend and proxies the API |
 
-All Python processes use the same core package and database. They are separate
-runtime processes, not independent microservices.
+All Hub Python processes use the same core package and database. They are separate
+runtime processes, not independent microservices. The independently deployed
+node agent has its own technical SQLite store and does not contain the Hub's
+financial authority or payment credentials. See
+[node build and operations](docs/node-agent-operations.md).
 
 ## Critical backend behaviour
 

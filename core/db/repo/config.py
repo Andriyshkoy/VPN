@@ -170,6 +170,8 @@ class ConfigRepo(BaseRepo[VPN_Config]):
         desired_state: str = VPNState.ACTIVE.value,
         actual_state: str = VPNState.ACTIVE.value,
         operation_id: str | None = None,
+        service_id: str | None = None,
+        access_policy: dict | None = None,
     ) -> VPN_Config:
         """
         Create a new VPN configuration.
@@ -191,6 +193,8 @@ class ConfigRepo(BaseRepo[VPN_Config]):
             desired_state=desired_state,
             actual_state=actual_state,
             operation_id=operation_id,
+            service_id=service_id,
+            access_policy=dict(access_policy or {}),
         )
         return await self.add(cfg)
 

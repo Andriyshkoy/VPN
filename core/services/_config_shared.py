@@ -42,3 +42,9 @@ class _ConfigContext:
     payload: dict
     lease_token: str | None = None
     attempts: int = 0
+    backend_type: str = "openvpn-manager"
+    node_id: str | None = None
+    service_id: str | None = None
+    access_policy: dict | None = None
+    remote_access_id: str | None = None
+    provision_operation_id: str | None = None
