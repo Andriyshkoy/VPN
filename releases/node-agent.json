@@ -1,0 +1,14 @@
+{
+  "schema": "vpn-node-agent-release/v1",
+  "component": "node-agent",
+  "version": "0.1.0",
+  "api_contract": "node-agent-v1",
+  "distribution": "native-systemd",
+  "python": "3.12",
+  "source_import_commit": "45f9dcdcce13363d9953247267b53491b74cc9a9",
+  "application_path": "apps/node-agent",
+  "contract_path": "contracts/node-agent-v1/openapi.json",
+  "engine_versions_path": "apps/node-agent/deploy/engine-versions.json",
+  "backend_dependencies_path": "apps/node-agent/deploy/backend-dependencies.json",
+  "clean_host_installer": false
+}

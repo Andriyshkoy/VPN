@@ -1,0 +1,17 @@
+{
+  "checked_date": "2026-11-09",
+  "hysteria": {
+    "version": "2.13.0",
+    "release": "https://github.com/HyNetworks/hysteria/releases/tag/app/v2.13.0",
+    "artifact": "hysteria-linux-amd64",
+    "sha256": "907ba8c9693edb104b20582681fb7dc15639d5b64a9cbb616a7b539190a86691"
+  },
+  "xray": {
+    "version": "26.10.31",
+    "release": "https://github.com/XTLS/Xray-core/releases/tag/v26.10.31",
+    "artifact": "Xray-linux-64.zip",
+    "archive_sha256": "e4bd9119f50ae7c41658b1abd0679ae06f98bd864a2907ff33f2f2cf7081b214",
+    "binary_sha256": "cc4b84d3069569f297a61f04b914f2bb37e9d202fd7b84cb50def1fc30fd40e1"
+  },
+  "scope": "Selected production Hysteria and managed VLESS REALITY only; legacy lab/alpha are separate."
+}
