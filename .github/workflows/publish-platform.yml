@@ -1,0 +1,220 @@
+name: Publish platform images
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type BUILD_PLATFORM_IMAGES to publish verified main images without deployment
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: publish-platform-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Verify source and CI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require main and explicit build confirmation
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          test "$RELEASE_REF" = "refs/heads/main"
+          test "$CONFIRMATION" = "BUILD_PLATFORM_IMAGES"
+
+      - name: Require successful CI for the exact main SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          test "$(gh api "repos/$REPOSITORY/commits/main" --jq .sha)" = "$RELEASE_SHA"
+          gh api \
+            "repos/$REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$RELEASE_SHA&event=push&per_page=20" \
+            | jq -e --arg sha "$RELEASE_SHA" \
+              '.workflow_runs | length > 0 and .[0].head_sha == $sha and .[0].status == "completed" and .[0].conclusion == "success"'
+
+  build:
+    name: Publish image (${{ matrix.key }})
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - key: admin
+            image: vpn-admin
+            env_key: VPN_ADMIN_IMAGE
+            context: .
+            dockerfile: ./Dockerfile
+            target: admin
+          - key: bot
+            image: vpn-bot
+            env_key: VPN_BOT_IMAGE
+            context: .
+            dockerfile: ./Dockerfile
+            target: bot
+          - key: billing
+            image: vpn-billing
+            env_key: VPN_BILLING_IMAGE
+            context: .
+            dockerfile: ./Dockerfile
+            target: billing
+          - key: migrations
+            image: vpn-migrations
+            env_key: VPN_MIGRATIONS_IMAGE
+            context: .
+            dockerfile: ./Dockerfile
+            target: migrations
+          - key: admin-frontend
+            image: vpn-admin-frontend
+            env_key: VPN_ADMIN_FRONTEND_IMAGE
+            context: ./admin_frontend
+            dockerfile: ./admin_frontend/Dockerfile
+            target: ""
+          - key: nginx
+            image: vpn-nginx
+            env_key: VPN_NGINX_IMAGE
+            context: ./nginx
+            dockerfile: ./nginx/Dockerfile
+            target: ""
+    steps:
+      - name: Check out verified source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build and publish source-pinned image
+        id: image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          push: true
+          tags: docker.io/${{ secrets.REGISTRY_USERNAME }}/${{ matrix.image }}:sha-${{ github.sha }}-run-${{ github.run_id }}-${{ github.run_attempt }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=${{ matrix.key }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.key }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Record exact image digest
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          ENV_KEY: ${{ matrix.env_key }}
+          IMAGE: ${{ matrix.image }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+        run: |
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          install -d -m 0700 release-fragment
+          printf '%s=docker.io/%s/%s@%s\n' \
+            "$ENV_KEY" "$REGISTRY_USERNAME" "$IMAGE" "$DIGEST" \
+            > "release-fragment/${ENV_KEY}.env"
+
+      - name: Upload image digest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ matrix.key }}
+          path: release-fragment/*.env
+          if-no-files-found: error
+          retention-days: 30
+
+  manifest:
+    name: Assemble image manifest
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Download exact image pins
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+          path: release-fragments
+          merge-multiple: true
+
+      - name: Validate and assemble release inputs
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          BUILD_RUN_ID: ${{ github.run_id }}
+          BUILD_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+
+          expected = {
+              "VPN_ADMIN_IMAGE": "vpn-admin",
+              "VPN_BOT_IMAGE": "vpn-bot",
+              "VPN_BILLING_IMAGE": "vpn-billing",
+              "VPN_MIGRATIONS_IMAGE": "vpn-migrations",
+              "VPN_ADMIN_FRONTEND_IMAGE": "vpn-admin-frontend",
+              "VPN_NGINX_IMAGE": "vpn-nginx",
+          }
+          fragments = list(Path("release-fragments").glob("*.env"))
+          if len(fragments) != len(expected):
+              raise SystemExit("Exactly six image fragments are required")
+          images = {}
+          for fragment in fragments:
+              rows = fragment.read_text().splitlines()
+              if len(rows) != 1 or "=" not in rows[0]:
+                  raise SystemExit("Invalid image fragment")
+              key, value = rows[0].split("=", 1)
+              if key not in expected or key in images:
+                  raise SystemExit("Invalid or duplicate component")
+              if not re.fullmatch(r"docker\.io/[a-z0-9][a-z0-9_-]*/vpn-[a-z-]+@sha256:[0-9a-f]{64}", value):
+                  raise SystemExit("Image is not digest pinned")
+              if value.split("/")[-1].split("@", 1)[0] != expected[key]:
+                  raise SystemExit("Image component does not match its key")
+              images[key] = value
+          if set(images) != set(expected):
+              raise SystemExit("Incomplete image manifest")
+          revision = os.environ["RELEASE_SHA"]
+          if not re.fullmatch(r"[0-9a-f]{40}", revision):
+              raise SystemExit("Invalid source revision")
+          out = Path("platform-release")
+          out.mkdir(mode=0o700)
+          text = "RELEASE_SHA=" + revision + "\n"
+          text += "".join(key + "=" + images[key] + "\n" for key in sorted(images))
+          (out / "release.env").write_text(text)
+          (out / "images.json").write_text(json.dumps({
+              "schema": "vpn-platform-images/v1",
+              "source_repository": os.environ["SOURCE_REPOSITORY"],
+              "source_commit": revision,
+              "build_run_id": os.environ["BUILD_RUN_ID"],
+              "build_run_attempt": os.environ["BUILD_RUN_ATTEMPT"],
+              "images": images,
+              "deployment_performed": False,
+          }, indent=2) + "\n")
+          PY
+
+      - name: Upload build-only release manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: platform-images-${{ github.sha }}
+          path: platform-release/*
+          if-no-files-found: error
+          retention-days: 30
