@@ -378,19 +378,18 @@ async def subscription_callback(
                         content.encode("utf-8"),
                         filename="vpn-by-andriyshkoy-hysteria.json",
                     ),
-                    caption="Профиль для Hiddify: импортируйте файл целиком.",
+                    caption="Hysteria 2 — профиль для Hiddify: импортируйте файл целиком.",
                 )
-                secret_text = (
-                    f"🔑 <b>{SERVICES[parts[2]]} — JSON для Hiddify</b>\n\n"
-                    f"<pre>{html.escape(content, quote=False)}</pre>"
-                )
+                # Telegram's whole-message Copy must produce the same profile
+                # as Copy Code or the file: a heading breaks JSON detection.
+                secret_text = f"<pre>{html.escape(content, quote=False)}</pre>"
                 if len(secret_text.encode("utf-16-le")) // 2 <= 4000:
                     await callback.message.answer(
                         secret_text, disable_web_page_preview=True
                     )
                 instruction = (
                     "Hysteria выдаётся JSON-профилем с проверкой сертификата сервера. "
-                    "Скопируйте весь профиль: первую строку // profile-title "
+                    "Сообщение с кодом можно скопировать целиком: первую строку // profile-title "
                     "и JSON целиком. "
                     "В Hiddify: «+» → «Из буфера обмена» или «+» → «Файл» для .json. "
                     "Не преобразуйте его в обычную hysteria2:// ссылку и не пересылайте посторонним."

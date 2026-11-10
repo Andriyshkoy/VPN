@@ -488,8 +488,10 @@ async def test_hysteria_json_is_a_secret_file_and_copyable_content_without_callb
     assert body.encode() == content.encode()
     assert "reply_markup" not in kwargs and "protect_content" not in kwargs
     text, kwargs = callback.message.calls[0]
-    assert "JSON для Hiddify" in text and "private&lt;&amp;&gt;" in text
-    assert html.unescape(text.split("<pre>", 1)[1].split("</pre>", 1)[0]) == exported
+    assert text.startswith("<pre>") and text.endswith("</pre>")
+    assert "private&lt;&amp;&gt;" in text
+    # Telegram Copy (the entire message) and Copy Code must be interchangeable.
+    assert html.unescape(text.removeprefix("<pre>").removesuffix("</pre>")) == exported
     assert "reply_markup" not in kwargs
     instruction, kwargs = callback.message.calls[1]
     assert "первую строку // profile-title" in instruction and "«Файл»" in instruction
