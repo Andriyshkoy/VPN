@@ -202,7 +202,7 @@ assert_runtime_policy() {
         [BILLING_ENABLED]=true
         [PAYMENTS_ENABLED]=true
         [PROVISIONING_ENABLED]=true
-        [NOTIFICATIONS_ENABLED]=false
+        [NOTIFICATIONS_ENABLED]=true
         [REFERRAL_REWARDS_ENABLED]=true
         [VPN_DRIFT_REPAIR_ENABLED]=false
         [OBSERVABILITY_ENABLED]=true
@@ -247,7 +247,7 @@ assert_policy() {
             [BILLING_ENABLED]=true
             [PAYMENTS_ENABLED]=true
             [PROVISIONING_ENABLED]=true
-            [NOTIFICATIONS_ENABLED]=false
+            [NOTIFICATIONS_ENABLED]=true
             [REFERRAL_REWARDS_ENABLED]=true
             [REFERRAL_LEVEL_1_RATE_BPS]=500
             [REFERRAL_LEVEL_2_RATE_BPS]=100
@@ -274,7 +274,7 @@ build_promoted_release_env() {
     set_env_value BILLING_ENABLED true "$destination"
     set_env_value PAYMENTS_ENABLED true "$destination"
     set_env_value PROVISIONING_ENABLED true "$destination"
-    set_env_value NOTIFICATIONS_ENABLED false "$destination"
+    set_env_value NOTIFICATIONS_ENABLED true "$destination"
     set_env_value REFERRAL_REWARDS_ENABLED true "$destination"
     set_env_value VPN_DRIFT_REPAIR_ENABLED false "$destination"
     set_env_value OBSERVABILITY_ENABLED true "$destination"
@@ -711,7 +711,7 @@ main() {
 
     log "full production promotion complete for ${RELEASE_SHA}"
     log "billing, payments and provisioning are enabled"
-    log "automatic Telegram notifications remain disabled"
+    log "automatic Telegram balance notifications are enabled"
     log "automatic VPN drift repair remains disabled"
     log "release environment backup: ${BACKUP_ENV}"
 }
