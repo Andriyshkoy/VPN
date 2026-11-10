@@ -21,6 +21,7 @@ from core.exceptions import APIConnectionError, InvalidOperationError, ServiceEr
 from core.services import TelegramActionAuditContext
 from core.services.subscriptions import SubscriptionUnavailableError
 
+from ..hiddify_profiles import hysteria_profile, vless_profile
 from ..subscription_copy import (
     PLAN_DESCRIPTIONS,
     PLAN_LABELS,
@@ -325,16 +326,17 @@ async def subscription_callback(
             if profile.format == "singbox-json" and parts[2] == "hysteria":
                 if not isinstance(profile.content, str) or not profile.content:
                     raise InvalidOperationError("Profile content is unavailable")
+                content = hysteria_profile(profile.content)
                 await callback.message.answer_document(
                     BufferedInputFile(
-                        profile.content.encode("utf-8"),
-                        filename=f"hiddify-{parts[2]}.json",
+                        content.encode("utf-8"),
+                        filename="vpn-by-andriyshkoy-hysteria.json",
                     ),
-                    caption="Профиль для Hiddify: импортируйте JSON целиком.",
+                    caption="Профиль для Hiddify: импортируйте файл целиком.",
                 )
                 secret_text = (
                     f"🔑 <b>{SERVICES[parts[2]]} — JSON для Hiddify</b>\n\n"
-                    f"<pre>{html.escape(profile.content, quote=False)}</pre>"
+                    f"<pre>{html.escape(content, quote=False)}</pre>"
                 )
                 if len(secret_text.encode("utf-16-le")) // 2 <= 4000:
                     await callback.message.answer(
@@ -342,7 +344,8 @@ async def subscription_callback(
                     )
                 instruction = (
                     "Hysteria выдаётся JSON-профилем с проверкой сертификата сервера. "
-                    "Скопируйте JSON целиком, включая фигурные скобки. "
+                    "Скопируйте весь профиль: первую строку // profile-title "
+                    "и JSON целиком. "
                     "В Hiddify: «+» → «Из буфера обмена» или «+» → «Файл» для .json. "
                     "Не преобразуйте его в обычную hysteria2:// ссылку и не пересылайте посторонним."
                 )
@@ -351,16 +354,17 @@ async def subscription_callback(
                 and parts[2] == "vless-reality"
                 and isinstance(profile.uri, str)
             ):
-                if len(profile.uri) <= 3500:
+                uri = vless_profile(profile.uri)
+                if len(uri) <= 3500:
                     await callback.message.answer(
-                        f"🔑 <b>{SERVICES[parts[2]]}</b>\n\n<pre>{html.escape(profile.uri)}</pre>",
+                        f"🔑 <b>{SERVICES[parts[2]]}</b>\n\n<pre>{html.escape(uri)}</pre>",
                         disable_web_page_preview=True,
                     )
                 else:
                     await callback.message.answer_document(
                         BufferedInputFile(
-                            profile.uri.encode("utf-8"),
-                            filename=f"hiddify-{parts[2]}.txt",
+                            uri.encode("utf-8"),
+                            filename="vpn-by-andriyshkoy-vless-reality.txt",
                         ),
                         caption="Ключ длинный: откройте файл и скопируйте содержимое целиком.",
                     )

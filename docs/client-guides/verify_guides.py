@@ -58,8 +58,8 @@ def verify(*, online: bool = False, private_bundle: Path | None = None) -> dict:
     vless = profiles.get("vless-reality", {})
     if (
         hys.get("format") != "singbox-json"
-        or hys.get("filename") != "hiddify-hysteria.json"
-        or hys.get("clipboard") != "complete_json_including_outer_braces"
+        or hys.get("filename") != "vpn-by-andriyshkoy-hysteria.json"
+        or hys.get("clipboard") != "complete_profile_title_comment_and_json"
         or hys.get("tls_insecure") is not False
         or hys.get("tls_certificate_pin_preserved") is not True
     ):
