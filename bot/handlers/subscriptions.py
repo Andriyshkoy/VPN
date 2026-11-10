@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import html
 import re
-from datetime import timezone
-from decimal import Decimal
 from uuid import NAMESPACE_URL, uuid5
 
 from aiogram import F
@@ -23,11 +21,17 @@ from core.exceptions import APIConnectionError, InvalidOperationError, ServiceEr
 from core.services import TelegramActionAuditContext
 from core.services.subscriptions import SubscriptionUnavailableError
 
-from ..ui import format_money, format_whole_money, safe_callback_answer, safe_edit_text
+from ..subscription_copy import (
+    PLAN_DESCRIPTIONS,
+    PLAN_LABELS,
+    monthly_price,
+    plan_overview,
+)
+from ..ui import format_money, safe_callback_answer, safe_edit_text
 from .base import get_or_create_user, router, subscription_service
 
 SERVICES = {"hysteria": "Hysteria 2", "vless-reality": "VLESS + REALITY"}
-PLANS = {"basic": "BASIC", "plus": "PLUS"}
+PLANS = PLAN_LABELS
 STATUS = {
     "pending": "⏳ Ожидает настройки",
     "active": "🟢 Активна",
@@ -69,19 +73,13 @@ def _token(callback: CallbackQuery) -> str:
     ).hex[:20]
 
 
-def _date(value) -> str:
-    return value.astimezone(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
-
-
 def render_subscription(view, balance=None) -> str:
     if view is None:
         return (
             "💎 <b>Подписка</b>\n\nВыберите тариф:\n"
-            "• <b>BASIC — около 50 ₽ в месяц</b>: 0,07 ₽/час, Hysteria 2, одно одновременное подключение.\n"
-            "• <b>PLUS — около 100 ₽ в месяц</b>: 0,14 ₽/час, Hysteria 2 и VLESS + REALITY, "
-            "без ограничения устройств и подключений.\n\n"
-            "Списания почасовые за подписку аккаунта, число ключей цену не увеличивает. "
-            "За 30 дней без пауз: 50,40 ₽ / 100,80 ₽. Выпуск и замена ключей бесплатны. "
+            + plan_overview()
+            + "\n\nОдна подписка на аккаунт, число ключей цену не увеличивает. "
+            "Выпуск и замена ключей бесплатны. "
             "Чтобы остановить оплату, приостановите подписку в боте: отключение Hiddify её не приостанавливает."
             + (
                 "\n\n⏸ Списания сейчас приостановлены."
@@ -92,9 +90,7 @@ def render_subscription(view, balance=None) -> str:
     text = (
         "💎 <b>Подписка</b>\n\n"
         f"Тариф: <b>{PLANS.get(view.plan_code, 'Не выбран')}</b>\n"
-        f"Стоимость: <b>{format_money(view.hourly_rate_rub)} ₽/час</b> "
-        f"(около {format_whole_money(view.monthly_price_rub)} ₽ в месяц).\n"
-        f"За 30 дней без пауз: {format_money(view.monthly_estimate_rub)} ₽.\n"
+        f"Стоимость: <b>{monthly_price(view)}</b>.\n"
         f"Состояние: {STATUS.get(view.status, '⏳ Обновляется')}\n"
         "Сервисы: "
         + ", ".join(SERVICES[code] for code in view.services if code in SERVICES)
@@ -106,15 +102,11 @@ def render_subscription(view, balance=None) -> str:
         text += "\nБаланс: <b>∞</b>. Списаний нет."
     elif balance is not None:
         text += f"\nБаланс: <b>{format_money(balance)} ₽</b>."
-        if not view.billing_paused and view.status == "active":
-            hours = max(0, int(Decimal(str(balance)) / view.hourly_rate_rub))
-            text += f" При текущем тарифе хватит примерно на {hours} ч."
     if view.billing_paused:
         text += "\n\n⏸ Списания сейчас приостановлены. Баланс не расходуется."
-    elif view.next_charge_at and not view.unlimited_balance:
-        text += f"\nСледующее почасовое списание: {_date(view.next_charge_at)}."
     text += (
-        "\n\nОдна подписка на аккаунт. Выпуск и замена ключей бесплатны. "
+        f"\n\n{PLAN_DESCRIPTIONS.get(view.plan_code, '')}\n\n"
+        "Одна подписка на аккаунт. Выпуск и замена ключей бесплатны. "
         "Чтобы остановить оплату, приостановите подписку в боте: отключение Hiddify её не приостанавливает."
     )
     return text
@@ -273,7 +265,7 @@ async def subscription_callback(
             rows = [
                 [
                     _button(
-                        f"{plan.name} · {format_money(plan.hourly_rate_rub)} ₽/час",
+                        f"{PLANS[plan.code]} · {monthly_price(plan)}",
                         f"sub:choose:{plan.code}",
                     )
                 ]
@@ -286,22 +278,13 @@ async def subscription_callback(
             plan = next(
                 plan for plan in subscription_service.catalog() if plan.code == parts[2]
             )
-            limit = (
-                "Одно одновременное подключение."
-                if plan.max_sessions == 1
-                else "Без ограничения устройств и подключений."
-            )
             text = (
-                f"💎 <b>{html.escape(plan.name)}</b> — {format_money(plan.hourly_rate_rub)} ₽/час "
-                f"(около {format_whole_money(plan.monthly_price_rub)} ₽ в месяц).\n"
-                f"За 30 дней без пауз: {format_money(plan.monthly_estimate_rub)} ₽.\n\n"
-                + ", ".join(
-                    SERVICES[code] for code in plan.services if code in SERVICES
-                )
-                + f".\n{limit}\nВыпуск и замена ключей бесплатны.\n\n"
+                f"💎 <b>{PLANS[plan.code]} — {monthly_price(plan)}</b>\n\n"
+                f"{PLAN_DESCRIPTIONS[plan.code]}\n"
+                "Выпуск и замена ключей бесплатны.\n\n"
                 "Тариф изменится сразу. При переходе на BASIC прежний ключ VLESS + REALITY отключится. "
                 "После смены тарифа откройте «Мои ключи» и нажмите «Выпустить / проверить». "
-                "Оплата остаётся почасовой за одну подписку аккаунта."
+                "Одна подписка на аккаунт, число ключей цену не увеличивает."
             )
             if settings.maintenance_mode or not settings.billing_enabled:
                 text += "\nСписания приостановлены. Выбор тарифа не спишет деньги."
@@ -327,9 +310,9 @@ async def subscription_callback(
                 data = f"sub:rotate:{service_id}:{_token(callback)}"
             else:
                 text = (
-                    "Приостановить все подключения подписки? Доступ остановится, почасовые списания прекратятся."
+                    "Приостановить все подключения подписки? Доступ остановится, списания прекратятся."
                     if operation == "suspend"
-                    else "Возобновить доступ по текущему тарифу? Когда списания включены, для доступа нужен баланс на почасовую оплату."
+                    else "Возобновить доступ по текущему тарифу? Когда списания включены, для доступа нужен баланс на оплату подписки."
                 )
                 data = f"sub:{operation}:{_token(callback)}"
             markup = _markup(

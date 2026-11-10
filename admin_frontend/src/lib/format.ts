@@ -9,6 +9,16 @@ export function formatMoney(value: string | number | null | undefined, currency 
   }).format(amount)
 }
 
+// Nominal subscription labels only. Keep wallet/ledger amounts in formatMoney.
+export function formatMonthlyPrice(value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === '') return '—'
+  const amount = Number(value)
+  if (!Number.isFinite(amount)) return '—'
+  return new Intl.NumberFormat('ru-RU', {
+    style: 'currency', currency: 'RUB', minimumFractionDigits: 0, maximumFractionDigits: 0,
+  }).format(amount)
+}
+
 export function formatNumber(value: number | string | null | undefined) {
   if (value === null || value === undefined || value === '') return '—'
   const number = Number(value)

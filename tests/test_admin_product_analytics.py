@@ -150,6 +150,7 @@ async def test_manual_and_configured_business_exclusions_are_unioned_not_applied
         "unlimited_active_accounts": 1,
         "hourly_rate_rub": "0.07",
         "monthly_estimate_rub": "50.40",
+        "monthly_plan_total_rub": "50.00",
         "currency": "RUB",
     }
     assert total_overview["subscription_forecast"] == {
@@ -160,6 +161,7 @@ async def test_manual_and_configured_business_exclusions_are_unioned_not_applied
         "unlimited_active_accounts": 1,
         "hourly_rate_rub": "0.42",
         "monthly_estimate_rub": "302.40",
+        "monthly_plan_total_rub": "300.00",
         "currency": "RUB",
     }
     assert await _financial_snapshot(sessionmaker) == before
@@ -190,6 +192,9 @@ async def test_unlimited_changes_only_paid_forecast_and_manual_exclusion_updates
     assert after_unlimited["subscription_forecast"]["unlimited_active_accounts"] == 0
     assert after_unlimited["subscription_forecast"]["hourly_rate_rub"] == "0.21"
     assert after_unlimited["subscription_forecast"]["monthly_estimate_rub"] == "151.20"
+    assert (
+        after_unlimited["subscription_forecast"]["monthly_plan_total_rub"] == "150.00"
+    )
 
     # The same service instance sees flag changes without an API restart. An
     # overlap remains excluded until both independent rules are removed.
@@ -206,6 +211,7 @@ async def test_unlimited_changes_only_paid_forecast_and_manual_exclusion_updates
     assert after_manual["finance"]["wallet_liability"] == "77.00"
     assert after_manual["subscription_forecast"]["paid_active_accounts"] == 3
     assert after_manual["subscription_forecast"]["hourly_rate_rub"] == "0.35"
+    assert after_manual["subscription_forecast"]["monthly_plan_total_rub"] == "250.00"
     assert await _financial_snapshot(sessionmaker) == ledger_before
 
 

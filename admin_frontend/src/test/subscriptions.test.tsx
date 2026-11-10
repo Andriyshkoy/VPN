@@ -5,6 +5,7 @@ import App from '../App'
 import { adaptFinanceOverview, adaptUserDetail, adaptUserListItem } from '../api/adapters'
 import { UnlimitedBalanceDialog } from '../components/UnlimitedBalanceDialog'
 import { UserSubscription } from '../components/UserSubscription'
+import { FinanceActivity } from '../pages/FinanceActivity'
 import { actor } from './fixtures'
 import { renderApp, renderUnit } from './render'
 import { server } from './server'
@@ -15,7 +16,7 @@ function admin(permissions = [...actor.actor.permissions, 'subscriptions:read', 
   server.use(http.get('/api/admin/v1/auth/me', () => HttpResponse.json({ ...actor, actor: { ...actor.actor, permissions } })))
 }
 
-test('shows hourly plans and runs a read-only migration preview without any automatic mutation', async () => {
+test('shows monthly plans without fractional prices and runs a read-only migration preview without any automatic mutation', async () => {
   admin()
   let reads = 0
   const writes: string[] = []
@@ -28,9 +29,13 @@ test('shows hourly plans and runs a read-only migration preview without any auto
   )
   renderApp(<App />, '/subscriptions')
   expect(await screen.findByRole('heading', { name: 'Подписки' })).toBeInTheDocument()
-  expect(await screen.findByText(/0,07/)).toBeInTheDocument()
-  expect(screen.getByText(/50,40/)).toBeInTheDocument()
-  expect(screen.getByText(/100,80/)).toBeInTheDocument()
+  expect(await screen.findByText(/Для простых задач, например Instagram/)).toBeInTheDocument()
+  expect(screen.getByText(/Рекомендуем для нескольких устройств/)).toBeInTheDocument()
+  expect(screen.getByText(/выберите второй в Hiddify вручную/)).toBeInTheDocument()
+  const cards = screen.getByRole('region', { name: 'Тарифы' })
+  expect(cards).toHaveTextContent(/50\s*₽\s*в месяц/)
+  expect(cards).toHaveTextContent(/100\s*₽\s*в месяц/)
+  expect(document.body).not.toHaveTextContent(/0,07|0,14|50,40|100,80|почас|720 часов|за час/i)
   expect(screen.getByText('Выключены')).toBeInTheDocument()
   expect(reads).toBe(0)
   await userEvent.click(screen.getByRole('button', { name: 'Рассчитать без изменений' }))
@@ -114,9 +119,13 @@ test('plan changes are immediate, guarded by version and never toggle infinite m
   )
   renderApp(<UserSubscription userId="42" balance="125.50" />)
   await userEvent.click(await screen.findByRole('button', { name: 'Изменить тариф' }))
-  expect(screen.getByText(/896 ч/)).toBeInTheDocument()
+  expect(screen.getByText(/Примерно 37 дн/)).toBeInTheDocument()
+  expect(screen.getAllByText(/100\s*₽.*в месяц/).length).toBeGreaterThan(0)
+  expect(document.body).not.toHaveTextContent(/0,07|0,14|50,40|100,80|почас|\/ час/i)
   expect(screen.getByText(/Тариф изменится сразу/)).toBeInTheDocument()
   await userEvent.selectOptions(await screen.findByLabelText('Тариф'), 'basic')
+  expect(screen.getByRole('option', { name: /Basic.*50\s*₽ в месяц/ })).toBeInTheDocument()
+  expect(screen.getByText(/Для простых задач, например Instagram/)).toBeInTheDocument()
   await userEvent.type(screen.getByLabelText('Причина смены тарифа'), 'По просьбе пользователя')
   await userEvent.click(screen.getByRole('button', { name: 'Сохранить тариф' }))
   await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
@@ -136,7 +145,40 @@ test('support can read a subscription without gaining plan or infinite balance c
 })
 
 test('subscription forecast remains separate from historical revenue and finite wallet liability', () => {
-  const result = adaptFinanceOverview({ finance: { cash_in: '500.00', recognized_revenue: '120.00', wallet_liability: '125.50' }, subscription_forecast: { scope: 'business', billing_paused: true, active_accounts: 2, paid_active_accounts: 1, unlimited_active_accounts: 1, hourly_rate_rub: '0.14', monthly_estimate_rub: '100.80', currency: 'RUB' } })
-  expect(result).toMatchObject({ deposits: '500.00', service_revenue: '120.00', balance_liability: '125.50', subscription_forecast: { billing_paused: true, active_accounts: 2, paid_active_accounts: 1, unlimited_active_accounts: 1, hourly_rate_rub: '0.14', monthly_estimate_rub: '100.80' } })
+  const result = adaptFinanceOverview({ finance: { cash_in: '500.00', recognized_revenue: '120.00', wallet_liability: '125.50' }, subscription_forecast: { scope: 'business', billing_paused: true, active_accounts: 2, paid_active_accounts: 1, unlimited_active_accounts: 1, hourly_rate_rub: '0.14', monthly_estimate_rub: '100.80', monthly_plan_total_rub: '100.00', currency: 'RUB' } })
+  expect(result).toMatchObject({ deposits: '500.00', service_revenue: '120.00', balance_liability: '125.50', subscription_forecast: { billing_paused: true, active_accounts: 2, paid_active_accounts: 1, unlimited_active_accounts: 1, hourly_rate_rub: '0.14', monthly_estimate_rub: '100.80', monthly_plan_total_rub: '100.00' } })
   expect(adaptFinanceOverview({ finance: {} }).subscription_forecast).toBeUndefined()
+})
+
+
+test('finance shows nominal monthly plan total while retaining exact historical money', async () => {
+  admin()
+  server.use(
+    http.get('/api/admin/v1/analytics/overview', () => HttpResponse.json({
+      finance: { cash_in: '500.00', recognized_revenue: '120.07', wallet_liability: '125.50' }, users: {},
+      subscription_forecast: { scope: 'business', billing_paused: true, active_accounts: 3, paid_active_accounts: 2, unlimited_active_accounts: 1, hourly_rate_rub: '0.21', monthly_estimate_rub: '151.20', monthly_plan_total_rub: '150.00', currency: 'RUB' },
+    })),
+    http.get('/api/admin/v1/analytics/finance/timeseries', () => HttpResponse.json({ items: [] })),
+    http.get('/api/admin/v1/finance/ledger', () => HttpResponse.json({ items: [], total: 0, offset: 0, limit: 25 })),
+  )
+  renderApp(<App />, '/finance')
+  expect(await screen.findByText('По тарифам в месяц')).toBeInTheDocument()
+  const forecast = screen.getByRole('heading', { name: 'Оценка по активным подпискам' }).closest('section')!
+  expect(forecast).toHaveTextContent(/150\s*₽/)
+  expect(forecast).toHaveTextContent(/50 \/ 100 ₽ в месяц/)
+  expect(forecast).not.toHaveTextContent(/0,21|151,20|почас|720/i)
+  expect(screen.getByText(/125,50/)).toBeInTheDocument()
+  expect(screen.getByText(/120,07/)).toBeInTheDocument()
+})
+
+
+test('historical billing preserves exact debit totals without a per-config tariff column', async () => {
+  admin()
+  server.use(http.get('/api/admin/v1/finance/billing-runs', () => HttpResponse.json({ items: [{ id: 1, status: 'completed', period_start: '2026-11-10T08:00:00Z', period_end: '2026-11-10T09:00:00Z', cost_per_config: '0.07', charged_users: 1, total_amount: '0.14' }], total: 1, limit: 25, offset: 0 })))
+  renderApp(<FinanceActivity from="2026-11-10" to="2026-11-10" />, '/finance?finance_view=billing')
+  const table = await screen.findByRole('table', { name: 'Биллинговые прогоны' })
+  expect(within(table).queryByRole('columnheader', { name: 'Тариф за конфиг' })).not.toBeInTheDocument()
+  expect(table).not.toHaveTextContent('0,07')
+  expect(within(table).getByRole('columnheader', { name: 'Списано' })).toBeInTheDocument()
+  expect(table).toHaveTextContent(/0,14/)
 })

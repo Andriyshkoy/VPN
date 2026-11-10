@@ -1046,6 +1046,7 @@ class AdminAnalyticsQueryService:
         from core.services.subscription_types import PLANS
 
         tariffs = {plan.code: plan.hourly_rate_rub for plan in PLANS}
+        monthly_prices = {plan.code: plan.monthly_price_rub for plan in PLANS}
         rows = await session.execute(
             select(
                 Subscription.plan_code,
@@ -1059,12 +1060,14 @@ class AdminAnalyticsQueryService:
         paid_accounts = 0
         unlimited_accounts = 0
         hourly_rate = Decimal("0.00")
+        monthly_plan_total = Decimal("0.00")
         for plan_code, unlimited, count in rows:
             if unlimited:
                 unlimited_accounts += int(count)
             else:
                 paid_accounts += int(count)
                 hourly_rate += tariffs[plan_code] * int(count)
+                monthly_plan_total += monthly_prices[plan_code] * int(count)
         return {
             "scope": self._analytics_scope,
             "billing_paused": not settings.billing_enabled,
@@ -1073,6 +1076,7 @@ class AdminAnalyticsQueryService:
             "unlimited_active_accounts": unlimited_accounts,
             "hourly_rate_rub": money(hourly_rate),
             "monthly_estimate_rub": money(hourly_rate * Decimal("720")),
+            "monthly_plan_total_rub": money(monthly_plan_total),
             "currency": "RUB",
         }
 

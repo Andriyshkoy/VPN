@@ -14,6 +14,7 @@ from ..keyboards import (
     guide_menu_keyboard,
     main_menu_keyboard,
 )
+from ..subscription_copy import plan_overview
 from ..ui import format_money, safe_callback_answer, safe_edit_text
 from .base import get_or_create_user, router
 
@@ -46,10 +47,8 @@ async def cmd_start(
         "<b>Простой и доступный VPN без сложных настроек.</b>\n\n"
         "⚡ Подключение за несколько минут\n"
         "🛡 Стабильное соединение для телефона и компьютера\n"
-        "💎 BASIC — 50 ₽ в месяц: Hysteria, одно одновременное подключение.\n"
-        "💎 PLUS — 100 ₽ в месяц: Hysteria и VLESS + REALITY, "
-        "без ограничения устройств.\n\n"
-        "Одна подписка на аккаунт. Выпуск и замена ключей бесплатны.\n"
+        + plan_overview()
+        + "\n\nОдна подписка на аккаунт. Выпуск и замена ключей бесплатны.\n"
         + (
             "⏸ Списания сейчас приостановлены.\n\n"
             if not settings.billing_enabled or settings.maintenance_mode

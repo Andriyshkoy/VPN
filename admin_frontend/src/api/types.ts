@@ -176,6 +176,7 @@ export interface FinanceOverview {
     unlimited_active_accounts: number
     hourly_rate_rub: Money
     monthly_estimate_rub: Money
+    monthly_plan_total_rub?: Money
     currency: string
   }
   deposits: Money

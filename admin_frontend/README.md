@@ -55,9 +55,10 @@ an unprivileged Nginx process on port `5173`. Browser routes fall back to
 
 ## Prepared subscription and campaign workflows
 
-- `/subscriptions` shows account-level hourly rates: Basic 0.07 RUB/hour and
-  Plus 0.14 RUB/hour. About 50/100 RUB per 30 days are orientation prices;
-  720 hours cost 50.40/100.80 RUB. This is not monthly prepayment.
+- `/subscriptions` presents Basic at 50 RUB/month and Plus at 100 RUB/month.
+  Basic is for simple tasks such as Instagram on one device; Plus adds multiple
+  devices and a second protocol selected manually in Hiddify if the first fails.
+  Tariff prices never use the general wallet/ledger money formatter.
 - Basic includes Hysteria 2 with one concurrent client session, without a
   hardware binding. Plus includes Hysteria 2 and VLESS/REALITY with unlimited
   devices. Profile issue/reissue is free.
@@ -66,7 +67,7 @@ an unprivileged Nginx process on port `5173`. Browser routes fall back to
   or turn on the global billing switch.
 - Infinite balance is only an explicit admin action with a reason and
   confirmation. The finite wallet and ledger are preserved; disabling the flag
-  restores ordinary hourly billing whenever global billing is enabled. No user
+  restores finite-wallet billing whenever global billing is enabled. No user
   is automatically granted the flag by this frontend.
 - Migration preview only reads the proposed mapping (one active profile to
   Basic, two or more to Plus). Fully suspended accounts remain off. There is no

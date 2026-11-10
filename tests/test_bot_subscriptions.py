@@ -111,11 +111,24 @@ def flow(monkeypatch):
     )
 
 
-def test_hourly_copy_and_paused_forecast_has_no_prepaid_period():
+def assert_monthly_tariffs_only(text):
+    for token in (
+        "₽/час",
+        "почас",
+        "720",
+        "0,07 ₽",
+        "0,14 ₽",
+        "50,40 ₽",
+        "100,80 ₽",
+    ):
+        assert token not in text.lower()
+
+
+def test_monthly_copy_preserves_wallet_without_exposing_internal_billing_schedule():
     text = subscriptions.render_subscription(view(), Decimal("9.80"))
-    assert "0,14 ₽/час" in text
-    assert "около 100 ₽ в месяц" in text
-    assert "100,80 ₽" in text
+    assert "100 ₽/месяц" in text
+    assert "9,80 ₽" in text
+    assert_monthly_tariffs_only(text)
     assert "Баланс не расходуется" in text
     assert "примерно на" not in text
     assert all(
@@ -127,8 +140,31 @@ def test_hourly_copy_and_paused_forecast_has_no_prepaid_period():
         next_charge_at=datetime(2026, 11, 9, 11, tzinfo=timezone.utc),
     )
     text = subscriptions.render_subscription(active, Decimal("9.80"))
-    assert "примерно на 70 ч" in text
-    assert "09.11.2026 11:00 UTC" in text
+    assert_monthly_tariffs_only(text)
+    assert "примерно на" not in text
+    assert "09.11.2026 11:00 UTC" not in text
+    assert "9,80 ₽" in text
+
+
+@pytest.mark.parametrize("plan", PLANS, ids=lambda plan: plan.code)
+@pytest.mark.parametrize("paused", [False, True])
+def test_subscription_card_uses_monthly_dto_price_not_internal_rate_or_estimate(
+    plan, paused
+):
+    subscription = view(
+        plan_code=plan.code,
+        monthly_price_rub=plan.monthly_price_rub,
+        hourly_rate_rub=Decimal("987.65"),
+        monthly_estimate_rub=Decimal("543.21"),
+        services=plan.services,
+        max_sessions=plan.max_sessions,
+        billing_paused=paused,
+    )
+    text = subscriptions.render_subscription(subscription, Decimal("9.80"))
+    assert f"{int(plan.monthly_price_rub)} ₽/месяц" in text
+    assert "987,65" not in text and "543,21" not in text
+    assert_monthly_tariffs_only(text)
+    assert "9,80 ₽" in text
 
 
 def test_unlimited_balance_hides_finite_wallet_without_fake_money():
@@ -165,11 +201,48 @@ async def test_choose_plan_is_read_only_until_confirmation(flow):
     await subscriptions.subscription_callback(callback, flow.state)
     flow.service.select_plan.assert_not_awaited()
     text, kwargs = callback.message.edits[-1]
-    assert "0,07 ₽/час" in text and "50,40 ₽" in text
+    assert "BASIC — 50 ₽/месяц" in text
+    assert "Instagram" in text and "один клиент одновременно" in text
+    assert_monthly_tariffs_only(text)
     assert "не спишет деньги" in text
     assert "sub:apply:basic:3" in buttons(kwargs["reply_markup"])
     flow.register.assert_awaited_once_with(101, "alice")
     flow.state.clear.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action",
+    [
+        "plans",
+        "choose:basic",
+        "choose:plus",
+        "view",
+        "keys",
+        "suspend-confirm",
+        "resume-confirm",
+    ],
+)
+async def test_subscription_callback_screens_do_not_expose_hourly_tariffs(flow, action):
+    callback = Callback(f"sub:{action}")
+    await subscriptions.subscription_callback(callback, flow.state)
+    text, kwargs = callback.message.edits[-1]
+    assert_monthly_tariffs_only(text)
+    for row in kwargs["reply_markup"].inline_keyboard:
+        for button in row:
+            assert_monthly_tariffs_only(button.text)
+    if action == "plans":
+        labels = [
+            button.text
+            for row in kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        assert "BASIC · 50 ₽/месяц" in labels
+        assert "PLUS · 100 ₽/месяц" in labels
+    if action in {"plans", "choose:plus", "view"}:
+        assert "нескольких устройств" in text
+        assert "Hysteria 2" in text and "VLESS + REALITY" in text
+        assert "выберите другой вручную" in text
 
 
 @pytest.mark.asyncio
