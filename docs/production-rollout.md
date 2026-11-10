@@ -28,6 +28,13 @@ Do not restore the old four-image `vpn-infra-release.override.json` over the
 new six-image release: its image overrides can select obsolete application
 versions. The catalog bind is now part of the base production Compose file.
 
+The Manager mTLS smoke checks every `openvpn-manager` server. It explicitly
+skips `node-agent` records, whose authenticated readiness and capabilities are
+checked separately. Unknown backend types and a fleet without an OpenVPN
+Manager fail this smoke; retiring the last Manager requires a separately
+reviewed rollout change. The mTLS, inventory and Manager instance checks are
+unchanged.
+
 1. Preserve and validate a database dump created after the current Manager API
    key rotation. Keep the earlier pre-rotation dump only as forensic history.
 2. Set all six `VPN_*_IMAGE` values to registry digests. Production Compose
