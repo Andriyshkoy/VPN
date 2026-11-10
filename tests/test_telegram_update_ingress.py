@@ -313,6 +313,94 @@ class _IngestionService:
         return len(payloads)
 
 
+def _guide_callback_update(update_id: int, guide: str) -> dict:
+    # Telegram returns only these link-preview options. aiogram fills the
+    # omitted options with client-only Default sentinels during validation.
+    return {
+        "update_id": update_id,
+        "callback_query": {
+            "id": f"guide-callback-{update_id}",
+            "from": {"id": 200, "is_bot": False, "first_name": "Test"},
+            "chat_instance": "private-guide-chat",
+            "data": f"guide:{guide}",
+            "message": {
+                "message_id": 12,
+                "date": 1794250000,
+                "chat": {"id": 200, "type": "private"},
+                "from": {"id": 300, "is_bot": True, "first_name": "VPN"},
+                "text": "Choose your device",
+                "has_protected_content": False,
+                "link_preview_options": {
+                    "is_disabled": True,
+                    "prefer_small_media": False,
+                },
+                "reply_markup": {
+                    "inline_keyboard": [
+                        [{"text": "Android", "callback_data": "guide:android"}]
+                    ]
+                },
+            },
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "guide",
+    ["windows", "macos", "android", "ios", "linux", "tv", "troubleshooting", "menu"],
+)
+async def test_polling_guide_callback_persists_wire_fields_without_sdk_defaults(
+    sessionmaker, guide
+):
+    payload = _guide_callback_update(102, guide)
+    bot = _PollingBot([Update.model_validate(payload)])
+    service = TelegramUpdateService(uow)
+    ingestor = TelegramPollingIngestor(bot, service)
+
+    assert await ingestor.poll_once() == 1
+    assert ingestor.offset == 103
+    # Telegram can redeliver a committed batch after a transport interruption.
+    # The same real payload must remain serializable and persist exactly once.
+    assert await ingestor.poll_once() == 1
+    async with uow() as repos:
+        rows = await repos.telegram_updates.list()
+        assert len(rows) == 1
+        assert rows[0].payload == payload
+        assert rows[0].status == TelegramUpdateStatus.PENDING.value
+
+
+@pytest.mark.asyncio
+async def test_polling_callback_batch_retries_without_ack_after_commit_failure():
+    payload = _guide_callback_update(104, "android")
+    following = {
+        "update_id": 105,
+        "message": {
+            "message_id": 13,
+            "date": 1794250001,
+            "chat": {"id": 200, "type": "private"},
+            "from": {"id": 200, "is_bot": False, "first_name": "Test"},
+            "text": "/start",
+            "link_preview_options": {"url": "https://example.com"},
+        },
+    }
+    bot = _PollingBot(
+        [Update.model_validate(payload), Update.model_validate(following)]
+    )
+    service = _IngestionService(fail=True)
+    ingestor = TelegramPollingIngestor(bot, service)
+
+    with pytest.raises(ConnectionError, match="database unavailable"):
+        await ingestor.poll_once()
+    assert ingestor.offset is None
+    assert service.payloads == [([payload, following], "polling")]
+
+    service.fail = False
+    assert await ingestor.poll_once() == 2
+    assert bot.offsets == [None, None]
+    assert ingestor.offset == 106
+    assert service.payloads[-1] == ([payload, following], "polling")
+
+
 @pytest.mark.asyncio
 async def test_polling_advances_offset_only_after_database_commit():
     bot = _PollingBot([Update(update_id=100), Update(update_id=101)])

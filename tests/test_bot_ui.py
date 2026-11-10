@@ -123,9 +123,10 @@ async def test_start_registers_payload_and_installs_menu(monkeypatch):
     assert "Простой и доступный VPN" in welcome
     assert "50 ₽" in welcome
     assert "100 ₽" in welcome
-    assert "почасов" in welcome.lower()
-    assert "0,07 ₽/час" in welcome
-    assert "0,14 ₽/час" in welcome
+    assert "почасов" not in welcome.lower()
+    assert "₽/час" not in welcome
+    assert "50,40" not in welcome
+    assert "100,80" not in welcome
     assert "на 30 дней" not in welcome
     assert "Hysteria" in welcome
     assert "VLESS" in welcome
