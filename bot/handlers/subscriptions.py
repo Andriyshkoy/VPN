@@ -125,6 +125,42 @@ def subscription_keyboard(view) -> InlineKeyboardMarkup:
     return _markup(rows)
 
 
+def _keys_ready(view) -> bool:
+    if view is None or view.status != "active" or not view.services:
+        return False
+    accesses = {access.service_id: access for access in view.accesses}
+    return all(
+        service_id in SERVICES
+        and service_id in accesses
+        and accesses[service_id].status == "active"
+        for service_id in view.services
+    )
+
+
+def _keys_feedback(view) -> str:
+    if view is None:
+        return "Сначала выберите тариф в разделе «Подписка»."
+    if _keys_ready(view):
+        return "Ключи готовы. Выберите нужный протокол."
+    if view.status not in {"active", "pending"}:
+        return "Доступ приостановлен. Откройте раздел «Подписка»."
+    if any(
+        access.status == "failed" and access.service_id in view.services
+        for access in view.accesses
+    ):
+        return "Не все ключи готовы. Повторите выпуск или напишите в поддержку."
+    available = {access.service_id for access in view.accesses}
+    if any(service_id not in available for service_id in view.services):
+        return "Не все ключи выпущены. Нажмите «Выпустить / проверить»."
+    if any(
+        access.service_id in view.services
+        and access.status not in {"active", "pending", "provisioning"}
+        for access in view.accesses
+    ):
+        return "Не все ключи готовы. Нажмите «Выпустить / проверить»."
+    return "Ключи ещё готовятся. Обновите состояние чуть позже."
+
+
 def render_keys(view) -> tuple[str, InlineKeyboardMarkup]:
     if view is None:
         return "🔑 <b>Мои ключи</b>\n\nСначала выберите тариф.", subscription_keyboard(
@@ -133,6 +169,7 @@ def render_keys(view) -> tuple[str, InlineKeyboardMarkup]:
     text = "🔑 <b>Мои ключи</b>\n\n"
     accesses = {access.service_id: access for access in view.accesses}
     rows = []
+    profile_buttons = []
     for service_id in view.services:
         if service_id not in SERVICES:
             continue
@@ -144,6 +181,7 @@ def render_keys(view) -> tuple[str, InlineKeyboardMarkup]:
         )
         text += f"{SERVICES[service_id]}: {state}\n"
         if access is not None and access.status == "active" and view.status == "active":
+            profile_buttons.append(f"«Ключ {SERVICES[service_id]}»")
             rows.append(
                 [
                     _button(
@@ -159,11 +197,19 @@ def render_keys(view) -> tuple[str, InlineKeyboardMarkup]:
                     )
                 ]
             )
-    if view.status in {"active", "pending"}:
+    if _keys_ready(view):
+        rows.append([_button("🔄 Обновить состояние", "sub:keys")])
+    elif view.status in {"active", "pending"}:
         rows.append([_button("➕ Выпустить / проверить ключи бесплатно", "sub:issue")])
     else:
         text += "\nДоступ приостановлен. Возобновить его можно в разделе «Подписка»."
-    text += "\n\nСкопируйте ключ и в Hiddify нажмите «+» → «Из буфера обмена»."
+    if profile_buttons:
+        text += (
+            "\n\nЧтобы получить профиль для Hiddify, нажмите "
+            + " или ".join(profile_buttons)
+            + "."
+        )
+    text += "\n\nСкопируйте весь профиль и в Hiddify нажмите «+» → «Из буфера обмена»."
     rows.extend(
         [[_button("💎 Подписка", "sub:view")], [_button("📚 Инструкции", "guide:menu")]]
     )
@@ -481,5 +527,8 @@ async def subscription_callback(
     await safe_edit_text(
         callback.message, text, reply_markup=markup, disable_web_page_preview=True
     )
-    await safe_callback_answer(callback)
+    if action in {"keys", "issue"}:
+        await safe_callback_answer(callback, _keys_feedback(view))
+    else:
+        await safe_callback_answer(callback)
     _audit(telegram_action_audit, audit_action, **metadata)
