@@ -50,8 +50,15 @@ class TelegramPollingIngestor:
             allowed_updates=self.allowed_updates,
             request_timeout=settings.telegram_update_poll_timeout + 10,
         )
+        # Nested incoming objects (for example Message.link_preview_options)
+        # can contain aiogram's client-only Default sentinels for fields that
+        # Telegram did not send. Persist the supplied wire fields and aliases,
+        # not those synthetic outbound defaults or this bot's own preferences.
         payloads = [
-            update.model_dump(mode="json", exclude_none=True) for update in updates
+            update.model_dump(
+                mode="json", by_alias=True, exclude_none=True, exclude_unset=True
+            )
+            for update in updates
         ]
 
         # This commit is the acknowledgement boundary. If it fails, ``offset``
