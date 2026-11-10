@@ -113,7 +113,6 @@ function BillingJournal({ from, to, params, update }: JournalProps) {
     { key: 'period', header: 'Период', render: (row) => <span><strong>{formatDateTime(row.period_start)}</strong><small className="cell-note">до {formatDateTime(row.period_end)}</small></span> },
     { key: 'status', header: 'Статус', render: (row) => <StatusBadge value={row.status} /> },
     { key: 'users', header: 'Пользователи', align: 'end', render: (row) => formatNumber(row.charged_users) },
-    { key: 'rate', header: 'Тариф за конфиг', align: 'end', render: (row) => formatMoney(row.cost_per_config) },
     { key: 'total', header: 'Списано', align: 'end', render: (row) => <strong>{formatMoney(row.total_amount)}</strong> },
   ]
   return <JournalPanel title="Биллинговые прогоны" controls={<label className="inline-select">Статус <select value={status} onChange={(event) => update({ billing_status: event.target.value || undefined, billing_offset: undefined })}><option value="">Все</option><option value="running">Выполняются</option><option value="completed">Завершены</option><option value="failed">Ошибки</option></select></label>} query={query} empty="Биллинговых прогонов за период нет" columns={columns} offset={offset} onPage={(nextOffset) => update({ billing_offset: nextOffset ? String(nextOffset) : undefined })} />

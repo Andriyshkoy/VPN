@@ -6,6 +6,8 @@ import html
 import json
 from pathlib import Path
 
+from .subscription_copy import plan_overview
+
 DOWNLOADS_PATH = (
     Path(__file__).resolve().parents[1]
     / "docs"
@@ -48,9 +50,8 @@ _COMMON = (
     "5. Выберите добавленный профиль, нажмите большую кнопку подключения "
     "и разрешите создание VPN-подключения.\n"
     "6. Откройте сайт или видео. Перед проверкой отключите другие VPN.\n\n"
-    "BASIC: один клиент одновременно. PLUS: оба сервиса и неограниченное "
-    "число устройств. На PLUS добавьте два ключа отдельными профилями; "
-    "если один не подключается, выберите другой вручную. "
+    + plan_overview()
+    + "\n\n"
     "Автоматическое переключение между этими профилями не включается ботом. "
     "В JSON Hysteria уже настроена проверка сертификата: не удаляйте "
     "параметры TLS и не включайте insecure.\n\n"
@@ -74,8 +75,9 @@ GUIDE_MENU_TEXT = (
     "либо скопируйте весь JSON, включая скобки, через <b>Clipboard</b>. "
     "<b>VLESS + REALITY</b>: целая ссылка <code>vless://…</code> через "
     "<b>«+» → «Из буфера обмена / Clipboard»</b>.\n\n"
-    "BASIC — Hysteria 2, одно одновременное подключение. "
-    "PLUS — Hysteria 2 и VLESS + REALITY, без ограничения устройств.\n\n" + _FOOTER
+    + plan_overview()
+    + "\n\n"
+    + _FOOTER
 )
 
 

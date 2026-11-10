@@ -207,6 +207,7 @@ export function adaptFinanceOverview(value: unknown): FinanceOverview {
       unlimited_active_accounts: number(raw.subscription_forecast.unlimited_active_accounts),
       hourly_rate_rub: money(raw.subscription_forecast.hourly_rate_rub),
       monthly_estimate_rub: money(raw.subscription_forecast.monthly_estimate_rub),
+      ...(raw.subscription_forecast.monthly_plan_total_rub !== undefined ? { monthly_plan_total_rub: money(raw.subscription_forecast.monthly_plan_total_rub) } : {}),
       currency: text(raw.subscription_forecast.currency, 'RUB'),
     } } : {}),
     deposits: cashIn,

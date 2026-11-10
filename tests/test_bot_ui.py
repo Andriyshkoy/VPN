@@ -127,6 +127,9 @@ async def test_start_registers_payload_and_installs_menu(monkeypatch):
     assert "₽/час" not in welcome
     assert "50,40" not in welcome
     assert "100,80" not in welcome
+    assert "50 ₽/месяц" in welcome and "100 ₽/месяц" in welcome
+    assert "Instagram" in welcome and "один клиент одновременно" in welcome
+    assert "нескольких устройств" in welcome and "выберите другой вручную" in welcome
     assert "на 30 дней" not in welcome
     assert "Hysteria" in welcome
     assert "VLESS" in welcome
@@ -364,6 +367,13 @@ def test_instructions_cover_all_platforms_and_fit_telegram_limit():
     assert all(".ovpn" not in text for text in GUIDES.values())
     assert "apps.apple.com" in GUIDES["ios"]
     assert "play.google.com" in GUIDES["android"]
+    assert "50 ₽/месяц" in GUIDE_MENU_TEXT
+    assert "100 ₽/месяц" in GUIDE_MENU_TEXT
+    assert "Instagram" in GUIDE_MENU_TEXT
+    assert "выберите другой вручную" in GUIDE_MENU_TEXT
+    for text in (GUIDE_MENU_TEXT, *GUIDES.values()):
+        assert "₽/час" not in text and "почас" not in text.lower()
+        assert "50,40 ₽" not in text and "100,80 ₽" not in text
 
     callbacks = {
         button.callback_data
