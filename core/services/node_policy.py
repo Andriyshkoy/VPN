@@ -1,4 +1,4 @@
-"""Persistable technical policy; product prices and paid periods live elsewhere."""
+"""Persistable technical policy; hourly product prices live elsewhere."""
 
 from __future__ import annotations
 
@@ -7,7 +7,9 @@ from datetime import datetime, timezone
 from core.exceptions import InvalidOperationError
 
 NODE_SERVICES = frozenset({"hysteria", "vless-reality"})
-NODE_POLICY_FIELDS = frozenset({"traffic_limit_bytes", "expires_at", "activation_days"})
+NODE_POLICY_FIELDS = frozenset(
+    {"traffic_limit_bytes", "expires_at", "activation_days", "max_sessions"}
+)
 
 
 def normalize_node_policy(service_id: str, policy: dict | None) -> dict:
@@ -41,8 +43,18 @@ def normalize_node_policy(service_id: str, policy: dict | None) -> dict:
         raise InvalidOperationError("Hysteria requires activation_days")
     if service_id == "vless-reality" and days is not None:
         raise InvalidOperationError("VLESS requires exact expires_at")
-    return {
+    sessions = policy.get("max_sessions")
+    if sessions is not None and (type(sessions) is not int or not 1 <= sessions <= 128):
+        raise InvalidOperationError("Invalid concurrent session limit")
+    if service_id != "hysteria" and sessions is not None:
+        raise InvalidOperationError("Session limits require Hysteria")
+    result = {
         "traffic_limit_bytes": quota,
         "expires_at": expiry,
         "activation_days": days,
     }
+    # Do not rewrite existing immutable policy snapshots just because the new
+    # optional field was added. New product grants explicitly set None or 1.
+    if "max_sessions" in policy:
+        result["max_sessions"] = sessions
+    return result

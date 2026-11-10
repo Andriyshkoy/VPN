@@ -6,6 +6,7 @@ from core.db.unit_of_work import uow
 from core.exceptions import InsufficientBalanceError, InvalidOperationError
 from core.services import BillingService, ConfigService, ServerService, UserService
 from tests.fleet_test_support import mark_server_ready
+from tests.historical_billing_support import create_historical_paid_config
 
 
 class DummyGateway:
@@ -64,7 +65,8 @@ async def test_create_requires_balance(monkeypatch, sessionmaker):
     )
 
     with pytest.raises(InsufficientBalanceError):
-        await billing.create_paid_config(
+        await create_historical_paid_config(
+            billing,
             server_id=server.id,
             owner_id=user.id,
             name="bal",
@@ -100,7 +102,8 @@ async def test_services_workflow(monkeypatch, sessionmaker):
     await billing.top_up(user.id, 20)
 
     # create config
-    cfg = await billing.create_paid_config(
+    cfg = await create_historical_paid_config(
+        billing,
         server_id=server.id,
         owner_id=user.id,
         name="cfg1",
@@ -155,14 +158,16 @@ async def test_billing(monkeypatch, sessionmaker):
 
     await billing.top_up(user.id, 30)
 
-    await billing.create_paid_config(
+    await create_historical_paid_config(
+        billing,
         server_id=server.id,
         owner_id=user.id,
         name="c1",
         display_name="d1",
         creation_cost=10,
     )
-    await billing.create_paid_config(
+    await create_historical_paid_config(
+        billing,
         server_id=server.id,
         owner_id=user.id,
         name="c2",
@@ -199,7 +204,8 @@ async def test_charge_all_returns_dict(monkeypatch, sessionmaker):
     )
 
     await billing.top_up(user.id, 10)
-    await billing.create_paid_config(
+    await create_historical_paid_config(
+        billing,
         server_id=server.id,
         owner_id=user.id,
         name="cfg",
@@ -238,7 +244,8 @@ async def test_billing_suspend_unsuspend(monkeypatch, sessionmaker):
 
     await billing.top_up(user.id, 13)
 
-    cfg = await billing.create_paid_config(
+    cfg = await create_historical_paid_config(
+        billing,
         server_id=server.id,
         owner_id=user.id,
         name="c3",
@@ -284,7 +291,8 @@ async def test_server_update_and_user_with_configs(monkeypatch, sessionmaker):
 
     await server_svc.update(server.id, name="newname")
 
-    cfg = await billing.create_paid_config(
+    cfg = await create_historical_paid_config(
+        billing,
         server_id=server.id,
         owner_id=user.id,
         name="cfg4",

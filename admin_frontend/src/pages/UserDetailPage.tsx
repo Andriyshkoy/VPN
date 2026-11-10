@@ -19,6 +19,9 @@ import { Pagination } from '../components/Pagination'
 import { EmptyState, ErrorState, ForbiddenState, PageLoading } from '../components/States'
 import { StatusBadge } from '../components/StatusBadge'
 import { UserTimeline } from '../components/UserTimeline'
+import { UserSubscription } from '../components/UserSubscription'
+import { UnlimitedBalanceDialog } from '../components/UnlimitedBalanceDialog'
+import { serviceLabel } from '../api/subscriptions'
 import { formatDateTime, formatMoney, formatNumber, shortId, userLabel } from '../lib/format'
 
 const DETAIL_PAGE_SIZE = 25
@@ -38,6 +41,7 @@ function updatePage(params: URLSearchParams, setParams: (next: URLSearchParams) 
 const tabs = [
   { id: 'overview', label: 'Обзор', permission: 'users:read' },
   { id: 'finance', label: 'Финансы', permission: 'balance:read' },
+  { id: 'subscription', label: 'Подписка', permission: 'subscriptions:read' },
   { id: 'configs', label: 'Конфигурации', permission: 'configs:read' },
   { id: 'referrals', label: 'Рефералы', permission: 'referrals:read' },
   { id: 'history', label: 'История', permission: 'audit:read' },
@@ -55,6 +59,7 @@ export function UserDetailPage() {
   const { userId = '', tab = 'overview' } = useParams()
   const navigate = useNavigate()
   const [balanceOpen, setBalanceOpen] = useState(false)
+  const [unlimitedOpen, setUnlimitedOpen] = useState(false)
   const userQuery = useQuery({ queryKey: ['user', userId], queryFn: () => usersApi.detail(userId), enabled: Boolean(userId) })
   if (tab === 'audit') return <Navigate to={`/users/${userId}/history`} replace />
   if (!tabs.some((item) => item.id === tab)) return <Navigate to={`/users/${userId}/overview`} replace />
@@ -66,14 +71,15 @@ export function UserDetailPage() {
   return (
     <>
       <button type="button" className="back-link" onClick={() => navigate('/users')}><ArrowLeft size={16} /> К пользователям</button>
-      <PageHeader title={userLabel(user)} description={`ID ${user.id}${user.tg_id ? ` · Telegram ${user.tg_id}` : ''}`} actions={<><StatusBadge value={user.status ?? 'active'} />{canAdjustBalance && user.balance !== undefined && <button className="button button--primary" type="button" onClick={() => setBalanceOpen(true)}><CircleDollarSign size={17} /> Изменить баланс</button>}</>} />
+      <PageHeader title={userLabel(user)} description={`ID ${user.id}${user.tg_id ? ` · Telegram ${user.tg_id}` : ''}`} actions={<><StatusBadge value={user.status ?? 'active'} />{permissions.includes('campaigns:read') && permissions.includes('campaigns:write') && <Link className="button button--secondary" to={`/campaigns?user_id=${userId}`}>Написать пользователю</Link>}{canAdjustBalance && user.balance !== undefined && <button className="button button--secondary" type="button" onClick={() => setUnlimitedOpen(true)}>{user.unlimited_balance ? 'Режим ∞ включён' : 'Режим ∞'}</button>}{canAdjustBalance && user.balance !== undefined && <button className="button button--primary" type="button" onClick={() => setBalanceOpen(true)}><CircleDollarSign size={17} /> Изменить баланс</button>}</>} />
       <section className="user-summary">
         <div className="user-summary__identity"><span className="avatar avatar--large">{userLabel(user).replace('@', '').slice(0, 1).toUpperCase()}</span><div><strong>{user.display_name || userLabel(user)}</strong><span>{user.username ? `@${user.username.replace('@', '')}` : 'Username не указан'}</span><small>Зарегистрирован {formatDateTime(user.created_at)}</small></div></div>
-        <div className="user-summary__stats">{canReadBalance && <><StatCard label="Баланс" value={formatMoney(user.balance)} /><StatCard label="Пополнения" value={formatMoney(user.deposits_total)} /><StatCard label="Потребление" value={formatMoney(user.service_spend_total)} /></>}<StatCard label="Активные конфиги" value={formatNumber(user.active_configs_count ?? user.configs_count)} /></div>
+        <div className="user-summary__stats">{canReadBalance && <><StatCard label="Баланс" value={user.unlimited_balance ? '∞' : formatMoney(user.balance)} hint={user.unlimited_balance ? `Кошелёк: ${formatMoney(user.balance)}` : undefined} /><StatCard label="Пополнения" value={formatMoney(user.deposits_total)} /><StatCard label="Потребление" value={formatMoney(user.service_spend_total)} /></>}<StatCard label="Активные конфиги" value={formatNumber(user.active_configs_count ?? user.configs_count)} /></div>
       </section>
       <nav className="tabs" aria-label="Разделы пользователя">{tabs.filter((item) => admin?.permissions.includes(item.permission)).map((item) => <Link key={item.id} className={tab === item.id ? 'tab tab--active' : 'tab'} to={`/users/${userId}/${item.id}`}>{item.label}</Link>)}</nav>
-      {!canOpenTab ? <ForbiddenState /> : <>{tab === 'overview' && <UserOverview userId={userId} user={user} canReadBalance={canReadBalance} canReadReferrals={canReadReferrals} canReadConfigs={canReadConfigs} canReadOperations={canReadOperations} />}{tab === 'finance' && <UserFinance userId={userId} />}{tab === 'configs' && <UserConfigs userId={userId} canReadServers={canReadServers} />}{tab === 'referrals' && <UserReferrals userId={userId} />}{tab === 'history' && <UserTimeline userId={userId} />}</>}
+      {!canOpenTab ? <ForbiddenState /> : <>{tab === 'overview' && <UserOverview userId={userId} user={user} canReadBalance={canReadBalance} canReadReferrals={canReadReferrals} canReadConfigs={canReadConfigs} canReadOperations={canReadOperations} />}{tab === 'subscription' && <UserSubscription userId={userId} balance={canReadBalance ? user.balance : undefined} />}{tab === 'finance' && <UserFinance userId={userId} />}{tab === 'configs' && <UserConfigs userId={userId} canReadServers={canReadServers} />}{tab === 'referrals' && <UserReferrals userId={userId} />}{tab === 'history' && <UserTimeline userId={userId} />}</>}
       {canAdjustBalance && user.balance !== undefined && <BalanceAdjustmentDialog user={user} open={balanceOpen} onClose={() => setBalanceOpen(false)} />}
+      {canAdjustBalance && user.balance !== undefined && unlimitedOpen && <UnlimitedBalanceDialog user={user} onClose={() => setUnlimitedOpen(false)} />}
     </>
   )
 }
@@ -123,13 +129,14 @@ function UserConfigs({ userId, canReadServers }: { userId: string; canReadServer
   const operations = useQuery({ queryKey: ['user-operations', userId, operationOffset], queryFn: () => usersApi.operations(userId, { limit: DETAIL_PAGE_SIZE, offset: operationOffset }), placeholderData: (previous) => previous })
   const columns: Column<VpnConfig>[] = [
     { key: 'name', header: 'Конфигурация', render: (row) => <span><strong>{row.display_name || row.name || `#${row.id}`}</strong><small className="cell-note">#{row.id}</small></span> },
+    { key: 'service', header: 'Протокол', render: (row) => row.service_id ? serviceLabel(row.service_id) : 'OpenVPN (legacy)' },
     { key: 'server', header: 'Сервер', render: (row) => row.server_id ? canReadServers ? <Link to={`/servers/${row.server_id}`}>{row.server_name || `#${row.server_id}`}</Link> : row.server_name || `#${row.server_id}` : '—' },
     { key: 'desired', header: 'Желаемое состояние', render: (row) => <StatusBadge value={row.desired_state ?? (row.suspended ? 'suspended' : 'active')} /> },
     { key: 'actual', header: 'Фактическое состояние', render: (row) => <StatusBadge value={row.actual_state ?? row.last_operation_status} /> },
     { key: 'created', header: 'Создана', render: (row) => formatDateTime(row.created_at) },
     { key: 'error', header: 'Последняя ошибка', render: (row) => row.last_error ? <span className="error-inline" title={row.last_error}><ShieldAlert size={15} /> {row.last_error}</span> : '—' },
   ]
-  return <div className="stack"><section className="panel"><header className="panel__header"><div><h2>Конфигурации</h2><p>Desired и actual state</p></div></header>{configs.isLoading ? <PageLoading /> : configs.isError ? <ErrorState error={configs.error} /> : configs.data!.items.length ? <><DataTable label="Конфигурации пользователя" columns={columns} rows={configs.data!.items} rowKey={(row) => row.id} /><Pagination offset={configs.data!.offset} limit={configs.data!.limit} total={configs.data!.total} onChange={(nextOffset) => updatePage(params, setParams, 'config_offset', nextOffset)} /></> : <EmptyState title="Конфигураций нет" />}</section><section className="panel"><header className="panel__header"><div><h2>История VPN-операций</h2><p>Асинхронные действия и ошибки</p></div></header>{operations.isLoading ? <PageLoading /> : operations.isError ? <ErrorState error={operations.error} /> : operations.data!.items.length ? <><OperationsTable rows={operations.data!.items} /><Pagination offset={operations.data!.offset} limit={operations.data!.limit} total={operations.data!.total} onChange={(nextOffset) => updatePage(params, setParams, 'operation_offset', nextOffset)} /></> : <EmptyState title="Операций ещё не было" />}</section></div>
+  return <div className="stack"><section className="panel"><header className="panel__header"><div><h2>Конфигурации</h2><p>Выпуск и перевыпуск бесплатны. Подписка списывается почасово за аккаунт.</p></div></header>{configs.isLoading ? <PageLoading /> : configs.isError ? <ErrorState error={configs.error} /> : configs.data!.items.length ? <><DataTable label="Конфигурации пользователя" columns={columns} rows={configs.data!.items} rowKey={(row) => row.id} /><Pagination offset={configs.data!.offset} limit={configs.data!.limit} total={configs.data!.total} onChange={(nextOffset) => updatePage(params, setParams, 'config_offset', nextOffset)} /></> : <EmptyState title="Конфигураций нет" />}</section><section className="panel"><header className="panel__header"><div><h2>История VPN-операций</h2><p>Асинхронные действия и ошибки</p></div></header>{operations.isLoading ? <PageLoading /> : operations.isError ? <ErrorState error={operations.error} /> : operations.data!.items.length ? <><OperationsTable rows={operations.data!.items} /><Pagination offset={operations.data!.offset} limit={operations.data!.limit} total={operations.data!.total} onChange={(nextOffset) => updatePage(params, setParams, 'operation_offset', nextOffset)} /></> : <EmptyState title="Операций ещё не было" />}</section></div>
 }
 
 function OperationsTable({ rows }: { rows: VpnOperation[] }) {

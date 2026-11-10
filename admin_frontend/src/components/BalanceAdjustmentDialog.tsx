@@ -52,6 +52,7 @@ export function BalanceAdjustmentDialog({ user, open, onClose }: { user: User; o
   return (
     <Modal open={open} onClose={onClose} title="Корректировка баланса" description={`${userLabel(user)} · текущий баланс ${user.balance === undefined ? 'недоступен' : formatMoney(user.balance)}`}>
       <form id="balance-adjustment-form" className="form-stack" onSubmit={submit}>
+        {user.unlimited_balance && <div className="product-notice"><strong>Режим ∞ включён</strong><p>Корректируется сохранённый денежный кошелёк. Режим ∞ останется включённым.</p></div>}
         <fieldset className="segmented-field"><legend>Тип операции</legend><div className="segmented">
           <label className={type === 'credit' ? 'segmented__option segmented__option--active' : 'segmented__option'}><input type="radio" name="adjustment-type" value="credit" checked={type === 'credit'} onChange={() => setType('credit')} /><ArrowDownLeft /> Пополнение</label>
           <label className={type === 'debit' ? 'segmented__option segmented__option--active segmented__option--danger' : 'segmented__option'}><input type="radio" name="adjustment-type" value="debit" checked={type === 'debit'} onChange={() => setType('debit')} /><ArrowUpRight /> Списание</label>

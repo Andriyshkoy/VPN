@@ -37,7 +37,9 @@ class ConfigQueriesEntitlementsMixin:
         ) as api:
             return await api.download_config(context.name)
 
-    async def export_profile(self, config_id: int) -> NodeProfile:
+    async def export_profile(
+        self, config_id: int, *, profile_format: str = "auto"
+    ) -> NodeProfile:
         """Explicit secret export; ordinary config reads never fetch credentials."""
 
         context = await self._load_config_context(config_id)
@@ -51,7 +53,13 @@ class ConfigQueriesEntitlementsMixin:
             context.server_api_key,
             node_id=context.node_id,
         ) as api:
-            profile = await api.export_profile(context.remote_access_id)
+            profile = (
+                await api.export_profile(context.remote_access_id)
+                if profile_format == "auto"
+                else await api.export_profile(
+                    context.remote_access_id, profile_format=profile_format
+                )
+            )
         if (
             profile.service_id != context.service_id
             or profile.access_id != context.remote_access_id

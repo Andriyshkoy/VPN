@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "checked_at": "2026-11-09",
+  "language": "ru",
+  "client": {
+    "name": "Hiddify",
+    "website": "https://hiddify.com/",
+    "github": "https://github.com/hiddify/hiddify-app",
+    "releases": "https://github.com/hiddify/hiddify-app/releases/latest",
+    "verified_release": "v5.5.5",
+    "verified_release_url": "https://github.com/hiddify/hiddify-app/releases/tag/v5.5.5",
+    "verified_release_published_at": "2026-11-04T21:06:14Z",
+    "official_install_guide": "https://hiddify.com/app/How-to-install-Hiddify-app/",
+    "official_use_guide": "https://hiddify.com/app/How-to-use-Hiddify-app/"
+  },
+  "platforms": {
+    "android": {
+      "label": "Android",
+      "guide": "android.md",
+      "store_url": "https://play.google.com/store/apps/details?id=app.hiddify.com",
+      "minimum_os": "Android 7.0+",
+      "package_id": "app.hiddify.com",
+      "downloads": [
+        {
+          "label": "APK для любого поддерживаемого Android",
+          "url": "https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Android-universal.apk",
+          "architecture": "universal"
+        },
+        {
+          "label": "APK ARM64",
+          "url": "https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Android-arm64.apk",
+          "architecture": "arm64"
+        },
+        {
+          "label": "APK ARMv7",
+          "url": "https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Android-arm7.apk",
+          "architecture": "armv7"
+        },
+        {
+          "label": "APK x86_64",
+          "url": "https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Android-x86_64.apk",
+          "architecture": "x86_64"
+        }
+      ]
+    },
+    "ios": {
+      "label": "iPhone / iPad",
+      "guide": "ios.md",
+      "store_url": "https://apps.apple.com/app/hiddify-proxy-vpn/id6596777532",
+      "minimum_os": "iOS / iPadOS 15.5+",
+      "app_store_id": "6596777532",
+      "downloads": [],
+      "notes": [
+        "Доступность зависит от региона App Store. IPA для jailbreak не является обычным способом установки."
+      ]
+    },
+    "windows": {
+      "label": "Windows",
+      "guide": "windows.md",
+      "store_url": "https://apps.microsoft.com/detail/9pdfnl3qv2s5",
+      "minimum_os": "Windows 10 1809+ / Windows 11, x64",
+      "downloads": [
+        {
+          "label": "Установщик EXE",
+          "url": "https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Windows-Setup-x64.exe",
+          "architecture": "x86_64"
+        },
+        {
+          "label": "Portable ZIP",
+          "url": "https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Windows-Portable-x64.zip",
+          "architecture": "x86_64"
+        },
+        {
+          "label": "Пакет MSIX",
+          "url": "https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Windows-Setup-x64.Msix",
+          "architecture": "x86_64"
+        }
+      ]
+    },
+    "macos": {
+      "label": "macOS",
+      "guide": "macos.md",
+      "store_url": null,
+      "minimum_os": "macOS 12+, Intel / Apple Silicon",
+      "downloads": [
+        {
+          "label": "DMG для Mac",
+          "url": "https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-MacOS.dmg",
+          "architecture": "universal"
+        },
+        {
+          "label": "Установщик PKG",
+          "url": "https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-MacOS-Installer.pkg",
+          "architecture": "universal"
+        }
+      ],
+      "notes": [
+        "Минимум macOS 12 взят из deployment target v5.5.5; официальный install guide ещё указывает устаревшее 10.15. Для Mac рекомендуется отдельный DMG; iOS-версия в App Store не проверена для macOS."
+      ]
+    },
+    "linux": {
+      "label": "Linux",
+      "guide": "linux.md",
+      "store_url": null,
+      "minimum_os": "Linux x86_64; совместимость зависит от дистрибутива и библиотек",
+      "downloads": [
+        {
+          "label": "AppImage",
+          "url": "https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Linux-x64-AppImage.AppImage",
+          "architecture": "x86_64"
+        },
+        {
+          "label": "DEB для Debian / Ubuntu",
+          "url": "https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Debian-x64.deb",
+          "architecture": "x86_64"
+        },
+        {
+          "label": "Архив AppImage",
+          "url": "https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Linux-x64-AppImage.tar.gz",
+          "architecture": "x86_64"
+        }
+      ],
+      "notes": [
+        "ARM64 Linux и RPM отсутствуют среди assets проверенного стабильного релиза v5.5.5."
+      ]
+    },
+    "tv": {
+      "label": "Android TV / Google TV",
+      "guide": "tv.md",
+      "store_url": "https://play.google.com/store/apps/details?id=app.hiddify.com",
+      "minimum_os": "Android TV на базе Android 7+; поддержка TV добавлена в Hiddify 5.5.5",
+      "downloads": [
+        {
+          "label": "Universal APK для Android TV",
+          "url": "https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Android-universal.apk",
+          "architecture": "universal"
+        }
+      ],
+      "notes": [
+        "Наличие в TV Google Play зависит от устройства. Apple TV, Tizen и webOS не заявлены как поддерживаемые клиенты."
+      ]
+    }
+  },
+  "import": {
+    "primary": "clipboard_or_json_file",
+    "subscription_deeplink_template": "hiddify://install-config?url={percent_encoded_https_subscription_url}&name={percent_encoded_title}",
+    "deeplink_source": "https://github.com/hiddify/hiddify-app/blob/v5.5.5/lib/utils/link_parsers.dart",
+    "deeplink_tests": "https://github.com/hiddify/hiddify-app/blob/v5.5.5/test/utils/link_parsers_test.dart",
+    "subscription_https_recommended": true,
+    "subscription_transport_note": "Для нашего сервиса используйте HTTPS-подписки. Официальный how-to говорит HTTPS-only, но исходники v5.5.5 принимают HTTP; поведение HTTP на каждой ОС отдельно не тестировалось.",
+    "subscription_parser_source": "https://github.com/hiddify/hiddify-app/blob/v5.5.5/lib/features/profile/data/profile_parser.dart",
+    "url_validator_source": "https://github.com/hiddify/hiddify-app/blob/v5.5.5/lib/utils/validators.dart",
+    "service_profiles": {
+      "hysteria": {
+        "format": "singbox-json",
+        "filename": "hiddify-hysteria.json",
+        "clipboard": "complete_json_including_outer_braces",
+        "tls_insecure": false,
+        "tls_certificate_pin_preserved": true
+      },
+      "vless-reality": {
+        "format": "uri",
+        "scheme": "vless",
+        "clipboard": "complete_uri"
+      }
+    },
+    "file_import_source": "https://github.com/hiddify/hiddify-app/blob/7804cadac01419f31b1ec7802d9e1be599e66de2/lib/features/profile/add/widgets/fix_btns.dart",
+    "clipboard_import_source": "https://github.com/hiddify/hiddify-app/blob/7804cadac01419f31b1ec7802d9e1be599e66de2/lib/features/profile/notifier/profile_notifier.dart",
+    "hysteria_tls_source": "https://github.com/hiddify/hiddify-sing-box/blob/1614c5edb52dd44a4cc079201ba1e790fdfad8a0/common/tls/std_client.go"
+  },
+  "guides": {
+    "index": "README.md",
+    "troubleshooting": "troubleshooting.md",
+    "asset_manifest": "assets/manifest.json"
+  },
+  "sources": {
+    "release_api": "https://api.github.com/repos/hiddify/hiddify-app/releases/latest",
+    "ios_requirements": "https://apps.apple.com/us/app/hiddify-proxy-vpn/id6596777532",
+    "macos_deployment_target": "https://github.com/hiddify/hiddify-app/blob/v5.5.5/macos/Runner.xcodeproj/project.pbxproj"
+  }
+}

@@ -63,18 +63,6 @@ class DummyBot:
         self.sent = file
 
 
-class FlakyDocumentBot(DummyBot):
-    def __init__(self):
-        super().__init__()
-        self.attempts = 0
-
-    async def send_document(self, chat_id, file):
-        self.attempts += 1
-        if self.attempts == 1:
-            raise RuntimeError("telegram delivery interrupted")
-        await super().send_document(chat_id, file)
-
-
 class DummyFSInputFile:
     def __init__(self, path, filename=None):
         self.path = path
@@ -82,143 +70,39 @@ class DummyFSInputFile:
 
 
 @pytest.mark.asyncio
-async def test_tempfile_used(monkeypatch):
+async def test_retired_config_name_flow_never_creates_or_charges_on_replay(monkeypatch):
+    """An old FSM persisted before upgrade cannot create a legacy paid key."""
+    from bot.handlers import subscriptions
+
     msg = DummyMessage("../../etc/passwd")
     state = DummyState()
     bot = DummyBot()
+    observed = []
 
-    async def fake_get_user(tg_id, username=None):
-        return types.SimpleNamespace(id=1)
+    async def show_subscription(message, **kwargs):
+        assert state.cleared is True
+        observed.append((message, kwargs))
 
-    calls = []
+    async def forbidden(*args, **kwargs):
+        pytest.fail("Retired config creation reached a legacy payment or key path")
 
-    async def fake_create_config(
-        server_id,
-        owner_id,
-        name,
-        display_name,
-        creation_cost,
-        idempotency_key,
-    ):
-        calls.append((name, idempotency_key))
-        return types.SimpleNamespace(id=5)
-
-    async def fake_download_config(cfg_id):
-        return b"data"
-
-    monkeypatch.setattr(handlers, "get_or_create_user", fake_get_user)
-    monkeypatch.setattr(handlers_base, "get_or_create_user", fake_get_user)
-    monkeypatch.setattr(
-        handlers.billing_service, "create_paid_config", fake_create_config
-    )
-    monkeypatch.setattr(handlers.configs, "get_or_create_user", fake_get_user)
-    monkeypatch.setattr(
-        handlers.config_service, "download_config", fake_download_config
-    )
-    monkeypatch.setattr(handlers, "FSInputFile", DummyFSInputFile)
-
-    update = types.SimpleNamespace(update_id=4242)
+    monkeypatch.setattr(subscriptions, "cmd_subscription", show_subscription)
+    monkeypatch.setattr(handlers.billing_service, "create_paid_config", forbidden)
+    monkeypatch.setattr(handlers.config_service, "download_config", forbidden)
     audit = TelegramActionAuditContext("message.received", "handled", {})
-    await handlers.got_name(
-        msg,
-        state,
-        bot,
-        update,
-        telegram_action_audit=audit,
-    )
+    update = types.SimpleNamespace(update_id=4242)
 
-    sent_path = bot.sent.path
-    tmp_dir = tempfile.gettempdir()
-    assert os.path.commonpath([sent_path, tmp_dir]) == tmp_dir
-    assert not os.path.exists(sent_path)
-    assert bot.chat_id == msg.from_user.id
-    assert state.cleared
-    assert "Конфигурация создана" in msg.answers[-1]
-    assert calls == [
-        (
-            "dab03c52c3cb5cf2b03aaf00efc74d67",
-            "telegram:create-config:update:4242",
-        )
-    ]
-    assert audit.action == "vpn.config_create_submit"
-    assert audit.result == "completed"
-    assert audit.metadata == {"config_id": 5, "server_id": 1}
-    assert "../../etc/passwd" not in repr(audit.metadata)
-
-
-@pytest.mark.asyncio
-async def test_service_error(monkeypatch):
-    msg = DummyMessage("name")
-    state = DummyState()
-    bot = DummyBot()
-
-    async def fake_get_user(tg_id, username=None):
-        return types.SimpleNamespace(id=1)
-
-    async def fake_create_config(*a, **kw):
-        raise handlers.ServiceError("boom")
-
-    monkeypatch.setattr(handlers, "get_or_create_user", fake_get_user)
-    monkeypatch.setattr(handlers_base, "get_or_create_user", fake_get_user)
-    monkeypatch.setattr(
-        handlers.billing_service, "create_paid_config", fake_create_config
-    )
-
-    monkeypatch.setattr(handlers.configs, "get_or_create_user", fake_get_user)
-    await handlers.got_name(
-        msg,
-        state,
-        bot,
-        types.SimpleNamespace(update_id=4243),
-    )
-
-    assert state.cleared
-    assert "Не удалось создать конфигурацию" in msg.answers[-1]
-
-
-@pytest.mark.asyncio
-async def test_paid_config_delivery_replay_reuses_purchase_identity(monkeypatch):
-    msg = DummyMessage("my vpn")
-    state = DummyState()
-    bot = FlakyDocumentBot()
-    calls = []
-
-    async def fake_get_user(tg_id, username=None):
-        return types.SimpleNamespace(id=1)
-
-    async def fake_create_config(**kwargs):
-        calls.append((kwargs["name"], kwargs["idempotency_key"]))
-        return types.SimpleNamespace(id=5)
-
-    async def fake_download_config(cfg_id):
-        return b"data"
-
-    monkeypatch.setattr(handlers, "get_or_create_user", fake_get_user)
-    monkeypatch.setattr(handlers_base, "get_or_create_user", fake_get_user)
-    monkeypatch.setattr(handlers.configs, "get_or_create_user", fake_get_user)
-    monkeypatch.setattr(
-        handlers.billing_service,
-        "create_paid_config",
-        fake_create_config,
-    )
-    monkeypatch.setattr(
-        handlers.config_service,
-        "download_config",
-        fake_download_config,
-    )
-    monkeypatch.setattr(handlers, "FSInputFile", DummyFSInputFile)
-    update = types.SimpleNamespace(update_id=9001)
-
-    with pytest.raises(RuntimeError, match="delivery interrupted"):
-        await handlers.got_name(msg, state, bot, update)
-    assert state.cleared is False
-
-    await handlers.got_name(msg, state, bot, update)
+    await handlers.got_name(msg, state, bot, update, telegram_action_audit=audit)
+    await handlers.got_name(msg, state, bot, update, telegram_action_audit=audit)
 
     assert state.cleared is True
-    assert len(calls) == 2
-    assert calls[0] == calls[1]
-    assert calls[0][1] == "telegram:create-config:update:9001"
+    assert bot.sent is None
+    assert len(observed) == 2
+    assert all(message is msg for message, _ in observed)
+    assert all(kwargs["tg_id"] == msg.from_user.id for _, kwargs in observed)
+    assert all(kwargs["username"] == msg.from_user.username for _, kwargs in observed)
+    assert all(kwargs["telegram_action_audit"] is audit for _, kwargs in observed)
+    assert "../../etc/passwd" not in repr(audit.metadata)
 
 
 class DummyMessageReply:
@@ -313,28 +197,34 @@ async def test_foreign_config_callback_audit_does_not_persist_requested_id(monke
 
 
 @pytest.mark.asyncio
-async def test_missing_server_callback_audit_does_not_persist_requested_id(monkeypatch):
+async def test_retired_server_callback_uses_actor_identity_without_legacy_lookup(
+    monkeypatch,
+):
+    from bot.handlers import subscriptions
+
     cb = DummyCallback("server:987654")
-    audit = TelegramActionAuditContext(
-        "vpn.config_server_select",
-        "handled",
-        {},
-    )
+    cb.message.from_user = types.SimpleNamespace(id=999, username="bot")
+    state = DummyStateRename()
+    audit = TelegramActionAuditContext("callback.received", "handled", {})
+    observed = []
 
-    async def fake_get_server(*_args, **_kwargs):
-        return None
+    async def show_subscription(message, **kwargs):
+        assert state.cleared is True
+        observed.append((message, kwargs))
 
-    monkeypatch.setattr(handlers.server_service, "get", fake_get_server)
+    async def forbidden(*args, **kwargs):
+        pytest.fail("Retired server selection attempted a legacy server lookup")
 
-    await handlers.configs.choose_server(
-        cb,
-        DummyStateRename(),
-        telegram_action_audit=audit,
-    )
+    monkeypatch.setattr(subscriptions, "cmd_subscription", show_subscription)
+    monkeypatch.setattr(handlers.server_service, "get", forbidden)
 
-    assert audit.action == "vpn.config_server_select"
-    assert audit.result == "unavailable"
-    assert audit.metadata == {"reason_code": "server_unavailable"}
+    await handlers.configs.choose_server(cb, state, telegram_action_audit=audit)
+
+    assert cb.answered is True
+    assert observed[0][0] is cb.message
+    assert observed[0][1]["tg_id"] == cb.from_user.id
+    assert observed[0][1]["username"] == cb.from_user.username
+    assert observed[0][1]["telegram_action_audit"] is audit
     assert "987654" not in repr(audit.metadata)
 
 

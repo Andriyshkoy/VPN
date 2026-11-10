@@ -19,6 +19,7 @@ from bot.keyboards import (
     MENU_CONFIGS,
     MENU_INSTRUCTIONS,
     MENU_REFERRALS,
+    MENU_SUBSCRIPTION,
     MENU_TOP_UP,
     guide_menu_keyboard,
     main_menu_keyboard,
@@ -68,9 +69,9 @@ def test_main_menu_keyboard_layout_and_persistence():
     assert keyboard.is_persistent is True
     assert keyboard.one_time_keyboard is False
     assert [[button.text for button in row] for row in keyboard.keyboard] == [
-        [MENU_BALANCE, MENU_CONFIGS],
-        [MENU_TOP_UP, MENU_INSTRUCTIONS],
-        [MENU_REFERRALS],
+        [MENU_SUBSCRIPTION, MENU_CONFIGS],
+        [MENU_BALANCE, MENU_TOP_UP],
+        [MENU_INSTRUCTIONS, MENU_REFERRALS],
     ]
 
 
@@ -120,9 +121,17 @@ async def test_start_registers_payload_and_installs_menu(monkeypatch):
     assert message.calls[-1][1]["reply_markup"].is_persistent is True
     welcome = message.calls[-1][0]
     assert "Простой и доступный VPN" in welcome
-    assert "Около 50 ₽ в месяц" in welcome
-    assert "списываются постепенно" in welcome
-    assert "можно пользоваться" in welcome
+    assert "50 ₽" in welcome
+    assert "100 ₽" in welcome
+    assert "почасов" in welcome.lower()
+    assert "0,07 ₽/час" in welcome
+    assert "0,14 ₽/час" in welcome
+    assert "на 30 дней" not in welcome
+    assert "Hysteria" in welcome
+    assert "VLESS" in welcome
+    assert "бесплат" in welcome.lower()
+    assert "за каждую конфигурацию" not in welcome
+    assert "небольшими частями" not in welcome
 
 
 @pytest.mark.asyncio
@@ -161,31 +170,25 @@ async def test_config_fsm_gives_hints_instead_of_silently_ignoring_messages():
 
 
 @pytest.mark.asyncio
-async def test_create_config_presents_monthly_price_without_hourly_microcharge(
+async def test_old_create_config_entry_opens_subscription_without_legacy_server_or_fee(
     monkeypatch,
 ):
-    class State:
-        selected = None
+    from bot.handlers import subscriptions
 
-        async def set_state(self, value):
-            self.selected = value
-
-    async def register(*args, **kwargs):
-        return SimpleNamespace(id=1)
-
-    async def list_servers(*, available_only=False):
-        assert available_only is True
-        return [SimpleNamespace(id=7, location="🇳🇱", name="Amsterdam")]
-
-    monkeypatch.setattr(configs, "get_or_create_user", register)
-    monkeypatch.setattr(configs.server_service, "list", list_servers)
-    monkeypatch.setattr(configs.settings, "maintenance_mode", False)
-    monkeypatch.setattr(configs.settings, "provisioning_enabled", True)
-    monkeypatch.setattr(configs.settings, "config_creation_cost", Decimal("10.00"))
-    monkeypatch.setattr(configs.settings, "per_config_cost", Decimal("0.07"))
-    monkeypatch.setattr(configs.settings, "billing_interval", 3_600)
     message = DummyMessage()
-    state = State()
+    state = DummyState()
+    observed = {}
+
+    async def show_subscription(target, **kwargs):
+        assert state.cleared is True
+        observed.update(message=target, **kwargs)
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("Retired config entry consulted a legacy server or payment service")
+
+    monkeypatch.setattr(subscriptions, "cmd_subscription", show_subscription)
+    monkeypatch.setattr(configs.server_service, "list", forbidden)
+    monkeypatch.setattr(configs.billing_service, "create_paid_config", forbidden)
 
     await configs._begin_create_config(
         message,
@@ -194,12 +197,10 @@ async def test_create_config_presents_monthly_price_without_hourly_microcharge(
         username=message.from_user.username,
     )
 
-    text = message.calls[-1][0]
-    assert "около 50 ₽ в месяц" in text
-    assert "небольшими частями в течение месяца" in text
-    assert "0,07 ₽" not in text
-    assert "раз в час" not in text
-    assert state.selected == CreateConfig.choosing_server
+    assert observed["message"] is message
+    assert observed["tg_id"] == 101
+    assert observed["username"] == "alice"
+    assert message.calls == []
 
 
 @pytest.mark.asyncio
@@ -217,7 +218,20 @@ async def test_group_ui_redirects_without_exposing_account_data():
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_menu_button_wins_over_active_name_state(monkeypatch):
+@pytest.mark.parametrize(
+    ("label", "module_name", "handler_name"),
+    [
+        (MENU_BALANCE, "common", "cmd_balance"),
+        (MENU_CONFIGS, "subscriptions", "cmd_keys"),
+        ("🗂 Мои конфиги", "subscriptions", "cmd_keys"),
+        (MENU_SUBSCRIPTION, "subscriptions", "cmd_subscription"),
+    ],
+)
+async def test_dispatcher_menu_button_wins_over_active_name_state(
+    monkeypatch, label, module_name, handler_name
+):
+    from bot.handlers import subscriptions
+
     storage = MemoryStorage()
     dispatcher = Dispatcher(storage=storage)
     dispatcher.include_router(handlers.router)
@@ -231,7 +245,8 @@ async def test_dispatcher_menu_button_wins_over_active_name_state(monkeypatch):
     async def existing_user(tg_id, **kwargs):
         return SimpleNamespace(id=7, tg_id=tg_id)
 
-    monkeypatch.setattr(common, "cmd_balance", show_balance)
+    target_module = {"common": common, "subscriptions": subscriptions}[module_name]
+    monkeypatch.setattr(target_module, handler_name, show_balance)
     monkeypatch.setattr(
         handlers.invite_access_middleware._user_service,
         "find_by_tg_id",
@@ -246,12 +261,12 @@ async def test_dispatcher_menu_button_wins_over_active_name_state(monkeypatch):
             date=datetime.now(timezone.utc),
             chat=Chat(id=202, type="private"),
             from_user=User(id=101, is_bot=False, first_name="Alice"),
-            text=MENU_BALANCE,
+            text=label,
         ),
     )
     try:
         await dispatcher.feed_update(bot, update)
-        assert observed == [MENU_BALANCE]
+        assert observed == [label]
         assert await storage.get_state(key) is None
     finally:
         await dispatcher.storage.close()
@@ -343,7 +358,9 @@ def test_instructions_cover_all_platforms_and_fit_telegram_limit():
     assert set(GUIDES) == expected
     assert len(GUIDE_MENU_TEXT) < 4096
     assert all(0 < len(text) < 4096 for text in GUIDES.values())
-    assert "openvpn.net" in GUIDES["windows"]
+    assert "Hiddify" in GUIDES["windows"]
+    assert "github.com/hiddify" in GUIDES["windows"]
+    assert all(".ovpn" not in text for text in GUIDES.values())
     assert "apps.apple.com" in GUIDES["ios"]
     assert "play.google.com" in GUIDES["android"]
 

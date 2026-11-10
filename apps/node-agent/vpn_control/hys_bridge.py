@@ -4,6 +4,7 @@ The public API runs unprivileged. Only this process reads the existing node's
 Hysteria configuration and MongoDB, and no command/password is accepted over RPC.
 """
 import argparse
+import base64
 from dataclasses import asdict
 import datetime as dt
 import grp
@@ -100,9 +101,17 @@ def marker(username):
     return "vpn-control:" + username
 
 
-def policy(expires_at, traffic_limit_bytes, activation_days):
+def policy(expires_at, traffic_limit_bytes, activation_days, max_sessions=None):
     from .hysteria import HysteriaBackend
-    return HysteriaBackend._policy(expires_at, traffic_limit_bytes, activation_days)
+    return HysteriaBackend._policy(expires_at, traffic_limit_bytes, activation_days, max_sessions)
+
+
+def session_limit(row):
+    value = row.get("max_sessions")
+    # BSON Int64 is an int subclass. Reject bool/coercion, preserve old rows.
+    if value is not None and (not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 128):
+        raise BackendUnavailable("hysteria_invalid_session_policy")
+    return int(value) if value is not None else None
 
 
 def snapshot(row, now=None):
@@ -119,7 +128,8 @@ def snapshot(row, now=None):
         except (TypeError, ValueError, OverflowError):
             raise BackendUnavailable("hysteria_invalid_expiry_state") from None
     status = "active"
-    if row.get("blocked"):
+    if (row.get("blocked") or row.get("_vpn_session_close_pending") is True
+            or "_vpn_policy_close_pending" in row):
         status = "suspended"
     elif expiry is not None and int(now.timestamp()) >= expiry:
         status = "expired"
@@ -127,6 +137,7 @@ def snapshot(row, now=None):
         status = "limited"
     return BackendAccess(status=status, used_traffic_bytes=used, traffic_limit_bytes=limit,
                          expires_at=expiry, expiry_precision="day", activation_days=days or None,
+                         max_sessions=session_limit(row),
                          accounting="delayed_total_upload_download_counters")
 
 
@@ -173,7 +184,7 @@ class LegacyHysteria:
             raise BackendNotFound("backend_access_not_found")
         return row
 
-    def _request(self, url, *, payload=None, secret=None):
+    def _request(self, url, *, payload=None, secret=None, allow_missing=False):
         headers = {"Content-Type": "application/json"}
         if secret is not None:
             headers["Authorization"] = secret
@@ -187,11 +198,71 @@ class LegacyHysteria:
                     raise ValueError("oversized_backend_response")
                 return json.loads(body) if body else None
         except urllib.error.HTTPError as error:
+            if error.code == 404 and allow_missing:
+                return None
             if error.code == 401 and secret is None:
                 return {"ok": False}
             raise BackendUnavailable("hysteria_internal_endpoint_unavailable") from None
         except (OSError, ValueError):
             raise BackendUnavailable("hysteria_internal_endpoint_unavailable") from None
+
+    def _session_capabilities(self):
+        """Require both lifecycle enforcement and the active HTTP policy source.
+
+        The engine alone cannot impose a Mongo field ignored by an older auth
+        callback. These read-only probes never authenticate a real account.
+        """
+        try:
+            config = self._config()
+            auth_type = config["auth"]["type"]
+            if not isinstance(auth_type, str) or auth_type.lower() not in {"http", "https"}:
+                return {"max_sessions": False}
+            stats = config["trafficStats"]
+            engine = self._request("http://" + stats["listen"] + "/capabilities",
+                                   secret=stats["secret"], allow_missing=True)
+            auth_url = urlsplit(config["auth"]["http"]["url"])
+            policy_url = auth_url._replace(path="/capabilities", query="", fragment="").geturl()
+            auth = self._request(policy_url, allow_missing=True)
+        except (KeyError, TypeError, ValueError, BackendUnavailable):
+            return {"max_sessions": False}
+        supported = (isinstance(engine, dict) and engine.get("max_sessions") is True
+                     and type(engine.get("version")) is int and engine["version"] == 1
+                     and engine.get("session_scope") == "auth_id_per_server_instance"
+                     and engine.get("enforcement") == "atomic_quic_connection"
+                     and isinstance(auth, dict) and auth.get("max_sessions") is True
+                     and type(auth.get("version")) is int and auth["version"] == 1
+                     and auth.get("policy_source") == "mongo_max_sessions")
+        return ({"max_sessions": True, "session_scope": engine["session_scope"],
+                 "enforcement": engine["enforcement"], "version": 1,
+                 "close_by_auth_id": engine.get("close_by_auth_id") is True}
+                if supported else {"max_sessions": False})
+
+    def _require_session_capability(self, max_sessions, *, close_required=False):
+        capabilities = self._session_capabilities() if max_sessions is not None or close_required else {}
+        if max_sessions is not None and not capabilities.get("max_sessions"):
+            raise BackendUnavailable("hysteria_max_sessions_unsupported")
+        if close_required and capabilities.get("close_by_auth_id") is not True:
+            raise BackendUnavailable("hysteria_close_by_auth_id_unsupported")
+
+    def _close_connections(self, username, *, required=False):
+        """New engine close is immediate and has no legacy sticky-kick flag."""
+        try:
+            config = self._config()
+            stats = config["trafficStats"]
+            url = "http://" + stats["listen"]
+            capabilities = self._request(url + "/capabilities", secret=stats["secret"], allow_missing=True)
+            supported = (isinstance(capabilities, dict) and capabilities.get("close_by_auth_id") is True
+                         and type(capabilities.get("version")) is int and capabilities["version"] == 1)
+            if not supported:
+                if required:
+                    raise BackendUnavailable("hysteria_close_by_auth_id_unsupported")
+                return False
+            result = self._request(url + "/close", secret=stats["secret"], payload=[username])
+            if not isinstance(result, dict) or type(result.get("closed")) is not int or result["closed"] < 0:
+                raise BackendUnavailable("hysteria_close_unconfirmed")
+            return True
+        except (KeyError, TypeError, ValueError):
+            raise BackendUnavailable("hysteria_stats_configuration_invalid") from None
 
     def _auth(self, row, allowed):
         config = self._config()
@@ -233,13 +304,14 @@ class LegacyHysteria:
         value = online.get(username, 0) if isinstance(online, dict) else None
         return value if type(value) is int and value >= 0 else None
 
-    def create(self, username, *, expires_at=None, traffic_limit_bytes=0, activation_days=None):
+    def create(self, username, *, expires_at=None, traffic_limit_bytes=0, activation_days=None, max_sessions=None):
         validate_username(username)
-        policy(expires_at, traffic_limit_bytes, activation_days)
+        policy(expires_at, traffic_limit_bytes, activation_days, max_sessions)
         with self.lock:
+            self._require_session_capability(max_sessions)
             row = self._row(username)
             if row is not None:
-                if (row.get("max_download_bytes", 0), row.get("expiration_days", 0)) != (traffic_limit_bytes, activation_days or 0):
+                if (row.get("max_download_bytes", 0), row.get("expiration_days", 0), session_limit(row)) != (traffic_limit_bytes, activation_days or 0, max_sessions):
                     raise BackendConflict("backend_access_policy_conflict")
             else:
                 # Match canonical add_user.py -> db.database.add_user exactly:
@@ -247,6 +319,7 @@ class LegacyHysteria:
                 # initializes them. Never pre-activate an account here.
                 row = {"_id": username, "password": secrets.token_urlsafe(32),
                        "max_download_bytes": traffic_limit_bytes, "expiration_days": activation_days or 0,
+                       "max_sessions": max_sessions,
                        "blocked": False, "unlimited_user": False, "status": "On-hold", "note": marker(username)}
                 self.collection.insert_one(dict(row))
             # A successful auth probe may activate a first-use account. Provisioning
@@ -257,12 +330,21 @@ class LegacyHysteria:
         row = self._row(username)
         return asdict(snapshot(row)) if row is not None else None
 
-    def update(self, username, *, expires_at=None, traffic_limit_bytes=0, activation_days=None):
-        policy(expires_at, traffic_limit_bytes, activation_days)
+    def update(self, username, *, expires_at=None, traffic_limit_bytes=0, activation_days=None, max_sessions=None):
+        policy(expires_at, traffic_limit_bytes, activation_days, max_sessions)
         with self.lock:
             row = self._row(username, True)
+            previous_limit = session_limit(row)
+            tightening = max_sessions is not None and (previous_limit is None or max_sessions < previous_limit)
+            close_pending = max_sessions is not None and (tightening or row.get("_vpn_session_close_pending") is True)
+            self._require_session_capability(max_sessions, close_required=close_pending)
             self.collection.update_one({"_id": username, "note": marker(username)}, {"$set": {
-                "max_download_bytes": traffic_limit_bytes, "expiration_days": activation_days or 0}})
+                "max_download_bytes": traffic_limit_bytes, "expiration_days": activation_days or 0,
+                "max_sessions": max_sessions, "_vpn_session_close_pending": close_pending}})
+            if close_pending:
+                self._close_connections(username, required=True)
+                self.collection.update_one({"_id": username, "note": marker(username)},
+                                           {"$set": {"_vpn_session_close_pending": False}})
             row = self._row(username, True)
             current = snapshot(row)
             if current.status != "active":
@@ -277,6 +359,12 @@ class LegacyHysteria:
         with self.lock:
             row = self._row(username, True)
             candidate = {**row, "blocked": False}
+            if status == "active":
+                self._require_session_capability(session_limit(row))
+                if row.get("_vpn_session_close_pending") is True:
+                    raise BackendUnavailable("hysteria_session_close_pending")
+                if "_vpn_policy_close_pending" in row:
+                    raise BackendUnavailable("hysteria_policy_close_pending")
             if status == "active" and snapshot(candidate).status != "active":
                 raise BackendConflict("access_policy_inactive")
             self.collection.update_one({"_id": username, "note": marker(username)},
@@ -284,8 +372,9 @@ class LegacyHysteria:
             row = self._row(username, True)
             if status == "suspended":
                 self._auth(row, False)
-            # Suspend denies fresh authentication. Existing streams are not
-            # guaranteed to end; /kick could kill the first resumed connection.
+                self._close_connections(username)
+            # Patched engines close current QUIC connections without a sticky
+            # kick. Legacy engines keep their new-authentication-only behavior.
             return asdict(snapshot(self._row(username, True)))
 
     def revoke(self, username):
@@ -296,7 +385,8 @@ class LegacyHysteria:
                 self._auth(self._row(username, True), False)
             # Only permanent usernames may receive this best-effort operation.
             # Hysteria's /kick is a next-traffic flag, not an immediate close.
-            if (self._online_count(username) or 0) > 0:
+            closed = self._close_connections(username)
+            if not closed and (self._online_count(username) or 0) > 0:
                 try:
                     self._kick(username)
                 except BackendUnavailable:
@@ -309,6 +399,11 @@ class LegacyHysteria:
     def profile(self, username):
         with self.lock:
             row = self._row(username, True)
+            self._require_session_capability(session_limit(row))
+            if row.get("_vpn_session_close_pending") is True:
+                raise BackendUnavailable("hysteria_session_close_pending")
+            if "_vpn_policy_close_pending" in row:
+                raise BackendUnavailable("hysteria_policy_close_pending")
             if snapshot(row).status != "active":
                 raise BackendConflict("profile_requires_active_access")
             config = self._config()
@@ -336,6 +431,28 @@ class LegacyHysteria:
                 host = "[" + host + "]"
             return "hysteria2://" + auth + "@" + host + ":" + str(self.public_port) + "/?" + query + "#" + quote(self.profile_label, safe="")
 
+    def profile_json(self, username):
+        """Hiddify's raw URI parser drops certificate pins; JSON preserves them."""
+        with self.lock:
+            # Reuse all authorization, policy-fence, certificate ownership and
+            # supported-obfuscation checks of the explicit native URI export.
+            native = urlsplit(self.profile(username))
+            query = dict(parse_qsl(native.query, strict_parsing=True))
+            try:
+                pin = base64.b64encode(bytes.fromhex(query["pinSHA256"])).decode("ascii")
+                row = self._row(username, True)
+                outbound = {
+                    "type": "hysteria2", "tag": self.profile_label,
+                    "server": self.public_host.strip("[]"), "server_port": self.public_port,
+                    "password": username + ":" + row["password"],
+                    "obfs": {"type": "salamander", "password": query["obfs-password"]},
+                    "tls": {"enabled": True, "server_name": self.tls_sni,
+                            "insecure": False, "certificate_sha256": [pin]},
+                }
+            except (KeyError, TypeError, ValueError):
+                raise BackendUnavailable("hysteria_profile_configuration_invalid") from None
+            return json.dumps({"outbounds": [outbound]}, ensure_ascii=False, separators=(",", ":"))
+
     def health(self):
         self.collection.database.command("ping")
         config = self._config()
@@ -345,6 +462,7 @@ class LegacyHysteria:
             auth_url = config["auth"]["http"]["url"]
         except (KeyError, TypeError):
             raise BackendUnavailable("hysteria_stats_configuration_invalid") from None
+        capabilities = self._session_capabilities()
         # Readiness must verify the auth listener without authenticating or
         # activating any real account. This identity is never inserted in Mongo.
         for _ in range(3):
@@ -358,14 +476,16 @@ class LegacyHysteria:
         if not isinstance(value, dict) or value.get("ok") is not False:
             raise BackendUnavailable("hysteria_auth_health_unavailable")
         return {"ready": True, "expiry_precision": "day", "unlimited_traffic_supported": True,
-                "unlimited_expiry_supported": True, "existing_stream_termination": "not_guaranteed",
-                "suspend_enforcement": "new_connections_only",
-                "revoke_existing_sessions": "best_effort_kick_when_positively_online",
-                "accounting": "delayed_total_upload_download_counters", "auth_ready": True}
+                "unlimited_expiry_supported": True,
+                "existing_stream_termination": "close_by_auth_id" if capabilities.get("close_by_auth_id") else "not_guaranteed",
+                "suspend_enforcement": "new_auth_and_quic_close" if capabilities.get("close_by_auth_id") else "new_connections_only",
+                "revoke_existing_sessions": "close_by_auth_id" if capabilities.get("close_by_auth_id") else "best_effort_kick_when_positively_online",
+                "accounting": "delayed_total_upload_download_counters", "auth_ready": True,
+                "capabilities": capabilities}
 
 
 OPERATIONS = {
-    "health": set(), "get": {"username"}, "profile": {"username"}, "revoke": {"username"},
+    "health": set(), "get": {"username"}, "profile": {"username"}, "profile_json": {"username"}, "revoke": {"username"},
     "set_status": {"username", "status"},
     "create": {"username", "expires_at", "traffic_limit_bytes", "activation_days"},
     "update": {"username", "expires_at", "traffic_limit_bytes", "activation_days"},
@@ -376,7 +496,9 @@ def dispatch(backend, request):
     if not isinstance(request, dict) or type(request.get("version")) is not int or request.get("version") != 1:
         raise BackendConflict("invalid_bridge_request")
     op = request.get("op")
-    if not isinstance(op, str) or op not in OPERATIONS or set(request) - {"version", "op"} != OPERATIONS[op]:
+    supplied = set(request) - {"version", "op"}
+    optional = {"max_sessions"} if isinstance(op, str) and op in {"create", "update"} else set()
+    if not isinstance(op, str) or op not in OPERATIONS or supplied - optional != OPERATIONS[op]:
         raise BackendConflict("invalid_bridge_request")
     kwargs = {k: v for k, v in request.items() if k not in {"version", "op"}}
     if "username" in kwargs:

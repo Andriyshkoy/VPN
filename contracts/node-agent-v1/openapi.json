@@ -1618,6 +1618,20 @@
               "format": "uuid",
               "title": "Access Id"
             }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "auto",
+                "native-uri"
+              ],
+              "type": "string",
+              "default": "auto",
+              "title": "Format"
+            }
           }
         ],
         "responses": {
@@ -1927,6 +1941,19 @@
               }
             ],
             "title": "Activation Days"
+          },
+          "max_sessions": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 128.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Sessions"
           }
         },
         "additionalProperties": false,
@@ -2014,6 +2041,19 @@
               }
             ],
             "title": "Activation Days"
+          },
+          "max_sessions": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 128.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Sessions"
           }
         },
         "additionalProperties": false,
@@ -2064,6 +2104,19 @@
               }
             ],
             "title": "Activation Days"
+          },
+          "max_sessions": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 128.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Sessions"
           },
           "owner_ref": {
             "anyOf": [
@@ -2269,6 +2322,19 @@
               }
             ],
             "title": "Activation Days"
+          },
+          "max_sessions": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 128.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Sessions"
           }
         },
         "additionalProperties": false,
@@ -2359,12 +2425,35 @@
           },
           "format": {
             "type": "string",
-            "const": "uri",
+            "enum": [
+              "uri",
+              "singbox-json"
+            ],
             "title": "Format"
           },
           "uri": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16384
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Uri"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32768
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content"
           },
           "contains_secret": {
             "type": "boolean",
@@ -2378,7 +2467,6 @@
           "access_id",
           "service_id",
           "format",
-          "uri",
           "contains_secret"
         ],
         "title": "ProfileResponse"

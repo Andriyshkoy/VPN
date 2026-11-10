@@ -1,0 +1,86 @@
+name: Hysteria atomic session admission
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - engines/hysteria/**
+      - apps/hysteria-runtime/**
+      - apps/node-agent/**
+      - .github/workflows/hysteria-session-limit.yml
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hysteria-session-limit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-quic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      mongo:
+        image: mongo:8.0.3@sha256:8565ecda5b221016d70f7745ac1ba0b97ccb05836157f8a343e987338fdc8350
+        ports:
+          - 127.0.0.1:27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1})'"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Prepare real HTTP auth runtime
+        run: |
+          python3 -m venv "$RUNNER_TEMP/hys-native-venv"
+          "$RUNNER_TEMP/hys-native-venv/bin/python" -m pip install -r apps/hysteria-runtime/requirements.lock
+      - name: Build exact engine and test native QUIC against real Mongo auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready="$RUNNER_TEMP/hys-runtime-native.json"
+          export HYS_NATIVE_ENGINE_READY="$RUNNER_TEMP/hys-native-engine.json"
+          "$RUNNER_TEMP/hys-native-venv/bin/python" apps/hysteria-runtime/tests/serve_native_fixture.py --ready-file "$ready" &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true; wait "$fixture_pid" 2>/dev/null || true' EXIT
+          for ((attempt = 0; attempt < 100; attempt++)); do
+            if test -s "$ready"; then break; fi
+            if ! kill -0 "$fixture_pid" 2>/dev/null; then exit 1; fi
+            sleep 0.1
+          done
+          test -s "$ready"
+          export HYS_NATIVE_AUTH_URL
+          HYS_NATIVE_AUTH_URL=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["auth_url"])' "$ready")
+          python3 engines/hysteria/build.py --cache-dir "$RUNNER_TEMP/hys-build"
+          kill "$fixture_pid"
+          wait "$fixture_pid"
+          trap - EXIT
+      - name: Require quota and expiry to close real native streams
+        env:
+          PYTHONPATH: apps/hysteria-runtime:apps/hysteria-runtime/tests
+          HYS_RUNTIME_TEST_MONGO: mongodb://127.0.0.1:27017/
+          HYS_RUNTIME_TEST_ENGINE: ${{ github.workspace }}/engines/hysteria/dist/hysteria-linux-amd64
+        run: |
+          "$RUNNER_TEMP/hys-native-venv/bin/python" - <<'PY'
+          import unittest
+
+          suite = unittest.defaultTestLoader.discover(
+              "apps/hysteria-runtime/tests", pattern="test_native_enforcement.py"
+          )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if result.testsRun < 2 or result.skipped or not result.wasSuccessful():
+              raise SystemExit("Native quota/expiry and first-use enforcement must both pass without skips")
+          PY
+      - name: Upload prepared engine and exact checksum manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: hysteria-session-limit-linux-amd64-${{ github.sha }}
+          path: engines/hysteria/dist/*
+          if-no-files-found: error
+          retention-days: 30

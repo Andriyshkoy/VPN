@@ -41,6 +41,15 @@ jobs:
             "repos/$REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$RELEASE_SHA&event=push&per_page=20" \
             | jq -e --arg sha "$RELEASE_SHA" \
               '.workflow_runs | length > 0 and .[0].head_sha == $sha and .[0].status == "completed" and .[0].conclusion == "success"'
+          gh api \
+            "repos/$REPOSITORY/actions/workflows/hysteria-session-limit.yml/runs?head_sha=$RELEASE_SHA&event=push&per_page=20" \
+            | jq -e --arg sha "$RELEASE_SHA" \
+              '.workflow_runs | length > 0
+                and .[0].head_sha == $sha
+                and .[0].head_branch == "main"
+                and .[0].event == "push"
+                and .[0].status == "completed"
+                and .[0].conclusion == "success"'
 
   build:
     name: Publish image (${{ matrix.key }})

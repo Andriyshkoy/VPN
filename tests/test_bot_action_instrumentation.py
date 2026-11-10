@@ -15,6 +15,7 @@ from bot.handlers import (
     payments,
     privacy,
     referrals,
+    subscriptions,
 )
 from bot.middlewares.invite_access import InviteOnlyAccessMiddleware
 from core.services import BalanceHistoryPage, TelegramActionAuditContext
@@ -64,16 +65,16 @@ async def test_navigation_forwards_audit_context_to_nested_feature_handlers(
     async def topup_handler(message, telegram_action_audit=None):
         observed["topup"] = telegram_action_audit
 
-    async def create_handler(message, state, telegram_action_audit=None):
+    async def create_handler(message, telegram_action_audit=None):
         observed["create"] = telegram_action_audit
 
     class State:
         async def clear(self):
             return None
 
-    monkeypatch.setattr(configs, "cmd_configs", configs_handler)
+    monkeypatch.setattr(subscriptions, "cmd_keys", configs_handler)
     monkeypatch.setattr(payments, "cmd_topup", topup_handler)
-    monkeypatch.setattr(configs, "cmd_create_config", create_handler)
+    monkeypatch.setattr(subscriptions, "cmd_subscription", create_handler)
     context = audit()
     state = State()
 

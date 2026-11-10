@@ -1,5 +1,10 @@
 # Production rollout and rollback
 
+The subscription candidate is prepared only. See
+[the product release checklist](prepared-product-release.md). Do not run these
+procedures for that candidate without a separate rollout decision. Promotion
+keeps hourly billing disabled; deploying code does not authorize deductions.
+
 The production Compose file is deliberately fail-safe. A plain `docker compose
 up` starts only PostgreSQL and Redis. Migrations, admin, bot, worker, scheduler,
 UI, and monitoring require an explicit service/profile decision. Do not remove
@@ -163,7 +168,7 @@ docker compose --env-file .env --env-file release.env \
   --entrypoint alembic migrations check
 ```
 
-The sole current revision must be `g5c9d2e3f4a5`. Before starting any
+The sole current revision must be `h6d0e3f4a5b6`. Before starting any
 application process, reconcile `user.balance` against `sum(ledger_entry.amount)`,
 verify every user has one unique 32-character referral code, and confirm that
 the admin/fleet migrations did not change user, configuration, or aggregate
@@ -212,7 +217,7 @@ environment approval; no image is rebuilt or uploaded at this stage.
 On the host, `promote_full_production.sh` acquires the same deployment lock and
 requires both `current-release` and `current-admin-hub` to equal the requested
 full SHA. It also requires the immutable staged manifest to remain fail-closed,
-the database to be at `g5c9d2e3f4a5`, all staged images and running canary
+the database to be at `h6d0e3f4a5b6`, all staged images and running canary
 containers to match their registry digests and revision labels, and both
 Manager and Telegram read-only smokes to pass.
 
@@ -221,7 +226,7 @@ then atomically installs a runtime manifest with this policy:
 
 ```dotenv
 MAINTENANCE_MODE=false
-BILLING_ENABLED=true
+BILLING_ENABLED=false
 PAYMENTS_ENABLED=true
 PROVISIONING_ENABLED=true
 NOTIFICATIONS_ENABLED=false
@@ -243,10 +248,16 @@ checks. Malformed or unsafe markers are rejected fail-closed.
 
 Observe the durable Telegram inbox, payment intents, VPN operations, ledger,
 notification outbox, RQ registries and billing periods immediately after
-promotion. Existing queued notifications remain paused; due idempotent billing
-periods can run as soon as the worker and scheduler are enabled.
+promotion. Existing queued notifications and hourly deductions remain paused.
+Enabling deductions requires a separately reviewed subscription cutover and
+an explicit decision by the owner.
 
 ## Rollback
+
+After subscription migration `h6d0e3f4a5b6`, keep old billing and notification
+workers stopped: they do not understand account tariffs, manual unlimited
+balances or campaign delivery claims. Retain the schema and immutable history;
+the downgrade refuses to erase product data or enabled manual flags.
 
 After node-agent migration `g5c9d2e3f4a5`, old application code does not understand
 `backend_type` or durable node bindings. A code-only rollback must keep old

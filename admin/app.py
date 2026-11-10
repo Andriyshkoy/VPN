@@ -11,10 +11,12 @@ from . import exception_handlers
 from .dependencies import parse  # noqa: F401 - historical public import
 from .request_context import RequestContextMiddleware
 from .routers import admin_v1_analytics as admin_v1_analytics_router
+from .routers import admin_v1_campaigns as admin_v1_campaigns_router
 from .routers import admin_v1_configs as admin_v1_configs_router
 from .routers import admin_v1_finance as admin_v1_finance_router
 from .routers import admin_v1_fleet as admin_v1_fleet_router
 from .routers import admin_v1_referrals as admin_v1_referrals_router
+from .routers import admin_v1_subscriptions as admin_v1_subscriptions_router
 from .routers import admin_v1_system as admin_v1_system_router
 from .routers import admin_v1_users as admin_v1_users_router
 from .routers import auth as auth_router
@@ -74,6 +76,9 @@ app.include_router(admin_v1_configs_router.router)
 app.include_router(admin_v1_finance_router.router)
 app.include_router(admin_v1_referrals_router.router)
 app.include_router(admin_v1_system_router.router)
+app.include_router(admin_v1_subscriptions_router.router)
+app.include_router(admin_v1_subscriptions_router.users_router)
+app.include_router(admin_v1_campaigns_router.router)
 if settings.admin_legacy_api_enabled:
     app.include_router(auth_router.router)
     app.include_router(server_router.router)

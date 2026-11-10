@@ -138,6 +138,7 @@ async def test_explicit_profile_export_is_typed_uncached_and_audited(
         "service_id": "vless-reality",
         "format": "uri",
         "uri": SECRET_URI,
+        "content": None,
         "contains_secret": True,
     }
     assert response.headers["cache-control"] == "no-store"

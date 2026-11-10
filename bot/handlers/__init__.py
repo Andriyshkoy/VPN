@@ -14,6 +14,7 @@ from . import common  # noqa: F401
 from . import configs  # noqa: F401
 from . import payments  # noqa: F401
 from . import referrals  # noqa: F401
+from . import subscriptions  # noqa: F401
 from . import fallback
 from .base import billing_service, config_service, get_or_create_user
 from .base import router as feature_router

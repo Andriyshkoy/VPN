@@ -58,6 +58,41 @@ class BillingService(
             return repos["billing"]
         return BillingRepo(repos["users"].session)
 
+    async def _uses_subscription(self, repos, user_id: int) -> bool:
+        return await self._billing_repo(repos).uses_subscription(user_id)
+
+    async def _prepare_wallet_activation(self, repos, user) -> list[str]:
+        """Resume payment-expired access without overriding a manual pause."""
+
+        if user.balance <= 0 and not user.unlimited_balance:
+            return []
+        from core.db.repo.subscription import SubscriptionRepo
+        from core.domain import VPNOperationKind, VPNState
+
+        subscription_repo = repos.get("subscriptions") or SubscriptionRepo(
+            repos["users"].session
+        )
+        subscription = await subscription_repo.get_by_user(user.id, for_update=True)
+        if subscription is None:
+            return await self._config_service.prepare_entitlement(
+                repos=repos,
+                owner_id=user.id,
+                desired_state=VPNState.ACTIVE.value,
+                kind=VPNOperationKind.UNSUSPEND.value,
+            )
+        if subscription.status != "expired":
+            return []
+        from .subscriptions import SubscriptionService
+
+        return await SubscriptionService(
+            self._uow, clock=self._clock, config_service=self._config_service
+        ).prepare_entitlement(
+            repos=repos,
+            user_id=user.id,
+            desired_state=VPNState.ACTIVE.value,
+            kind=VPNOperationKind.UNSUSPEND.value,
+        )
+
     def _billing_period(self, value: datetime) -> tuple[datetime, datetime, str]:
         if value.tzinfo is None:
             value = value.replace(tzinfo=timezone.utc)

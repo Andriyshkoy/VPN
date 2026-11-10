@@ -3,8 +3,10 @@ import { MoreHorizontal, Search, ShieldAlert } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { configsApi, type VpnConfig } from '../api'
+import { serviceLabel } from '../api/subscriptions'
 import { useAuth } from '../auth/AuthProvider'
 import { DataTable, type Column } from '../components/DataTable'
+import { ConfigProfileDialog } from '../components/ConfigProfileDialog'
 import { Modal } from '../components/Modal'
 import { PageHeader } from '../components/PageHeader'
 import { Pagination } from '../components/Pagination'
@@ -18,11 +20,13 @@ const PAGE_SIZE = 25
 export function ConfigsPage() {
   const { user: admin } = useAuth()
   const canManage = admin?.permissions?.includes('configs:write') ?? false
+  const canExport = admin?.permissions?.includes('configs:export') ?? false
   const canReadUsers = admin?.permissions.includes('users:read') ?? false
   const canReadServers = admin?.permissions.includes('servers:read') ?? false
   const [params, setParams] = useSearchParams()
   const [search, setSearch] = useState(params.get('q') ?? '')
   const [selected, setSelected] = useState<VpnConfig | null>(null)
+  const [profileSelected, setProfileSelected] = useState<VpnConfig | null>(null)
   const offset = Number(params.get('offset') ?? 0)
   const filters = { q: params.get('q') ?? undefined, state: params.get('state') ?? undefined, server_id: params.get('server_id') ?? undefined, limit: PAGE_SIZE, offset }
   const query = useQuery({ queryKey: ['configs', filters], queryFn: () => configsApi.list(filters), placeholderData: (previous) => previous })
@@ -31,14 +35,15 @@ export function ConfigsPage() {
   const columns: Column<VpnConfig>[] = [
     { key: 'config', header: 'Конфигурация', render: (row) => <span><strong>{row.display_name || row.name || `Конфигурация #${row.id}`}</strong><small className="cell-note">ID {row.id}</small></span> },
     { key: 'owner', header: 'Владелец', render: (row) => row.owner_id ? canReadUsers ? <Link className="primary-link" to={`/users/${row.owner_id}`}>{row.owner_username ? `@${row.owner_username}` : `#${row.owner_id}`}</Link> : row.owner_username ? `@${row.owner_username}` : `#${row.owner_id}` : '—' },
+    { key: 'service', header: 'Протокол', render: (row) => row.service_id ? serviceLabel(row.service_id) : 'OpenVPN (legacy)' },
     { key: 'server', header: 'Сервер', render: (row) => row.server_id ? canReadServers ? <Link to={`/servers/${row.server_id}`}>{row.server_name || `#${row.server_id}`}</Link> : row.server_name || `#${row.server_id}` : '—' },
     { key: 'desired', header: 'Desired', render: (row) => <StatusBadge value={row.desired_state ?? (row.suspended ? 'suspended' : 'active')} /> },
     { key: 'actual', header: 'Actual', render: (row) => <StatusBadge value={row.actual_state ?? row.last_operation_status} /> },
     { key: 'created', header: 'Создана', render: (row) => formatDateTime(row.created_at) },
     { key: 'error', header: 'Ошибка', render: (row) => row.last_error ? <span className="error-inline" title={row.last_error}><ShieldAlert size={15} /> {row.last_error}</span> : '—' },
-    ...(canManage ? [{ key: 'actions', header: <span className="sr-only">Действия</span>, align: 'end' as const, render: (row: VpnConfig) => <button type="button" className="icon-button" aria-label={`Управление конфигурацией ${row.display_name || row.name || row.id}`} onClick={() => setSelected(row)}><MoreHorizontal /></button> }] : []),
+    ...(canManage || canExport ? [{ key: 'actions', header: <span className="sr-only">Действия</span>, align: 'end' as const, render: (row: VpnConfig) => <div className="form-actions">{canExport && row.service_id && <button type="button" className="button button--secondary button--small" aria-label={`Получить профиль ${row.display_name || row.name || row.id}`} onClick={() => setProfileSelected(row)}>Профиль</button>}{canManage && <button type="button" className="icon-button" aria-label={`Управление конфигурацией ${row.display_name || row.name || row.id}`} onClick={() => setSelected(row)}><MoreHorizontal /></button>}</div> }] : []),
   ]
-  return <><PageHeader eyebrow="VPN" title="Конфигурации" description="Желаемое и фактическое состояние всех пользовательских профилей." /><section className="filter-bar"><form className="search-box" role="search" onSubmit={submit}><Search /><input aria-label="Поиск конфигураций" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Название, ID или пользователь" /><button className="button button--primary button--small" type="submit">Найти</button></form><label className="inline-select">Состояние <select value={params.get('state') ?? ''} onChange={(event) => setFilter('state', event.target.value)}><option value="">Все</option><option value="active">Активные</option><option value="suspended">Приостановленные</option><option value="failed">С ошибкой</option><option value="provisioning">Создаются</option><option value="revoked">Отозваны</option></select></label></section><section className="panel"><header className="panel__header"><div><h2>Все конфигурации</h2><p>{query.data ? `${query.data!.total} записей` : 'Загрузка…'}</p></div></header>{query.isLoading ? <PageLoading /> : query.isError ? <ErrorState error={query.error} retry={() => void query.refetch()} /> : query.data!.items.length ? <><DataTable label="Конфигурации" columns={columns} rows={query.data!.items} rowKey={(row) => row.id} /><Pagination offset={query.data!.offset} limit={query.data!.limit} total={query.data!.total} onChange={(nextOffset) => setParams(withParam(params, 'offset', nextOffset ? String(nextOffset) : ''))} /></> : <EmptyState title="Конфигурации не найдены" />}</section>{selected && <ConfigActionDialog config={selected} onClose={() => setSelected(null)} />}</>
+  return <><PageHeader eyebrow="VPN" title="Конфигурации" description="Выпуск профилей бесплатный. Подписка общая для аккаунта; профили определяют доступные протоколы." /><section className="filter-bar"><form className="search-box" role="search" onSubmit={submit}><Search /><input aria-label="Поиск конфигураций" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Название, ID или пользователь" /><button className="button button--primary button--small" type="submit">Найти</button></form><label className="inline-select">Состояние <select value={params.get('state') ?? ''} onChange={(event) => setFilter('state', event.target.value)}><option value="">Все</option><option value="active">Активные</option><option value="suspended">Приостановленные</option><option value="failed">С ошибкой</option><option value="provisioning">Создаются</option><option value="revoked">Отозваны</option></select></label></section><section className="panel"><header className="panel__header"><div><h2>Все конфигурации</h2><p>{query.data ? `${query.data!.total} записей` : 'Загрузка…'}</p></div></header>{query.isLoading ? <PageLoading /> : query.isError ? <ErrorState error={query.error} retry={() => void query.refetch()} /> : query.data!.items.length ? <><DataTable label="Конфигурации" columns={columns} rows={query.data!.items} rowKey={(row) => row.id} /><Pagination offset={query.data!.offset} limit={query.data!.limit} total={query.data!.total} onChange={(nextOffset) => setParams(withParam(params, 'offset', nextOffset ? String(nextOffset) : ''))} /></> : <EmptyState title="Конфигурации не найдены" />}</section>{selected && <ConfigActionDialog config={selected} onClose={() => setSelected(null)} />}{profileSelected && <ConfigProfileDialog config={profileSelected} onClose={() => setProfileSelected(null)} />}</>
 }
 
 function ConfigActionDialog({ config, onClose }: { config: VpnConfig; onClose: () => void }) {

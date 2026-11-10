@@ -7,6 +7,7 @@ from aiogram.types import BotCommand, BotCommandScopeDefault
 from core.config import settings
 from core.db.unit_of_work import uow
 from core.services import BillingService, ConfigService, ServerService, UserService
+from core.services.subscriptions import SubscriptionService
 
 router = Router()
 router.message.filter(F.chat.type == ChatType.PRIVATE)
@@ -16,6 +17,7 @@ user_service = UserService(uow)
 server_service = ServerService(uow)
 config_service = ConfigService(uow)
 billing_service = BillingService(uow, per_config_cost=settings.per_config_cost)
+subscription_service = SubscriptionService(uow)
 
 AVAILABLE_AMOUNTS = [100, 200, 300, 500]
 

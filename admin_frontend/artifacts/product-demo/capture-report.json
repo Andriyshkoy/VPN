@@ -1,0 +1,232 @@
+{
+  "local_only": true,
+  "real_dispatch": false,
+  "delivery_paused": true,
+  "feature_toggles_changed": false,
+  "blocked_external_requests": [],
+  "unexpected_api_requests": [],
+  "browser_errors": [],
+  "api_calls": [
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/subscriptions/plans"
+    },
+    {
+      "method": "GET",
+      "path": "/subscriptions"
+    },
+    {
+      "method": "GET",
+      "path": "/subscriptions/migration/preview"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/users/42"
+    },
+    {
+      "method": "GET",
+      "path": "/users/42/subscription"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/campaigns"
+    },
+    {
+      "method": "POST",
+      "path": "/campaigns"
+    },
+    {
+      "method": "GET",
+      "path": "/campaigns"
+    },
+    {
+      "method": "GET",
+      "path": "/campaigns/demo-local-campaign"
+    },
+    {
+      "method": "POST",
+      "path": "/campaigns/demo-local-campaign/preview"
+    },
+    {
+      "method": "POST",
+      "path": "/campaigns/demo-local-campaign/launch"
+    },
+    {
+      "method": "GET",
+      "path": "/campaigns"
+    },
+    {
+      "method": "GET",
+      "path": "/campaigns/demo-local-campaign"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/campaigns"
+    },
+    {
+      "method": "GET",
+      "path": "/campaigns/demo-historical-campaign"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/subscriptions/plans"
+    },
+    {
+      "method": "GET",
+      "path": "/subscriptions"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/campaigns"
+    }
+  ],
+  "screenshots": [
+    {
+      "file": "01-subscription-plans.png",
+      "label": "Почасовые тарифы Basic / Plus; списания выключены",
+      "route": "/subscriptions",
+      "viewport": 1440,
+      "document": 1440,
+      "height": 1080,
+      "overflow": false
+    },
+    {
+      "file": "02-migration-preview.png",
+      "label": "Миграция: только чтение; кошельки, ledger и ∞ без изменений",
+      "route": "/subscriptions",
+      "viewport": 1440,
+      "document": 1440,
+      "height": 1466,
+      "overflow": false
+    },
+    {
+      "file": "03-user-subscription.png",
+      "label": "DEMO account42: Basic и сохранённый конечный кошелёк",
+      "route": "/users/42/subscription",
+      "viewport": 1440,
+      "document": 1440,
+      "height": 1080,
+      "overflow": false
+    },
+    {
+      "file": "04-unlimited-balance-confirmation.png",
+      "label": "Ручное включение ∞: отдельное подтверждение; конечный кошелёк сохранён",
+      "route": "/users/42/subscription",
+      "viewport": 1440,
+      "document": 1440,
+      "height": 1080,
+      "overflow": false
+    },
+    {
+      "file": "05-campaign-reviewed-audience.png",
+      "label": "Черновик, текст и проверенная аудитория; доставки ещё нет",
+      "route": "/campaigns",
+      "viewport": 1440,
+      "document": 1440,
+      "height": 1233,
+      "overflow": false
+    },
+    {
+      "file": "06-campaign-launch-confirmation.png",
+      "label": "Подтверждение SEND, количества и причины; создание очереди при выключенной доставке",
+      "route": "/campaigns",
+      "viewport": 1440,
+      "document": 1440,
+      "height": 1233,
+      "overflow": false
+    },
+    {
+      "file": "07-campaign-progress.png",
+      "label": "Очередь на паузе: 3 ожидают, 0 отправлено; отдельное включение доставки здесь недоступно",
+      "route": "/campaigns",
+      "viewport": 1440,
+      "document": 1440,
+      "height": 1080,
+      "overflow": false
+    },
+    {
+      "file": "10-campaign-cancel-confirmation.png",
+      "label": "Остановка: явная причина и предупреждение о текущей доставке",
+      "route": "/campaigns",
+      "viewport": 1440,
+      "document": 1440,
+      "height": 1080,
+      "overflow": false
+    },
+    {
+      "file": "11-campaign-retry-confirmation.png",
+      "label": "Синтетическая история: повтор ошибок исключает доставленные и неизвестные результаты; доставка на паузе",
+      "route": "/campaigns",
+      "viewport": 1440,
+      "document": 1440,
+      "height": 1579,
+      "overflow": false
+    },
+    {
+      "file": "08-mobile-subscriptions.png",
+      "label": "Мобильная ширина390: тарифы и список подписок",
+      "route": "/subscriptions",
+      "viewport": 390,
+      "document": 390,
+      "height": 1619,
+      "overflow": false
+    },
+    {
+      "file": "09-mobile-targeted-campaign.png",
+      "label": "Мобильная ширина390: сообщение конкретному аккаунту",
+      "route": "/campaigns",
+      "viewport": 390,
+      "document": 390,
+      "height": 1628,
+      "overflow": false
+    }
+  ]
+}

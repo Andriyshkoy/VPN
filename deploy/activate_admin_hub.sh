@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 umask 077
 
-readonly EXPECTED_REVISION="g5c9d2e3f4a5"
+readonly EXPECTED_REVISION="h6d0e3f4a5b6"
 readonly POSTGRES_EXPORTER_ROLE="vpn_exporter"
 readonly -a HUB_SERVICES=(admin admin_frontend nginx)
 readonly -a MONITORING_SERVICES=(

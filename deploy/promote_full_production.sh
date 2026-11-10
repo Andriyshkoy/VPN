@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 umask 077
 
-readonly EXPECTED_REVISION="g5c9d2e3f4a5"
+readonly EXPECTED_REVISION="h6d0e3f4a5b6"
 readonly -a MONITORING_SERVICES=(
     statsd_exporter
     postgres_exporter
@@ -199,7 +199,7 @@ assert_runtime_policy() {
     local key
     local -A expected_policy=(
         [MAINTENANCE_MODE]=false
-        [BILLING_ENABLED]=true
+        [BILLING_ENABLED]=false
         [PAYMENTS_ENABLED]=true
         [PROVISIONING_ENABLED]=true
         [NOTIFICATIONS_ENABLED]=false
@@ -244,7 +244,7 @@ assert_policy() {
     elif [[ "$phase" == "promoted" ]]; then
         expected_policy=(
             [MAINTENANCE_MODE]=false
-            [BILLING_ENABLED]=true
+            [BILLING_ENABLED]=false
             [PAYMENTS_ENABLED]=true
             [PROVISIONING_ENABLED]=true
             [NOTIFICATIONS_ENABLED]=false
@@ -271,7 +271,8 @@ build_promoted_release_env() {
 
     install -m 0600 "$source" "$destination"
     set_env_value MAINTENANCE_MODE false "$destination"
-    set_env_value BILLING_ENABLED true "$destination"
+    # Product migration must not implicitly resume hourly deductions.
+    set_env_value BILLING_ENABLED false "$destination"
     set_env_value PAYMENTS_ENABLED true "$destination"
     set_env_value PROVISIONING_ENABLED true "$destination"
     set_env_value NOTIFICATIONS_ENABLED false "$destination"

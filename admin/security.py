@@ -53,6 +53,11 @@ class AdminPermission(StrEnum):
     METRICS_READ = "metrics:read"
     AUDIT_READ = "audit:read"
     ADMINS_MANAGE = "admins:manage"
+    SUBSCRIPTIONS_READ = "subscriptions:read"
+    SUBSCRIPTIONS_WRITE = "subscriptions:write"
+    CAMPAIGNS_READ = "campaigns:read"
+    CAMPAIGNS_WRITE = "campaigns:write"
+    CAMPAIGNS_SEND = "campaigns:send"
 
 
 _ALL_PERMISSIONS = frozenset(AdminPermission)
@@ -68,6 +73,7 @@ ROLE_PERMISSIONS: dict[AdminRole, frozenset[AdminPermission]] = {
             AdminPermission.CONFIGS_READ,
             AdminPermission.CONFIGS_WRITE,
             AdminPermission.SERVERS_READ,
+            AdminPermission.SUBSCRIPTIONS_READ,
         }
     ),
     AdminRole.FINANCE: frozenset(
@@ -80,6 +86,8 @@ ROLE_PERMISSIONS: dict[AdminRole, frozenset[AdminPermission]] = {
             AdminPermission.FINANCE_READ,
             AdminPermission.CONFIGS_READ,
             AdminPermission.AUDIT_READ,
+            AdminPermission.SUBSCRIPTIONS_READ,
+            AdminPermission.SUBSCRIPTIONS_WRITE,
         }
     ),
     AdminRole.OPS: frozenset(
@@ -94,6 +102,7 @@ ROLE_PERMISSIONS: dict[AdminRole, frozenset[AdminPermission]] = {
             AdminPermission.SERVERS_WRITE,
             AdminPermission.METRICS_READ,
             AdminPermission.AUDIT_READ,
+            AdminPermission.SUBSCRIPTIONS_READ,
         }
     ),
     AdminRole.VIEWER: frozenset(
@@ -106,6 +115,7 @@ ROLE_PERMISSIONS: dict[AdminRole, frozenset[AdminPermission]] = {
             AdminPermission.CONFIGS_READ,
             AdminPermission.SERVERS_READ,
             AdminPermission.METRICS_READ,
+            AdminPermission.SUBSCRIPTIONS_READ,
         }
     ),
 }

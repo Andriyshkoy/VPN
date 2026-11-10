@@ -16,6 +16,7 @@ from core.exceptions import (
 )
 from core.services import BillingService, ConfigService, ServerService, UserService
 from tests.fleet_test_support import mark_server_ready
+from tests.historical_billing_support import create_historical_paid_config
 
 
 class LifecycleGateway:
@@ -187,7 +188,8 @@ async def test_tls_material_failure_keeps_operation_retryable_and_not_refunded(
     await billing.top_up(user.id, "10.00", idempotency_key="tls-retry-seed")
 
     with pytest.raises(APITLSConfigurationError):
-        await billing.create_paid_config(
+        await create_historical_paid_config(
+            billing,
             server_id=server.id,
             owner_id=user.id,
             name="tls-retryable",
@@ -353,7 +355,8 @@ async def test_reconciliation_refunds_later_definitive_rejection(
     await billing.top_up(user.id, "10.00", idempotency_key="seed-reconcile")
 
     with pytest.raises(APITransportError):
-        await billing.create_paid_config(
+        await create_historical_paid_config(
+            billing,
             server_id=server.id,
             owner_id=user.id,
             name="refund-after-reconcile",

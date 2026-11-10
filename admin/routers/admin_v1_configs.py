@@ -381,7 +381,9 @@ async def export_node_profile(
         config_id=config_id,
         access_id=profile.access_id,
         service_id=profile.service_id,
+        format=profile.format,
         uri=profile.uri,
+        content=profile.content,
     )
 
 

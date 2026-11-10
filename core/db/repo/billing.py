@@ -16,6 +16,7 @@ from core.db.models.ledger import LedgerEntry, LedgerKind
 from core.db.models.notification_outbox import NotificationOutbox
 from core.db.models.payment import ProviderPayment
 from core.db.models.referral_reward import ReferralReward
+from core.db.models.subscription import Subscription
 from core.db.models.user import User
 from core.db.models.vpn_operation import VPNOperation
 from core.domain import VPNOperationKind, VPNState
@@ -44,7 +45,7 @@ def to_money(value: Decimal | int | float | str) -> Decimal:
 @dataclass(frozen=True)
 class BalanceChangeResult:
     user: User
-    ledger_entry: LedgerEntry
+    ledger_entry: LedgerEntry | None
     applied: bool
 
 
@@ -80,6 +81,15 @@ class BillingRepo:
 
     def __init__(self, session) -> None:
         self.session = session
+
+    async def uses_subscription(self, user_id: int) -> bool:
+        """Keep product entitlements independent from legacy wallet heuristics."""
+
+        return bool(
+            await self.session.scalar(
+                select(Subscription.id).where(Subscription.user_id == user_id)
+            )
+        )
 
     async def get_ledger_entry(self, idempotency_key: str) -> LedgerEntry | None:
         return await self.session.scalar(
@@ -119,7 +129,10 @@ class BillingRepo:
         # Serialize a user's ledger so ``balance_after`` and entry order remain
         # auditable under concurrent top-up/charge/withdraw operations.
         locked_user = await self.session.scalar(
-            select(User).where(User.id == user_id).with_for_update()
+            select(User)
+            .where(User.id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if locked_user is None:
             raise UserNotFoundError(f"User with ID {user_id} not found")
@@ -137,6 +150,23 @@ class BillingRepo:
                 user=locked_user,
                 ledger_entry=existing,
                 applied=False,
+            )
+
+        # An administrator may still explicitly adjust the finite wallet. The
+        # privilege waives service consumption only; it never manufactures a
+        # credit or an artificial zero-value ledger row. Historical retries
+        # above retain their original immutable financial result.
+        if (
+            normalized_amount < 0
+            and locked_user.unlimited_balance
+            and kind_value
+            in {
+                LedgerKind.PERIODIC_CHARGE.value,
+                LedgerKind.CONFIG_RESERVATION.value,
+            }
+        ):
+            return BalanceChangeResult(
+                user=locked_user, ledger_entry=None, applied=False
             )
 
         conditions = [User.id == user_id]
@@ -766,6 +796,17 @@ class BillingRepo:
             .where(
                 User.balance > 0,
                 VPN_Config.desired_state == VPNState.SUSPENDED.value,
+                or_(
+                    ~select(Subscription.id)
+                    .where(Subscription.user_id == User.id)
+                    .exists(),
+                    select(Subscription.id)
+                    .where(
+                        Subscription.user_id == User.id,
+                        Subscription.status == "expired",
+                    )
+                    .exists(),
+                ),
             )
             .distinct()
             .order_by(ReferralReward.beneficiary_user_id)
@@ -818,6 +859,34 @@ class BillingRepo:
         if period_end <= period_start:
             raise InvalidOperationError("Invalid billing period")
 
+        pending_cutover = await self.session.scalar(
+            select(Subscription.id)
+            .where(
+                Subscription.status == "pending",
+                Subscription.migration_snapshot["cutover_state"].as_string()
+                == "pending",
+            )
+            .limit(1)
+        )
+        if pending_cutover is not None:
+            raise InvalidOperationError(
+                "Subscription cutover is pending; keep billing disabled until it completes"
+            )
+
+        if period_end - period_start != timedelta(hours=1):
+            active_product = await self.session.scalar(
+                select(Subscription.id)
+                .join(User, User.id == Subscription.user_id)
+                .where(
+                    Subscription.status == "active", User.unlimited_balance.is_(False)
+                )
+                .limit(1)
+            )
+            if active_product is not None:
+                raise InvalidOperationError(
+                    "Subscription tariffs require a 3600-second billing interval"
+                )
+
         run, claimed = await self._claim_billing_run(
             period_key=period_key,
             period_start=period_start,
@@ -833,24 +902,76 @@ class BillingRepo:
             )
             return []
 
-        if cost == 0:
-            await self._complete_billing_run(run, charged_users=0, total=Decimal(0))
-            return []
-
         active_counts = await self.session.execute(
             select(VPN_Config.owner_id, func.count(VPN_Config.id))
+            .join(User, User.id == VPN_Config.owner_id)
             .where(
                 VPN_Config.desired_state == VPNState.ACTIVE.value,
                 VPN_Config.actual_state == VPNState.ACTIVE.value,
+                User.unlimited_balance.is_(False),
+                ~select(Subscription.id)
+                .where(Subscription.user_id == User.id)
+                .exists(),
             )
             .group_by(VPN_Config.owner_id)
             .order_by(VPN_Config.owner_id)
         )
 
+        # Product accounts share this exact hourly run and the historical
+        # per-user idempotency key. Their tariff replaces config count; adding
+        # Hysteria + VLESS credentials therefore never adds another charge.
+        legacy_counts = dict(active_counts.all())
+        product_user_ids = await self.session.scalars(
+            select(Subscription.user_id)
+            .join(User, User.id == Subscription.user_id)
+            .where(Subscription.status == "active", User.unlimited_balance.is_(False))
+        )
+        candidate_ids = sorted(set(legacy_counts) | set(product_user_ids.all()))
+        # Imported here to keep the repository importable during construction
+        # of the public services package.
+        from core.services.subscription_types import PLANS
+
+        tariffs = {plan.code: plan.hourly_rate_rub for plan in PLANS}
+
         charged: list[PeriodChargeResult] = []
         total = Decimal("0.00")
-        for user_id, config_count in active_counts:
-            charge = to_money(cost * int(config_count))
+        for user_id in candidate_ids:
+            # All billing paths lock users in the same ascending order. Recheck
+            # the plan under that lock so a simultaneous plan/migration/admin
+            # change cannot accidentally use the former per-config tariff.
+            user = await self.session.scalar(
+                select(User)
+                .where(User.id == user_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if user is None or user.unlimited_balance:
+                continue
+            subscription = await self.session.scalar(
+                select(Subscription)
+                .where(Subscription.user_id == user_id)
+                .execution_options(populate_existing=True)
+            )
+            if subscription is not None:
+                if subscription.status != "active":
+                    continue
+                charge = to_money(tariffs[subscription.plan_code])
+                details = {
+                    "period_key": period_key,
+                    "subscription_id": subscription.id,
+                    "plan_code": subscription.plan_code,
+                    "hourly_rate_rub": str(charge),
+                    "billing_basis": "account_tariff",
+                    "pricing_model": "subscription_hourly",
+                }
+            else:
+                config_count = int(legacy_counts.get(user_id, 0))
+                charge = to_money(cost * config_count)
+                details = {
+                    "period_key": period_key,
+                    "config_count": config_count,
+                    "cost_per_config": str(cost),
+                }
             if charge == 0:
                 continue
             movement = await self.apply_balance_change(
@@ -861,11 +982,7 @@ class BillingRepo:
                 allow_negative_balance=True,
                 reference_type="billing_run",
                 reference_id=str(run.id),
-                details={
-                    "period_key": period_key,
-                    "config_count": int(config_count),
-                    "cost_per_config": str(cost),
-                },
+                details=details,
             )
             if movement.applied:
                 charged.append(

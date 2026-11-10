@@ -58,6 +58,7 @@ async def dashboard(
     if AdminPermission.FINANCE_READ not in principal.permissions:
         payload.pop("finance", None)
         payload.pop("billing", None)
+        payload.pop("subscription_forecast", None)
         payload.get("users", {}).pop("paying", None)
     if AdminPermission.REFERRALS_READ not in principal.permissions:
         payload.get("users", {}).pop("invited", None)

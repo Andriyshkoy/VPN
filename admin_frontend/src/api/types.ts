@@ -42,6 +42,8 @@ export interface User {
   username?: string | null
   display_name?: string | null
   balance?: Money
+  unlimited_balance?: boolean
+  exclude_from_business_metrics?: boolean
   created_at?: string
   last_seen_at?: string | null
   status?: string
@@ -85,8 +87,21 @@ export interface Payment {
   confirmed_at?: string | null
 }
 
+interface NodeProfileIdentity {
+  config_id: number
+  access_id: string
+  service_id: 'hysteria' | 'vless-reality'
+  contains_secret: true
+}
+
+export type NodeProfile = NodeProfileIdentity & (
+  | { format: 'uri'; uri: string; content?: null }
+  | { format: 'singbox-json'; uri?: null; content: string }
+)
+
 export interface VpnConfig {
   id: string | number
+  service_id?: string | null
   owner_id?: string | number
   owner_username?: string | null
   name?: string
@@ -153,6 +168,16 @@ export interface BillingRun {
 }
 
 export interface FinanceOverview {
+  subscription_forecast?: {
+    scope: 'business' | 'all'
+    billing_paused: boolean
+    active_accounts: number
+    paid_active_accounts: number
+    unlimited_active_accounts: number
+    hourly_rate_rub: Money
+    monthly_estimate_rub: Money
+    currency: string
+  }
   deposits: Money
   service_revenue: Money
   config_fees: Money

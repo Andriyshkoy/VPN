@@ -10,8 +10,6 @@ from core.db.models.ledger import LedgerKind
 from core.db.repo.billing import to_money
 from core.domain import VPNOperationKind, VPNState
 from core.exceptions import (
-    APIConfigurationError,
-    APIRequestRejectedError,
     ConfigNotFoundError,
     InvalidOperationError,
     UserNotFoundError,
@@ -45,13 +43,7 @@ class BalanceOperations:
                 allow_negative_balance=True,
             )
             user = User.from_orm(result.user)
-            if user.balance > 0:
-                planned = await self._config_service.prepare_entitlement(
-                    repos=repos,
-                    owner_id=user_id,
-                    desired_state=VPNState.ACTIVE.value,
-                    kind=VPNOperationKind.UNSUSPEND.value,
-                )
+            planned = await self._prepare_wallet_activation(repos, user)
 
         await self._config_service.execute_operations(planned, owner_id=user_id)
         return user
@@ -75,7 +67,11 @@ class BalanceOperations:
                 allow_negative_balance=False,
             )
             user = User.from_orm(result.user)
-            if user.balance <= 0:
+            if (
+                user.balance <= 0
+                and not user.unlimited_balance
+                and not await self._uses_subscription(repos, user_id)
+            ):
                 planned = await self._config_service.prepare_entitlement(
                     repos=repos,
                     owner_id=user_id,
@@ -218,23 +214,10 @@ class ProviderPaymentOperations:
                     billing_repo,
                     result.payment,
                 )
-            if user.balance > 0:
-                planned = await self._config_service.prepare_entitlement(
-                    repos=repos,
-                    owner_id=user_id,
-                    desired_state=VPNState.ACTIVE.value,
-                    kind=VPNOperationKind.UNSUSPEND.value,
-                )
+            planned = await self._prepare_wallet_activation(repos, user)
             for reward_result in reward_results:
-                if reward_result.user.balance <= 0:
-                    continue
                 planned.extend(
-                    await self._config_service.prepare_entitlement(
-                        repos=repos,
-                        owner_id=reward_result.user.id,
-                        desired_state=VPNState.ACTIVE.value,
-                        kind=VPNOperationKind.UNSUSPEND.value,
-                    )
+                    await self._prepare_wallet_activation(repos, reward_result.user)
                 )
 
         await self._config_service.execute_operations(list(dict.fromkeys(planned)))
@@ -279,14 +262,7 @@ class ProviderPaymentOperations:
                     quarantined += 1
                     continue
                 for reward_result in reward_results:
-                    if reward_result.user.balance <= 0:
-                        continue
-                    await self._config_service.prepare_entitlement(
-                        repos=repos,
-                        owner_id=reward_result.user.id,
-                        desired_state=VPNState.ACTIVE.value,
-                        kind=VPNOperationKind.UNSUSPEND.value,
-                    )
+                    await self._prepare_wallet_activation(repos, reward_result.user)
                 settled += 1
 
         # Backfilled rewards are written by Alembic rather than this service,
@@ -305,14 +281,9 @@ class ProviderPaymentOperations:
         for owner_id in owner_ids:
             async with self._uow() as repos:
                 user = await repos["users"].get_for_update(owner_id)
-                if user is None or user.balance <= 0:
+                if user is None:
                     continue
-                await self._config_service.prepare_entitlement(
-                    repos=repos,
-                    owner_id=owner_id,
-                    desired_state=VPNState.ACTIVE.value,
-                    kind=VPNOperationKind.UNSUSPEND.value,
-                )
+                await self._prepare_wallet_activation(repos, user)
         if quarantined:
             # Each payment above used an independent committed UOW, so raising
             # here signals the existing background-job alert without undoing
@@ -412,14 +383,27 @@ class PeriodicBillingOperations:
                 user = User.from_orm(result.user)
                 charged[user] = result.amount
                 if user.balance <= 0:
-                    planned.extend(
-                        await self._config_service.prepare_entitlement(
+                    if await self._uses_subscription(repos, user.id):
+                        from .subscriptions import SubscriptionService
+
+                        operations = await SubscriptionService(
+                            self._uow,
+                            clock=self._clock,
+                            config_service=self._config_service,
+                        ).prepare_entitlement(
+                            repos=repos,
+                            user_id=user.id,
+                            desired_state=VPNState.SUSPENDED.value,
+                            kind=VPNOperationKind.SUSPEND.value,
+                        )
+                    else:
+                        operations = await self._config_service.prepare_entitlement(
                             repos=repos,
                             owner_id=user.id,
                             desired_state=VPNState.SUSPENDED.value,
                             kind=VPNOperationKind.SUSPEND.value,
                         )
-                    )
+                    planned.extend(operations)
                 if (
                     notification_candidates is not None
                     and result.user.telegram_delivery_status == "active"
@@ -446,6 +430,11 @@ class PeriodicBillingOperations:
         self, *, limit: int = 100
     ) -> tuple[dict[int, str], int]:
         lifecycle = await self._config_service.reconcile(limit=limit)
+        from .subscriptions import SubscriptionService
+
+        await SubscriptionService(
+            self._uow, clock=self._clock, config_service=self._config_service
+        ).reconcile_pending(limit=limit)
         async with self._uow() as repos:
             refunds = await self._billing_repo(
                 repos
@@ -454,7 +443,12 @@ class PeriodicBillingOperations:
 
 
 class PaidProvisioningOperations:
-    """Atomic paid provisioning and its exact compensating transaction."""
+    """Replay historical OpenVPN purchases without selling new configurations.
+
+    Historical version-one reservations remain immutable and refundable by
+    reconciliation. New subscriptions issue their node credentials for free
+    through SubscriptionService instead of this retired compatibility route.
+    """
 
     async def create_paid_config(
         self,
@@ -479,104 +473,54 @@ class PaidProvisioningOperations:
         display_name = self._config_service._validate_display_name(display_name)
 
         if idempotency_key is None:
-            operation_id = str(uuid4())
-            paid_request_payload = None
-        else:
-            if (
-                not isinstance(idempotency_key, str)
-                or not idempotency_key.strip()
-                or len(idempotency_key) > 160
-            ):
-                raise InvalidOperationError("Invalid idempotency key")
-            normalized_key = idempotency_key.strip()
-            operation_id = str(
-                uuid5(
-                    NAMESPACE_URL,
-                    f"vpn-paid-config:{owner_id}:{normalized_key}",
-                )
+            raise InvalidOperationError(
+                "New OpenVPN configurations are unavailable; select a subscription"
             )
-            paid_request_payload = {
-                "paid_request_version": 1,
-                "creation_cost": f"{creation_cost:.2f}",
-                "display_name": display_name,
-            }
-
-        reservation_key = f"config-reservation:{operation_id}"
-        existing_config_id: int | None = None
-        context = None
+        if (
+            not isinstance(idempotency_key, str)
+            or not idempotency_key.strip()
+            or len(idempotency_key) > 160
+        ):
+            raise InvalidOperationError("Invalid idempotency key")
+        operation_id = str(
+            uuid5(
+                NAMESPACE_URL,
+                f"vpn-paid-config:{owner_id}:{idempotency_key.strip()}",
+            )
+        )
         async with self._uow() as repos:
-            if paid_request_payload is not None:
-                # Serialize requests for one account before checking the
-                # deterministic operation ID. This closes the concurrent
-                # replay window without relying on an IntegrityError after a
-                # remote side effect has already been committed.
-                if await repos["users"].get_for_update(owner_id) is None:
-                    raise UserNotFoundError(f"User with ID {owner_id} not found")
-                existing_operation = await repos["vpn_operations"].get(
-                    operation_id=operation_id
-                )
-                if existing_operation is not None:
-                    existing_config = await self._validate_paid_config_replay(
-                        repos,
-                        existing_operation,
-                        server_id=server_id,
-                        owner_id=owner_id,
-                        name=name,
-                        display_name=display_name,
-                        creation_cost=creation_cost,
-                        use_password=use_password,
-                    )
-                    existing_config_id = existing_config.id
-
-            if existing_config_id is None:
-                context = await self._config_service.prepare_config(
-                    repos=repos,
-                    operation_id=operation_id,
-                    server_id=server_id,
-                    owner_id=owner_id,
-                    name=name,
-                    display_name=display_name,
-                    use_password=use_password,
-                    operation_payload=paid_request_payload,
-                )
-            if creation_cost > 0:
-                await self._billing_repo(repos).apply_balance_change(
-                    user_id=owner_id,
-                    amount=-creation_cost,
-                    kind=LedgerKind.CONFIG_RESERVATION,
-                    idempotency_key=reservation_key,
-                    allow_negative_balance=False,
-                    reference_type="vpn_operation",
-                    reference_id=operation_id,
-                    details={"server_id": server_id, "config_name": name},
-                )
-
-        if existing_config_id is not None:
-            # A prior attempt committed the financial/config intent but may
-            # have crashed before delivering the profile. Nudge the same
-            # durable operation and return the same config; never create or
-            # charge again.
-            await self._config_service.execute_operations(
-                (operation_id,), owner_id=owner_id
+            if await repos["users"].get_for_update(owner_id) is None:
+                raise UserNotFoundError(f"User with ID {owner_id} not found")
+            existing_operation = await repos["vpn_operations"].get(
+                operation_id=operation_id
             )
-            existing = await self._config_service.get(existing_config_id)
-            if existing is None:
-                raise ConfigNotFoundError(
-                    "Paid configuration replay references a missing config"
+            if existing_operation is None:
+                raise InvalidOperationError(
+                    "New OpenVPN configurations are unavailable; select a subscription"
                 )
-            return existing
+            existing_config = await self._validate_paid_config_replay(
+                repos,
+                existing_operation,
+                server_id=server_id,
+                owner_id=owner_id,
+                name=name,
+                display_name=display_name,
+                creation_cost=creation_cost,
+                use_password=use_password,
+            )
+            existing_config_id = existing_config.id
 
-        try:
-            if context is None:  # pragma: no cover - defensive invariant
-                raise RuntimeError("Paid provisioning context was not prepared")
-            return await self._config_service.execute_prepared(context)
-        except (APIConfigurationError, APIRequestRejectedError):
-            if creation_cost > 0:
-                async with self._uow() as repos:
-                    await self._billing_repo(repos).refund_rejected_config_reservations(
-                        operation_id=operation_id
-                    )
-            raise
+        # The durable historical operation already owns its original financial
+        # result. Replaying it cannot create a new reservation or refund.
+        await self._config_service.execute_operations(
+            (operation_id,), owner_id=owner_id
+        )
+        existing = await self._config_service.get(existing_config_id)
+        if existing is None:
+            raise ConfigNotFoundError(
+                "Paid configuration replay references a missing config"
+            )
+        return existing
 
     async def _validate_paid_config_replay(
         self,

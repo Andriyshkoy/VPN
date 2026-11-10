@@ -6,12 +6,14 @@ from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
     Numeric,
     String,
     Text,
+    false,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -43,6 +45,12 @@ class User(Base):
     )
 
     balance: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0)
+    unlimited_balance: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    exclude_from_business_metrics: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
 
     telegram_delivery_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="active", index=True

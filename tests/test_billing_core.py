@@ -22,6 +22,7 @@ from core.exceptions import (
 )
 from core.services import BillingService, ServerService, UserService
 from tests.fleet_test_support import mark_server_ready
+from tests.historical_billing_support import create_historical_paid_config
 
 
 class BillingGateway:
@@ -689,14 +690,15 @@ async def test_outbox_republishes_until_consumer_settles(monkeypatch, sessionmak
 
 
 @pytest.mark.asyncio
-async def test_create_paid_config_reserves_exact_balance(monkeypatch, sessionmaker):
+async def test_historical_paid_config_reserves_exact_balance(monkeypatch, sessionmaker):
     user, server = await _user_and_server(balance=Decimal("10.00"))
     billing = BillingService(uow, per_config_cost="1.00")
     gateway = BillingGateway()
     monkeypatch.setattr(
         "core.services.config.APIGateway", lambda *args, **kwargs: gateway
     )
-    result = await billing.create_paid_config(
+    result = await create_historical_paid_config(
+        billing,
         server_id=server.id,
         owner_id=user.id,
         name="exact-balance",
@@ -718,7 +720,8 @@ async def test_definitive_provision_failure_refunds_reservation(
         "core.services.config.APIGateway", lambda *args, **kwargs: gateway
     )
     with pytest.raises(APIRequestRejectedError):
-        await billing.create_paid_config(
+        await create_historical_paid_config(
+            billing,
             server_id=server.id,
             owner_id=user.id,
             name="rejected",
@@ -745,7 +748,8 @@ async def test_ambiguous_provision_failure_keeps_reservation(monkeypatch, sessio
         "core.services.config.APIGateway", lambda *args, **kwargs: gateway
     )
     with pytest.raises(APITransportError):
-        await billing.create_paid_config(
+        await create_historical_paid_config(
+            billing,
             server_id=server.id,
             owner_id=user.id,
             name="ambiguous",
@@ -772,7 +776,8 @@ async def test_paid_config_replay_returns_same_config_and_never_charges_twice(
     monkeypatch.setattr(
         "core.services.config.APIGateway", lambda *args, **kwargs: gateway
     )
-    result = await billing.create_paid_config(
+    result = await create_historical_paid_config(
+        billing,
         server_id=server.id,
         owner_id=user.id,
         name="same-purchase",
@@ -822,7 +827,8 @@ async def test_rejected_non_provision_operation_never_refunds_creation(
     monkeypatch.setattr(
         "core.services.config.APIGateway", lambda *args, **kwargs: gateway
     )
-    cfg = await billing.create_paid_config(
+    cfg = await create_historical_paid_config(
+        billing,
         server_id=server.id,
         owner_id=user.id,
         name="paid-before-suspend",
@@ -845,7 +851,8 @@ async def test_insufficient_reservation_rolls_back_staged_provision(sessionmaker
     billing = BillingService(uow, per_config_cost="1.00")
 
     with pytest.raises(InsufficientBalanceError):
-        await billing.create_paid_config(
+        await create_historical_paid_config(
+            billing,
             server_id=server.id,
             owner_id=user.id,
             name="must-rollback",

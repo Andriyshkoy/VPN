@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import time
+from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Query, Request
@@ -30,10 +31,10 @@ IDEMPOTENCY_OPENAPI = {"x-required-scopes": ["access:write"], "parameters": [{"n
     "schema": {"type": "string", "minLength": 8, "maxLength": 128, "pattern": "^[A-Za-z0-9_.:-]+$"}}]}
 CATALOG = {
     "hysteria": {"id": "hysteria", "name": "Hysteria 2", "node_id": "nl-1", "endpoint": {"host": "195.133.195.40", "port": 1935, "transport": "udp"},
-                 "capabilities": {"fixed_expiry": False, "activation_days": True, "expiry_precision": "day", "traffic_limit_bytes": True, "unlimited_traffic": True, "unlimited_expiry": True},
+                 "capabilities": {"fixed_expiry": False, "activation_days": True, "expiry_precision": "day", "traffic_limit_bytes": True, "unlimited_traffic": True, "unlimited_expiry": True, "max_sessions": False},
                  "accounting": "delayed_total_upload_plus_download", "scope": "control_plane; client/network acceptance is separate"},
     "vless-reality": {"id": "vless-reality", "name": "VLESS + REALITY + Vision", "node_id": "nl-1", "endpoint": {"host": "195.133.195.40", "port": 9443, "transport": "tcp"},
-                      "capabilities": {"fixed_expiry": True, "activation_days": False, "expiry_precision": "second", "traffic_limit_bytes": True, "unlimited_traffic": True, "unlimited_expiry": True},
+                      "capabilities": {"fixed_expiry": True, "activation_days": False, "expiry_precision": "second", "traffic_limit_bytes": True, "unlimited_traffic": True, "unlimited_expiry": True, "max_sessions": False},
                       "accounting": "delayed_backend_counters; Vision splice may settle after stream close", "scope": "control_plane; client/network acceptance is separate"},
 }
 
@@ -50,9 +51,11 @@ def iso(timestamp):
 def view(row, snapshot=None):
     observed = snapshot if snapshot is not None else row.get("snapshot")
     desired = dict(row["settings"])
+    desired.setdefault("max_sessions", None)
     desired["expires_at"] = iso(desired.get("expires_at"))
     effective = dict(observed) if observed else None
     if effective:
+        effective.setdefault("max_sessions", None)
         effective["expires_at"] = iso(effective.get("expires_at"))
         effective["last_seen_at"] = iso(effective.get("last_seen_at"))
     return {"id": row["id"], "service_id": row["service_id"], "node_id": row["node_id"], "owner_ref": row["owner_ref"],
@@ -117,7 +120,7 @@ def create_app(settings=None, backends=None):
 
     @application.exception_handler(RequestValidationError)
     async def validation_error(request, exc):
-        known = {"body", "path", "query", "header", "access_id", "service_id", "node_id", "owner_ref", "traffic_limit_bytes", "expires_at", "activation_days", "limit", "offset"}
+        known = {"body", "path", "query", "header", "access_id", "service_id", "node_id", "owner_ref", "traffic_limit_bytes", "expires_at", "activation_days", "max_sessions", "limit", "offset"}
         fields = [{"location": [part if isinstance(part, int) or part in known else "unknown_field" for part in x["loc"]], "type": x["type"]} for x in exc.errors()]
         return JSONResponse({"error": {"code": "request_validation_failed", "request_id": request.state.request_id,
                             "fields": fields}}, status_code=422)
@@ -191,7 +194,7 @@ def create_app(settings=None, backends=None):
             create = None
             if kind == "create":
                 create = {"service_id": payload["service_id"], "node_id": payload["node_id"], "owner_ref": payload["owner_ref"],
-                          "settings": {k: payload[k] for k in ("expires_at", "traffic_limit_bytes", "activation_days")}}
+                          "settings": {k: payload[k] for k in ("expires_at", "traffic_limit_bytes", "activation_days", "max_sessions")}}
             lease = store.reserve(principal.id, key, request_hash, kind, str(access_id) if access_id else None, create)
         except StoreError as exc:
             raise APIError(exc.status, exc.code) from None
@@ -200,6 +203,7 @@ def create_app(settings=None, backends=None):
         row, operation_id, lease_owner = lease["access"], lease["operation_id"], lease["lease_owner"]
         adapter = backend(request, row)
         next_settings = dict(row["settings"])
+        next_settings.setdefault("max_sessions", None)  # Existing durable rows are unlimited.
         next_owner, owner_changed = row["owner_ref"], False
         target = row["desired_status"]
         try:
@@ -210,6 +214,8 @@ def create_app(settings=None, backends=None):
                     raise BackendConflict("hysteria_exact_expiry_unsupported")
                 if row["service_id"] == "vless-reality" and payload.get("activation_days") is not None:
                     raise BackendConflict("activation_days_unsupported")
+                if row["service_id"] == "vless-reality" and payload.get("max_sessions") is not None:
+                    raise BackendConflict("max_sessions_unsupported")
                 next_settings.update({k: v for k, v in payload.items() if k in next_settings})
                 if "owner_ref" in payload:
                     next_owner, owner_changed = payload["owner_ref"], True
@@ -253,8 +259,18 @@ def create_app(settings=None, backends=None):
         return JSONResponse(application.openapi())
 
     @application.get("/v1/services", tags=["catalog"])
-    def services(principal=Depends(read)):
-        return {"services": list(catalog.values())}
+    def services(request: Request, principal=Depends(read)):
+        observed = json.loads(json.dumps(catalog))
+        try:
+            capabilities = request.app.state.backends["hysteria"].health().get("capabilities", {})
+            if (isinstance(capabilities, dict) and capabilities.get("max_sessions") is True
+                    and capabilities.get("session_scope") == "auth_id_per_server_instance"
+                    and capabilities.get("enforcement") == "atomic_quic_connection"
+                    and type(capabilities.get("version")) is int and capabilities["version"] == 1):
+                observed["hysteria"]["capabilities"].update(capabilities)
+        except BackendError:
+            pass
+        return {"services": list(observed.values())}
 
     @application.get("/v1/nodes", tags=["catalog"])
     def nodes(principal=Depends(read)):
@@ -325,12 +341,16 @@ def create_app(settings=None, backends=None):
         return mutate(request, principal, "revoke", {}, access_id)
 
     @application.get("/v1/accesses/{access_id}/profile", tags=["profiles"], response_model=ProfileResponse, openapi_extra={"x-required-scopes": ["profiles:read"]})
-    def profile(request: Request, access_id: UUID, principal=Depends(export)):
+    def profile(request: Request, access_id: UUID, profile_format: Literal["auto", "native-uri"] = Query(default="auto", alias="format"), principal=Depends(export)):
         row = required_row(request, access_id)
         if row["status"] in ("revoked", "provisioning", "failed"):
             raise APIError(409, "profile_unavailable_for_state")
-        uri = safe_call(lambda: backend(request, row).profile(row["backend_username"]))
-        return {"access_id": row["id"], "service_id": row["service_id"], "format": "uri", "uri": uri, "contains_secret": True}
+        selected = backend(request, row)
+        if row["service_id"] == "hysteria" and profile_format == "auto":
+            content = safe_call(lambda: selected.profile_json(row["backend_username"]))
+            return {"access_id": row["id"], "service_id": row["service_id"], "format": "singbox-json", "uri": None, "content": content, "contains_secret": True}
+        uri = safe_call(lambda: selected.profile(row["backend_username"]))
+        return {"access_id": row["id"], "service_id": row["service_id"], "format": "uri", "uri": uri, "content": None, "contains_secret": True}
 
     @application.get("/v1/accesses/{access_id}/usage", tags=["accesses"], response_model=UsageResponse)
     def usage(request: Request, access_id: UUID, principal=Depends(read)):

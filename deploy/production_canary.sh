@@ -4,8 +4,8 @@ set -Eeuo pipefail
 umask 077
 
 readonly POSTGRES_IMAGE="postgres:16@sha256:5a65324fe84dc41709ff914e90b07f3e2f577073ed27bf917d4873aca0c9ec51"
-readonly EXPECTED_REVISION="g5c9d2e3f4a5"
-readonly EXPECTED_PREVIOUS_REVISION="f4b8c1d2e3a4"
+readonly EXPECTED_REVISION="h6d0e3f4a5b6"
+readonly EXPECTED_PREVIOUS_REVISION="g5c9d2e3f4a5"
 readonly POSTGRES_EXPORTER_ROLE="vpn_exporter"
 readonly SUSPENSION_RECONCILE_HARD_TIMEOUT="360s"
 

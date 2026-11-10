@@ -525,3 +525,30 @@ select { min-height: 34px; padding: 6px 30px 6px 9px; font-size: 11px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* Account subscriptions and reviewed message campaigns. */
+.product-notice { margin: 14px 0; padding: 14px 16px; border: 1px solid #dddaf4; border-radius: 10px; color: #42405c; background: var(--primary-soft); font-size: 11px; line-height: 1.65; }
+.product-notice p { margin: 5px 0 0; }
+.plan-grid { margin-bottom: 16px; }
+.plan-card { padding: 22px; }
+.plan-card header > strong { display: block; margin: 16px 0 12px; font-size: 28px; letter-spacing: -.04em; }
+.plan-card header > strong small { color: var(--muted); font-size: 12px; font-weight: 400; letter-spacing: normal; }
+.plan-card h2 { margin: 5px 0; font-size: 18px; }
+.plan-card p { margin: 8px 0; font-size: 12px; }
+.plan-card > small { color: var(--muted); font-size: 11px; line-height: 1.6; }
+.migration-panel { margin-top: 22px; }
+.migration-preview > .product-notice, .migration-preview > .form-error { margin: 0 18px 16px; }
+.migration-preview > .stats-grid { padding: 0 18px; }
+.subscription-accesses { padding: 0 18px 18px; }
+.subscription-accesses > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0; font-size: 11px; }
+.check-field { display: flex; align-items: flex-start; gap: 9px; font-size: 11px; line-height: 1.6; }
+.check-field input { margin-top: 3px; }
+.campaign-editor, .campaign-review { padding: 18px; }
+.campaign-message { white-space: pre-wrap; overflow-wrap: anywhere; padding: 16px; background: #f6f6fb; border-radius: 10px; font-size: 12px; line-height: 1.7; }
+.campaign-counts { display: grid; gap: 10px; }
+.campaign-counts > div { display: flex; justify-content: space-between; gap: 12px; }
+.campaign-counts dd { margin: 0; font-weight: 700; }
+
+.subscription-forecast { margin: 20px 0; }
+.subscription-forecast > .stats-grid { padding: 0 18px; }
+.subscription-forecast > .product-notice { margin: 0 18px 18px; }

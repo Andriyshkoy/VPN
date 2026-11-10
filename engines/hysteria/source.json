@@ -1,0 +1,12 @@
+{
+  "upstream": "https://github.com/apernet/hysteria",
+  "tag": "app/v2.13.0",
+  "commit": "ca8fbd874fd6ca82413948de6dc5924405e103e1",
+  "source_url": "https://codeload.github.com/apernet/hysteria/tar.gz/ca8fbd874fd6ca82413948de6dc5924405e103e1",
+  "source_sha256": "9458e0ec205b7f1b6ff842d73abbea6a4f256c4f9ce731e743291ba16339bf1e",
+  "go_version": "1.27.3",
+  "go_url": "https://go.dev/dl/go1.27.3.linux-amd64.tar.gz",
+  "go_sha256": "65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40",
+  "version": "2.13.0+vpn-session-limit.1",
+  "source_date_epoch": 1791172822
+}

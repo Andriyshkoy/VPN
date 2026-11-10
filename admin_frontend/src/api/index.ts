@@ -25,6 +25,7 @@ import type {
   BalanceAdjustmentInput,
   BillingRun,
   LedgerEntry,
+  NodeProfile,
   Page,
   Payment,
   ReferralNode,
@@ -112,6 +113,7 @@ export const referralsApi = {
 export const configsApi = {
   list: (params: ListParams) => adaptedPage<VpnConfig>('/configs', params, adaptConfig),
   detail: async (id: string) => adaptConfig(await request<unknown>(`/configs/${encodeURIComponent(id)}`)),
+  profile: (id: string) => request<NodeProfile>(`/configs/${encodeURIComponent(id)}/profile`, { cache: 'no-store' }),
   action: async (id: string, action: 'suspend' | 'unsuspend' | 'revoke', reason: string) => adaptConfig(await request<unknown>(`/configs/${encodeURIComponent(id)}/actions`, { method: 'POST', body: { action, reason }, idempotencyKey: crypto.randomUUID() })),
 }
 
