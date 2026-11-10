@@ -153,8 +153,8 @@
     "service_profiles": {
       "hysteria": {
         "format": "singbox-json",
-        "filename": "hiddify-hysteria.json",
-        "clipboard": "complete_json_including_outer_braces",
+        "filename": "vpn-by-andriyshkoy-hysteria.json",
+        "clipboard": "complete_profile_title_comment_and_json",
         "tls_insecure": false,
         "tls_certificate_pin_preserved": true
       },

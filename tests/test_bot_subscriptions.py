@@ -1,9 +1,12 @@
+import base64
+import html
 import json
 from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from urllib.parse import unquote, urlsplit
 
 import pytest
 
@@ -308,13 +311,21 @@ async def test_regeneration_requires_confirmation_and_same_button_rotates_once_k
 
 
 @pytest.mark.asyncio
-async def test_secret_export_has_no_callback_keyboard_and_never_enters_audit(flow):
+@pytest.mark.parametrize("fragment", ["", "#old%20name"])
+async def test_secret_export_has_no_callback_keyboard_and_never_enters_audit(
+    flow, fragment
+):
+    original = flow.service.export.return_value.uri + fragment
+    flow.service.export.return_value = SubscriptionProfile("vless-reality", original)
     callback = Callback("sub:profile:vless-reality")
     context = TelegramActionAuditContext("callback.received", "handled", {})
     await subscriptions.subscription_callback(callback, flow.state, context)
     flow.service.export.assert_awaited_once_with(7, "vless-reality")
     text, kwargs = callback.message.calls[0]
     assert "vless://key@" in text and "&amp;type=tcp" in text
+    exported = html.unescape(text.split("<pre>", 1)[1].split("</pre>", 1)[0])
+    assert exported.partition("#")[0] == original.partition("#")[0]
+    assert unquote(urlsplit(exported).fragment) == "VPN by @andriyshkoy · VLESS REALITY"
     assert "reply_markup" not in kwargs
     assert "protect_content" not in kwargs  # users must be able to copy the URI
     text, kwargs = callback.message.calls[1]
@@ -332,8 +343,10 @@ async def test_long_uri_is_delivered_intact_as_copyable_file(flow):
     callback = Callback("sub:profile:vless-reality")
     await subscriptions.subscription_callback(callback, flow.state)
     document, kwargs = callback.message.documents[0]
-    assert document.data == uri.encode()
-    assert document.filename == "hiddify-vless-reality.txt"
+    exported = document.data.decode()
+    assert exported.partition("#")[0] == uri
+    assert unquote(urlsplit(exported).fragment) == "VPN by @andriyshkoy · VLESS REALITY"
+    assert document.filename == "vpn-by-andriyshkoy-vless-reality.txt"
     assert "reply_markup" not in kwargs
     assert uri not in str(callback.message.calls)
 
@@ -364,14 +377,22 @@ async def test_hysteria_json_is_a_secret_file_and_copyable_content_without_callb
     context = TelegramActionAuditContext("callback.received", "handled", {})
     await subscriptions.subscription_callback(callback, flow.state, context)
     document, kwargs = callback.message.documents[0]
-    assert document.filename == "hiddify-hysteria.json"
-    assert document.data == content.encode()
+    assert document.filename == "vpn-by-andriyshkoy-hysteria.json"
+    exported = document.data.decode()
+    header, separator, body = exported.partition("\n")
+    assert separator and header.startswith("// profile-title: base64:")
+    assert (
+        base64.b64decode(header.removeprefix("// profile-title: base64:")).decode()
+        == "VPN by @andriyshkoy · Hysteria 2"
+    )
+    assert body.encode() == content.encode()
     assert "reply_markup" not in kwargs and "protect_content" not in kwargs
     text, kwargs = callback.message.calls[0]
     assert "JSON для Hiddify" in text and "private&lt;&amp;&gt;" in text
+    assert html.unescape(text.split("<pre>", 1)[1].split("</pre>", 1)[0]) == exported
     assert "reply_markup" not in kwargs
     instruction, kwargs = callback.message.calls[1]
-    assert "фигурные скобки" in instruction and "«Файл»" in instruction
+    assert "первую строку // profile-title" in instruction and "«Файл»" in instruction
     assert content not in instruction and kwargs["reply_markup"] is not None
     assert context.metadata == {"service_id": "hysteria"}
     assert "private" not in repr(context)
@@ -385,7 +406,9 @@ async def test_long_json_remains_intact_in_file_without_oversized_message(flow):
     )
     callback = Callback("sub:profile:hysteria")
     await subscriptions.subscription_callback(callback, flow.state)
-    assert callback.message.documents[0][0].data == content.encode()
+    exported = callback.message.documents[0][0].data
+    assert exported.startswith(b"// profile-title: base64:")
+    assert exported.partition(b"\n")[2] == content.encode()
     assert callback.message.documents[0][0].filename.endswith(".json")
     assert len(callback.message.calls) == 1
     assert content not in str(callback.message.calls)
