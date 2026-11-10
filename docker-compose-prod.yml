@@ -6,6 +6,14 @@ x-vpn-manager-tls-volume: &vpn-manager-tls-volume
   target: /run/secrets/vpn-manager
   read_only: true
 
+x-vpn-node-catalog-volume: &vpn-node-catalog-volume
+  type: bind
+  source: /etc/vpn-hub/node-agent-endpoints.json
+  target: /run/secrets/node-agent-endpoints.json
+  read_only: true
+  bind:
+    create_host_path: false
+
 x-observability-environment: &observability-environment
   OBSERVABILITY_ENABLED: ${OBSERVABILITY_ENABLED:-false}
   STATSD_HOST: statsd_exporter
@@ -33,6 +41,7 @@ x-release-policy-environment: &release-policy-environment
   PAYMENTS_ENABLED: ${PAYMENTS_ENABLED:?PAYMENTS_ENABLED is required}
   PROVISIONING_ENABLED: ${PROVISIONING_ENABLED:?PROVISIONING_ENABLED is required}
   NOTIFICATIONS_ENABLED: ${NOTIFICATIONS_ENABLED:?NOTIFICATIONS_ENABLED is required}
+  NODE_AGENT_ENDPOINTS_FILE: /run/secrets/node-agent-endpoints.json
   REFERRAL_REWARDS_ENABLED: ${REFERRAL_REWARDS_ENABLED:?REFERRAL_REWARDS_ENABLED is required}
   REFERRAL_LEVEL_1_RATE_BPS: ${REFERRAL_LEVEL_1_RATE_BPS:?REFERRAL_LEVEL_1_RATE_BPS is required}
   REFERRAL_LEVEL_2_RATE_BPS: ${REFERRAL_LEVEL_2_RATE_BPS:?REFERRAL_LEVEL_2_RATE_BPS is required}
@@ -126,6 +135,7 @@ services:
       PROMETHEUS_API_URL: ${PROMETHEUS_API_URL:-http://prometheus:9090}
     volumes:
       - *vpn-manager-tls-volume
+      - *vpn-node-catalog-volume
     healthcheck:
       test:
         [
@@ -160,6 +170,7 @@ services:
       VPN_HUB_SERVICE: bot
     volumes:
       - *vpn-manager-tls-volume
+      - *vpn-node-catalog-volume
     networks: [app, data, monitoring]
     stop_grace_period: 30s
     logging: *json-file-logging
@@ -184,6 +195,7 @@ services:
       VPN_HUB_SERVICE: rq_worker
     volumes:
       - *vpn-manager-tls-volume
+      - *vpn-node-catalog-volume
     networks: [app, data, monitoring]
     stop_grace_period: 60s
     logging: *json-file-logging
@@ -206,6 +218,8 @@ services:
     environment:
       <<: [*observability-environment, *release-policy-environment]
       VPN_HUB_SERVICE: rq_scheduler
+    volumes:
+      - *vpn-node-catalog-volume
     networks: [data, monitoring]
     stop_grace_period: 30s
     logging: *json-file-logging

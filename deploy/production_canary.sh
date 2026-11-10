@@ -300,6 +300,38 @@ assert_no_database_clients() {
     die "unexpected active database clients"
 }
 
+verify_node_catalog() {
+    local image="$1"
+    local catalog=/etc/vpn-hub/node-agent-endpoints.json
+    local probe_code
+
+    [[ -f "$catalog" && ! -L "$catalog" ]] || return 1
+    probe_code='import os
+from core.services.node_endpoints import load_node_endpoints
+assert os.geteuid() == 10001, "catalog_probe_requires_application_uid"
+path = os.environ["NODE_AGENT_ENDPOINTS_FILE"]
+assert path == "/run/secrets/node-agent-endpoints.json"
+load_node_endpoints(path)
+print("node_endpoint_catalog_ok")'
+    docker run --rm \
+        --network none \
+        --read-only \
+        --cap-drop ALL \
+        --security-opt no-new-privileges:true \
+        --tmpfs /tmp \
+        --mount "type=bind,source=${catalog},target=/run/secrets/node-agent-endpoints.json,readonly" \
+        -e DATABASE_URL=sqlite+aiosqlite:///:memory: \
+        -e ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+        -e MAINTENANCE_MODE=true \
+        -e BILLING_ENABLED=false \
+        -e PAYMENTS_ENABLED=false \
+        -e PROVISIONING_ENABLED=false \
+        -e NOTIFICATIONS_ENABLED=false \
+        -e NODE_AGENT_ENDPOINTS_FILE=/run/secrets/node-agent-endpoints.json \
+        --entrypoint python \
+        "$image" -c "$probe_code"
+}
+
 cleanup_preflight() {
     if [[ -n "${PREFLIGHT_CONTAINER:-}" ]]; then
         docker rm -f "$PREFLIGHT_CONTAINER" >/dev/null 2>&1 || true
@@ -664,6 +696,15 @@ log "preflight Telegram smoke passed"
 cleanup_preflight
 PREFLIGHT_CONTAINER=""
 PREFLIGHT_NETWORK=""
+
+log "verifying the existing node catalog from the selected application image UID"
+CATALOG_SMOKE_LOG="$BACKUP_DIR/node-catalog-smoke.log"
+: > "$CATALOG_SMOKE_LOG"
+chmod 0600 "$CATALOG_SMOKE_LOG"
+if ! verify_node_catalog "$BOT_IMAGE" > "$CATALOG_SMOKE_LOG" 2>&1; then
+    die "application UID cannot read the configured node catalog; stop before live migration"
+fi
+log "application UID parsed the private node catalog without mutation"
 
 bootstrap_postgres_exporter_role
 

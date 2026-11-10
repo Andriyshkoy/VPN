@@ -12,6 +12,22 @@ these profile gates.
 
 ## Release prerequisites
 
+The production node endpoint catalog remains at
+`/etc/vpn-hub/node-agent-endpoints.json`. Preserve its exact contents and private
+permissions: the application UID 10001 must be able to read the existing regular
+file (normally owner 10001, mode 0400). Do not replace it with an empty file or
+directory. The four backend services mount it read-only at
+`/run/secrets/node-agent-endpoints.json`; Compose refuses to create a missing
+host path. The frontend, proxy and migrations receive no catalog mount.
+
+Before live migration the selected bot image parses the mounted file as its
+normal application UID in a network-disabled, read-only container. This check
+uses dummy settings, does not contact a VPN node and prints no catalog data.
+A missing, unreadable or invalid catalog aborts before production schema changes.
+Do not restore the old four-image `vpn-infra-release.override.json` over the
+new six-image release: its image overrides can select obsolete application
+versions. The catalog bind is now part of the base production Compose file.
+
 1. Preserve and validate a database dump created after the current Manager API
    key rotation. Keep the earlier pre-rotation dump only as forensic history.
 2. Set all six `VPN_*_IMAGE` values to registry digests. Production Compose
