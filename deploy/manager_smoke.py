@@ -44,8 +44,27 @@ async def main() -> None:
     if not servers:
         raise RuntimeError("Manager smoke test requires at least one server")
 
-    seen_instance_ids: set[str] = set()
+    managers = []
     for server in servers:
+        backend = getattr(server, "backend_type", None)
+        if backend == "openvpn-manager":
+            managers.append(server)
+        elif backend == "node-agent":
+            # This backend has its own authenticated readiness/capability gate.
+            # Sending Manager mTLS requests to its API would test the wrong
+            # protocol and listener.
+            continue
+        else:
+            raise RuntimeError(
+                f"Manager smoke found an unsupported backend for {_server_label(server)}"
+            )
+    if not managers:
+        raise RuntimeError(
+            "Manager smoke test requires at least one OpenVPN Manager backend"
+        )
+
+    seen_instance_ids: set[str] = set()
+    for server in managers:
         await verify_manager(server, seen_instance_ids=seen_instance_ids)
 
     print("manager_smoke=ok")
