@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock
 from urllib.parse import unquote, urlsplit
 
 import pytest
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.methods import EditMessageText
 
 from bot.handlers import base, common, subscriptions
 from core.exceptions import APIConnectionError, InvalidOperationError
@@ -198,6 +200,46 @@ def test_pending_and_suspended_access_have_truthful_actions():
     )
 
 
+@pytest.mark.parametrize("plan", PLANS, ids=lambda plan: plan.code)
+def test_ready_keys_offer_refresh_and_explain_profile_buttons(plan):
+    current = view(plan_code=plan.code, services=plan.services)
+    text, markup = subscriptions.render_keys(current)
+    assert "sub:issue" not in buttons(markup)
+    assert "sub:keys" in buttons(markup)
+    assert any(
+        button.text == "🔄 Обновить состояние" and button.callback_data == "sub:keys"
+        for row in markup.inline_keyboard
+        for button in row
+    )
+    for service in plan.services:
+        assert f"sub:profile:{service}" in buttons(markup)
+        assert f"«Ключ {subscriptions.SERVICES[service]}»" in text
+    if plan.code == "basic":
+        # A leftover access outside the tariff does not hide its ready Hysteria key.
+        assert "sub:profile:vless-reality" not in buttons(markup)
+        assert "«Ключ VLESS + REALITY»" not in text
+
+
+@pytest.mark.parametrize(
+    "current",
+    [
+        view(status="pending"),
+        view(accesses=()),
+        view(accesses=(view().accesses[0],)),
+        view(accesses=(replace(view().accesses[0], status="failed"),)),
+    ],
+    ids=["pending-subscription", "missing-keys", "partial-keys", "failed-key"],
+)
+def test_unfinished_keys_keep_issuance_action(current):
+    _, markup = subscriptions.render_keys(current)
+    assert "sub:issue" in buttons(markup)
+    assert not any(
+        button.text == "🔄 Обновить состояние"
+        for row in markup.inline_keyboard
+        for button in row
+    )
+
+
 @pytest.mark.asyncio
 async def test_choose_plan_is_read_only_until_confirmation(flow):
     callback = Callback("sub:choose:basic")
@@ -283,6 +325,64 @@ async def test_issue_is_free_owner_scoped_and_has_stable_replay_key(flow, monkey
     assert first.kwargs["request_key"]
     forbidden_billing.assert_not_awaited()
     assert context.action == "vpn.key_issue"
+    assert flow.user.balance == Decimal("9.80")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["keys", "issue"])
+@pytest.mark.parametrize(
+    ("current", "feedback"),
+    [
+        (view(), "Ключи готовы. Выберите нужный протокол."),
+        (
+            view(status="pending"),
+            "Ключи ещё готовятся. Обновите состояние чуть позже.",
+        ),
+        (
+            view(accesses=()),
+            "Не все ключи выпущены. Нажмите «Выпустить / проверить».",
+        ),
+        (
+            view(accesses=(replace(view().accesses[0], status="failed"),)),
+            "Не все ключи готовы. Повторите выпуск или напишите в поддержку.",
+        ),
+        (
+            view(
+                accesses=(
+                    replace(view().accesses[0], status="suspended"),
+                    view().accesses[1],
+                )
+            ),
+            "Не все ключи готовы. Нажмите «Выпустить / проверить».",
+        ),
+    ],
+    ids=["ready", "pending", "missing", "failed", "suspended-key"],
+)
+async def test_key_actions_report_result_when_telegram_message_is_unchanged(
+    flow, action, current, feedback
+):
+    flow.service.get_current.return_value = current
+    flow.service.issue.return_value = current
+    callback = Callback(f"sub:{action}")
+    callback.message.edit_text = AsyncMock(
+        side_effect=TelegramBadRequest(
+            method=EditMessageText(chat_id=1, message_id=1, text="unchanged"),
+            message="Bad Request: message is not modified",
+        )
+    )
+    context = TelegramActionAuditContext("callback.received", "handled", {})
+    await subscriptions.subscription_callback(callback, flow.state, context)
+    assert callback.answers == [((feedback,), {})]
+    assert callback.message.calls == [] and callback.message.documents == []
+    callback.message.edit_text.assert_awaited_once()
+    if action == "keys":
+        flow.service.issue.assert_not_awaited()
+        assert context.action == "vpn.keys_view"
+    else:
+        flow.service.issue.assert_awaited_once()
+        assert context.action == "vpn.key_issue"
+    for mutation in ("select_plan", "regenerate", "suspend", "resume", "export"):
+        getattr(flow.service, mutation).assert_not_awaited()
     assert flow.user.balance == Decimal("9.80")
 
 
