@@ -35,7 +35,9 @@
 
 ## Контракт интеграции
 
-`client-downloads.json` — единый каталог ссылок: `schema_version`, `checked_at`, `client`, `platforms`, `import`, `guides`, `sources`. Ключи платформ: `android`, `ios`, `windows`, `macos`, `linux`, `tv`. У каждой есть `label`, `guide`, `store_url` (может быть `null`), `minimum_os`, `downloads` (массив `label`, `url`, `architecture`) и необязательный `notes`.
+`client-downloads.json` — единый каталог ссылок: `schema_version`, `checked_at`, `client`, `platforms`, `alternatives`, `import`, `guides`, `sources`. Ключи платформ: `android`, `ios`, `windows`, `macos`, `linux`, `tv`. У каждой есть `label`, `guide`, `store_url` (может быть `null`), `minimum_os`, `downloads` (массив `label`, `url`, `architecture`) и необязательный `notes`.
+
+`alternatives.ios_karing` хранит отдельную инструкцию Karing для iPhone: официальный магазин и сайт, проверенную версию, требования ОС, источники и `supported_services: ["vless-reality"]`. Это альтернатива клиенту для конкретного сервиса, а не новая платформа или изменение профиля доступа.
 
 Ссылки `releases/latest/download/...` обновляются у upstream и не являются фиксацией бинарника по SHA. Для происхождения сделанных снимков metadata содержит конкретный тег и хеш скачанного бинарника. Каталог нужно повторно сверять при обновлении релиза.
 
@@ -70,3 +72,9 @@ python3 docs/client-guides/verify_guides.py --online
 ```bash
 python3 docs/client-guides/verify_guides.py --private-bundle /path/to/client-guides-draft
 ```
+
+## Альтернатива Karing для iPhone
+
+Проверено **12.11.2026** по [российской странице App Store](https://apps.apple.com/ru/app/karing/id6472431552), [руководству импорта](https://karing.app/en/app-manual/add-profiles), [быстрому старту](https://karing.app/en/quickstart) и [русским подписям интерфейса версии 1.2.25.2802](https://github.com/KaringX/karing/blob/v1.2.25.2802/lib/i18n/ru.i18n.json). Инструкция охватывает получение существующей ссылки VLESS, импорт из буфера, выбор сервера и разрешение VPN. Проверки на физическом iPhone не заявляются.
+
+Karing поддерживает протокол Hysteria 2, но это не подтверждает совместимость нашего готового JSON. В [открытом запросе поддержки `certificate_sha256`](https://github.com/KaringX/karing/issues/2056) описано отсутствие необходимого импорта закреплённого сертификата. Поэтому Karing предлагается для **VLESS + REALITY в PLUS**, а для **Hysteria / BASIC** остаётся Hiddify или помощь поддержки. Инструкция не предлагает отключать проверку сертификата, менять TLS или преобразовывать наш JSON в короткую ссылку.

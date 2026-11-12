@@ -117,7 +117,17 @@ _MENU_ACTIONS = {
 }
 
 _GUIDES = frozenset(
-    {"menu", "windows", "macos", "android", "ios", "linux", "tv", "troubleshooting"}
+    {
+        "menu",
+        "windows",
+        "macos",
+        "android",
+        "ios",
+        "ios_karing",
+        "linux",
+        "tv",
+        "troubleshooting",
+    }
 )
 _PAYMENT_PROVIDERS = frozenset({"telegram", "crypto"})
 _TOP_UP_AMOUNTS = frozenset({100, 200, 300, 500})

@@ -21,6 +21,7 @@ GUIDE_LABELS = {
     "macos": "🍎 macOS",
     "android": "🤖 Android",
     "ios": "📱 iPhone / iPad",
+    "ios_karing": "📱 iPhone / iPad — Karing",
     "linux": "🐧 Linux",
     "tv": "📺 ТВ / роутер",
     "troubleshooting": "🛠 Не подключается",
@@ -168,6 +169,11 @@ def guide_menu_keyboard() -> InlineKeyboardMarkup:
                 ),
                 InlineKeyboardButton(
                     text=GUIDE_LABELS["ios"], callback_data="guide:ios"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=GUIDE_LABELS["ios_karing"], callback_data="guide:ios_karing"
                 ),
             ],
             [

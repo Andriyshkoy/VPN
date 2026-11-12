@@ -347,7 +347,17 @@ def _guide_callback_update(update_id: int, guide: str) -> dict:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "guide",
-    ["windows", "macos", "android", "ios", "linux", "tv", "troubleshooting", "menu"],
+    [
+        "windows",
+        "macos",
+        "android",
+        "ios",
+        "ios_karing",
+        "linux",
+        "tv",
+        "troubleshooting",
+        "menu",
+    ],
 )
 async def test_polling_guide_callback_persists_wire_fields_without_sdk_defaults(
     sessionmaker, guide

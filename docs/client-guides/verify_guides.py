@@ -66,6 +66,18 @@ def verify(*, online: bool = False, private_bundle: Path | None = None) -> dict:
         errors.append("Hysteria Hiddify export must be a complete pinned JSON profile")
     if vless.get("format") != "uri" or vless.get("scheme") != "vless":
         errors.append("VLESS Hiddify export must remain a vless URI")
+    karing = catalog.get("alternatives", {}).get("ios_karing", {})
+    if (
+        karing.get("platform") != "ios"
+        or karing.get("app_store_id") != "6472431552"
+        or karing.get("store_url")
+        != "https://apps.apple.com/ru/app/karing/id6472431552"
+        or karing.get("supported_services") != ["vless-reality"]
+        or not (ROOT / karing.get("guide", "")).is_file()
+    ):
+        errors.append(
+            "Karing iOS guide must use the official app and our VLESS profile"
+        )
     assets: dict[str, dict] = {}
     public_images: set[str] = set()
     private_verified = 0
