@@ -12,7 +12,7 @@ from aiogram.types import Chat, Message, SuccessfulPayment, Update, User
 
 import bot.handlers as handlers
 from bot.handlers import base, common, configs, navigation, payments, privacy, referrals
-from bot.instructions import GUIDE_MENU_TEXT, GUIDES
+from bot.instructions import DOWNLOADS, GUIDE_MENU_TEXT, GUIDES
 from bot.keyboards import (
     GUIDE_LABELS,
     MENU_BALANCE,
@@ -26,6 +26,7 @@ from bot.keyboards import (
 )
 from bot.states import CreateConfig
 from core.services import ReferralOverview
+from core.services.telegram_user_actions import classify_telegram_action
 
 
 class DummyMessage:
@@ -358,10 +359,19 @@ async def test_successful_payment_wins_over_fsm_and_group_privacy(
 
 
 def test_instructions_cover_all_platforms_and_fit_telegram_limit():
-    expected = {"windows", "macos", "android", "ios", "linux", "tv", "troubleshooting"}
+    expected = {
+        "windows",
+        "macos",
+        "android",
+        "ios",
+        "ios_karing",
+        "linux",
+        "tv",
+        "troubleshooting",
+    }
     assert set(GUIDES) == expected
-    assert len(GUIDE_MENU_TEXT) < 4096
-    assert all(0 < len(text) < 4096 for text in GUIDES.values())
+    for text in (GUIDE_MENU_TEXT, *GUIDES.values()):
+        assert 0 < len(text.encode("utf-16-le")) // 2 < 4096
     assert "Hiddify" in GUIDES["windows"]
     assert "github.com/hiddify" in GUIDES["windows"]
     assert all(".ovpn" not in text for text in GUIDES.values())
@@ -384,14 +394,36 @@ def test_instructions_cover_all_platforms_and_fit_telegram_limit():
     assert set(GUIDE_LABELS) == expected
 
 
+def test_karing_ios_alternative_is_limited_to_our_vless_profile():
+    guide = GUIDES["ios_karing"]
+    alternative = DOWNLOADS["alternatives"]["ios_karing"]
+
+    assert alternative["supported_services"] == ["vless-reality"]
+    assert alternative["store_url"] in guide
+    assert "PLUS" in guide and "VLESS + REALITY" in guide
+    assert "vless://" in guide
+    assert "Добавить профиль" in guide and "Импорт из буфера обмена" in guide
+    assert "Hysteria / BASIC" in guide and "Hiddify" in guide
+    assert "не подтверждён" in guide
+    assert "vpn-by-andriyshkoy-hysteria.json" not in guide
+    assert "не отключайте проверку сертификата" in guide.lower()
+    assert "Karing" in GUIDES["ios"] and "Karing" in GUIDE_MENU_TEXT
+    action = classify_telegram_action(
+        {"callback_query": {"data": "guide:ios_karing", "from": {"id": 101}}}
+    )
+    assert action.action == "navigation.guide_open"
+    assert action.metadata == {"guide": "ios_karing"}
+
+
 @pytest.mark.asyncio
-async def test_guide_callback_edits_one_message_and_closes_spinner():
-    callback = DummyCallback("guide:windows")
+@pytest.mark.parametrize("guide", ["windows", "ios", "ios_karing"])
+async def test_guide_callback_edits_one_message_and_closes_spinner(guide):
+    callback = DummyCallback(f"guide:{guide}")
 
     await common.show_guide(callback)
 
     assert callback.message.calls == []
-    assert callback.message.edits[-1][0] == GUIDES["windows"]
+    assert callback.message.edits[-1][0] == GUIDES[guide]
     assert callback.message.edits[-1][1]["disable_web_page_preview"] is True
     assert callback.answers == [((), {})]
 

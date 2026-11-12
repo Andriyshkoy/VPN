@@ -177,5 +177,34 @@
     "release_api": "https://api.github.com/repos/hiddify/hiddify-app/releases/latest",
     "ios_requirements": "https://apps.apple.com/us/app/hiddify-proxy-vpn/id6596777532",
     "macos_deployment_target": "https://github.com/hiddify/hiddify-app/blob/v5.5.5/macos/Runner.xcodeproj/project.pbxproj"
+  },
+  "alternatives": {
+    "ios_karing": {
+      "name": "Karing",
+      "checked_at": "2026-11-12",
+      "verified_app_store_version": "1.2.25.2802",
+      "platform": "ios",
+      "guide": "ios-karing.md",
+      "store_url": "https://apps.apple.com/ru/app/karing/id6472431552",
+      "app_store_id": "6472431552",
+      "developer": "Supernova Nebula LLC",
+      "minimum_os": "iOS / iPadOS 15.0+",
+      "supported_services": [
+        "vless-reality"
+      ],
+      "website": "https://karing.app/",
+      "github": "https://github.com/KaringX/karing",
+      "official_use_guide": "https://karing.app/en/app-manual/add-profiles",
+      "notes": [
+        "Доступен в российском App Store на дату проверки; наличие может измениться.",
+        "Для нашего сервиса описан только VLESS + REALITY в PLUS. Поддержка протокола Hysteria 2 не подтверждает безопасный импорт нашего JSON с закреплённым сертификатом. Для Hysteria используйте Hiddify; проверку сертификата не отключать."
+      ],
+      "sources": {
+        "protocols": "https://karing.app/en/faq",
+        "quickstart": "https://karing.app/en/quickstart",
+        "ios_ui_labels": "https://github.com/KaringX/karing/blob/v1.2.25.2802/lib/i18n/ru.i18n.json",
+        "certificate_pin_support": "https://github.com/KaringX/karing/issues/2056"
+      }
+    }
   }
 }

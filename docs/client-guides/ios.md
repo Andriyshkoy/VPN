@@ -2,6 +2,8 @@
 
 Нужен **iOS / iPadOS 15.5 или новее** — это требование актуальной страницы Apple. Название приложения: **Hiddify Proxy & VPN**, разработчик **Holistic Resilience**, App Store ID `6596777532`.
 
+**Если Hiddify недоступен в вашем App Store:** для **VLESS + REALITY в PLUS** воспользуйтесь [отдельной инструкцией Karing](ios-karing.md). Для **Hysteria / BASIC** используйте Hiddify или [напишите в поддержку](https://t.me/andriyshkoy). Безопасный импорт нашего JSON Hysteria в Karing пока не подтверждён; не отключайте проверку сертификата ради подключения.
+
 ## Установить
 
 1. Откройте [официальную страницу в App Store](https://apps.apple.com/app/hiddify-proxy-vpn/id6596777532).

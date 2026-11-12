@@ -1,4 +1,4 @@
-"""Telegram-sized Hiddify instructions, using the verified client link catalog."""
+"""Telegram-sized client instructions, using the verified download catalog."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ DOWNLOADS_PATH = (
     / "client-downloads.json"
 )
 DOWNLOADS = json.loads(DOWNLOADS_PATH.read_text(encoding="utf-8"))
+KARING_IOS = DOWNLOADS["alternatives"]["ios_karing"]
 
 
 def _link(url: str, label: str) -> str:
@@ -70,10 +71,13 @@ _FOOTER = (
 )
 
 GUIDE_MENU_TEXT = (
-    "📚 <b>Подключение через Hiddify</b>\n\n"
-    "1. Выберите устройство ниже и установите Hiddify из официального источника.\n"
+    "📚 <b>Подключение VPN</b>\n\n"
+    "1. Выберите устройство ниже. Для iPhone есть отдельные инструкции "
+    "Hiddify и Karing. Если Hiddify нет в App Store, Karing подходит для "
+    "<b>VLESS + REALITY в PLUS</b>. Для нашей Hysteria используйте Hiddify.\n"
     "2. В <b>«Подписка»</b> выберите тариф. Выпуск и замена ключей бесплатны.\n"
-    "3. В <b>«Мои ключи»</b> получите профиль сервиса. <b>Hysteria</b>: "
+    "3. В <b>«Мои ключи»</b> получите профиль сервиса. Для импорта в Hiddify: "
+    "<b>Hysteria</b> — "
     "сохраните JSON и импортируйте через <b>«+» → «Файл / File»</b>, "
     "либо скопируйте весь текст, включая первую строку <code>// profile-title</code> "
     "и JSON, через <b>Clipboard</b>. "
@@ -93,7 +97,12 @@ def _guide(platform: str) -> str:
     if platform == "android":
         text += "Если Play недоступен, скачайте официальный APK. Разрешите установку для браузера; после установки разрешение можно отключить.\n"
     elif platform == "ios":
-        text += "Наличие в App Store зависит от региона. Если приложение не отображается, напишите в поддержку; не устанавливайте профили с посторонних сайтов.\n"
+        text += (
+            "Если Hiddify недоступен в вашем App Store, для <b>VLESS + REALITY "
+            "в PLUS</b> откройте отдельную инструкцию <b>«iPhone / iPad — Karing»</b> "
+            "в списке устройств. Для <b>Hysteria / BASIC</b> используйте Hiddify "
+            "или напишите в поддержку.\n"
+        )
     elif platform == "windows":
         text += "Для режима всего устройства запустите Hiddify с правами администратора и включите VPN/TUN. Для отдельных приложений можно использовать системный прокси, но он покрывает не весь трафик.\n"
     elif platform == "macos":
@@ -107,6 +116,43 @@ GUIDES = {
     platform: _guide(platform)
     for platform in ("windows", "macos", "android", "ios", "linux")
 }
+GUIDES["ios_karing"] = (
+    "📱 <b>iPhone / iPad — Karing</b>\n\n"
+    "Если Hiddify недоступен в App Store, этот вариант подходит для "
+    "<b>VLESS + REALITY в PLUS — 100 ₽/месяц</b>.\n"
+    "Для <b>Hysteria / BASIC</b> используйте Hiddify или напишите в поддержку: "
+    "безопасный импорт нашего JSON Hysteria в Karing пока не подтверждён. "
+    "Не отключайте проверку сертификата.\n\n"
+    "1. Установите бесплатный <b>Karing</b>: "
+    + _link(KARING_IOS["store_url"], "App Store")
+    + ". Разработчик — <b>Supernova Nebula LLC</b>. Требуется "
+    + html.escape(KARING_IOS["minimum_os"])
+    + ". Наличие приложения зависит от региона магазина.\n"
+    "2. В боте откройте <b>«Мои ключи» → «Ключ VLESS + REALITY»</b>. "
+    "Скопируйте всю ссылку <code>vless://…</code> без подписи сообщения. "
+    "Выпуск и замена ключей бесплатны.\n"
+    "3. В Karing откройте <b>«Добавить профиль» → "
+    "«Импорт из буфера обмена»</b>. Если iOS спросит разрешение вставить "
+    "текст, разрешите вставку.\n"
+    "4. Если появится поле <b>«Примечание»</b>, задайте название, например "
+    "<b>VPN by @andriyshkoy</b>. Сохраните профиль кнопкой <b>✓</b> вверху справа.\n"
+    "5. На главном экране выберите добавленный сервер и включите подключение. "
+    "В системном запросе на добавление VPN нажмите <b>«Разрешить / Allow»</b> "
+    "и подтвердите действие кодом устройства, если потребуется.\n"
+    "6. Отключите другие VPN, откройте YouTube или Telegram и запустите видео. "
+    "Для отключения используйте переключатель в Karing.\n\n"
+    "В PLUS можно вручную переключаться между VLESS в Karing и Hysteria "
+    "в Hiddify. Перед переключением отключите текущее VPN-подключение. "
+    "Отключение приложения не приостанавливает подписку — это делается "
+    "в разделе <b>«Подписка»</b> бота.\n\n"
+    + _link(KARING_IOS["website"], "Сайт Karing")
+    + " · "
+    + _link(KARING_IOS["github"], "GitHub")
+    + " · "
+    + _link(KARING_IOS["official_use_guide"], "Официальная инструкция")
+    + '\n\nНужна помощь? <a href="https://t.me/andriyshkoy">Напишите в поддержку</a>. '
+    "Ссылка содержит доступ к VPN: не публикуйте её и скрывайте на снимках экрана."
+)
 GUIDES["tv"] = (
     "📺 <b>Android TV / Google TV</b>\n\n"
     "Hiddify поддерживает Android TV с версии 5.5.5. Другие системы ТВ "

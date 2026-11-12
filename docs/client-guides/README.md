@@ -6,12 +6,15 @@
 | --- | --- | --- |
 | Android | [Пошагово](android.md) | [Google Play](https://play.google.com/store/apps/details?id=app.hiddify.com) |
 | iPhone / iPad | [Пошагово](ios.md) | [App Store](https://apps.apple.com/app/hiddify-proxy-vpn/id6596777532) |
+| iPhone / iPad — Karing, VLESS + REALITY | [Если Hiddify недоступен](ios-karing.md) | [Karing в App Store](https://apps.apple.com/ru/app/karing/id6472431552) |
 | Windows | [Пошагово](windows.md) | [Установщик x64](https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Windows-Setup-x64.exe) |
 | macOS | [Пошагово](macos.md) | [DMG](https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-MacOS.dmg) |
 | Linux | [Пошагово](linux.md) | [AppImage x64](https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Linux-x64-AppImage.AppImage) |
 | Android TV / Google TV | [Пошагово](tv.md) | [Universal APK](https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Android-universal.apk) |
 
 Если соединение не работает или видео останавливается, начните с [проверки подключения](troubleshooting.md).
+
+Если Hiddify недоступен в вашем App Store, для **VLESS + REALITY в PLUS** есть [инструкция Karing](ios-karing.md). Для **Hysteria / BASIC** используйте Hiddify или напишите в поддержку: безопасный импорт нашего JSON Hysteria в Karing пока не подтверждён. Поддержка протокола Hysteria 2 сама по себе не гарантирует, что клиент сохранит проверку сертификата из нашего профиля.
 
 ## Какой тариф выбрать
 
@@ -25,7 +28,7 @@
 
 Можно начать с Hysteria. Добавьте оба выданных ботом профиля в Hiddify: JSON Hysteria и ссылку VLESS. Если соединение не устанавливается, отключитесь, выберите другой профиль и подключитесь заново. Переключение выполняется вручную; наличие двух профилей не включает автоматическую ротацию.
 
-Одна подписка действует на аккаунт. Выпуск и замена ключей бесплатны. Чтобы остановить оплату, приостановите доступ в разделе «Подписка» бота: отключение Hiddify само по себе не приостанавливает подписку. Сейчас автосписания выключены.
+Одна подписка действует на аккаунт. Выпуск и замена ключей бесплатны. Чтобы остановить оплату, приостановите доступ в разделе «Подписка» бота: отключение VPN-приложения само по себе не приостанавливает подписку.
 
 Для **Hysteria** используйте только выданный ботом JSON-профиль. В нём уже задана проверка сертификата сервера; не удаляйте параметры TLS и не включайте `insecure`. Старую текстовую ссылку Hysteria для Hiddify замените новым JSON из бота. Для **VLESS + REALITY** скопируйте всю ссылку `vless://…` без подписи сообщения. Выпуск профиля бесплатный. JSON и ссылка содержат доступ к VPN: не публикуйте их и скрывайте содержимое на снимках экрана.
 
@@ -33,9 +36,9 @@
 
 ## Откуда скачивать
 
-Все ссылки ведут на официальные магазины и репозиторий Hiddify. Дополнительно: [сайт Hiddify](https://hiddify.com/), [GitHub](https://github.com/hiddify/hiddify-app), [последний стабильный релиз](https://github.com/hiddify/hiddify-app/releases/latest), [официальная установка](https://hiddify.com/app/How-to-install-Hiddify-app/), [официальное руководство](https://hiddify.com/app/How-to-use-Hiddify-app/).
+Все ссылки ведут на официальные магазины и источники клиентов. Дополнительно: [сайт Hiddify](https://hiddify.com/), [GitHub](https://github.com/hiddify/hiddify-app), [последний стабильный релиз](https://github.com/hiddify/hiddify-app/releases/latest), [официальная установка](https://hiddify.com/app/How-to-install-Hiddify-app/), [официальное руководство](https://hiddify.com/app/How-to-use-Hiddify-app/). Для альтернативы на iPhone: [сайт Karing](https://karing.app/), [GitHub Karing](https://github.com/KaringX/karing), [официальная инструкция импорта](https://karing.app/en/app-manual/add-profiles).
 
-Ссылки и требования проверены **9 ноября 2026**, стабильный релиз **5.5.5**. Магазины и новые релизы могут менять интерфейс. Под каждой иллюстрацией указаны настоящая платформа и известная версия: старые официальные изображения не являются снимками 5.5.5.
+Ссылки и требования Hiddify проверены **9 ноября 2026**, стабильный релиз **5.5.5**. Альтернатива Karing проверена по официальным источникам **12 ноября 2026**; российский App Store предлагает **1.2.25.2802**. Магазины и новые релизы могут менять интерфейс. Под каждой иллюстрацией указаны настоящая платформа и известная версия: старые официальные изображения не являются снимками 5.5.5.
 
 ## Для сопровождения
 
@@ -43,4 +46,4 @@
 
 В публичном репозитории нет raster-файлов Hiddify: официальные исторические иллюстрации подключаются по исходным URL. Полный локальный preview с 17 настоящими изображениями, включая наши 8 снимков Linux 5.5.5 и 2 снимка страниц магазинов, сохранён отдельно. Публичные инструкции не обещают размещение этих локальных кадров и не включают бинарник приложения.
 
-Публикация страницы помощи и включение списаний не выполнялись.
+Изменение инструкций само по себе не меняет тарифы, состояние подписок или списания.
