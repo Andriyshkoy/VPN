@@ -57,3 +57,10 @@ the repository. They are not live dependencies: retired servers receive no
 scheduled polling or new provisioning. Do not re-enable an old server or its
 Manager with the former credentials; decommission does not claim they were
 remotely revoked.
+
+The deployment Manager smoke also excludes retired servers. With only live
+node-agent servers it returns an explicit Manager skip, including
+`node_health=not_checked`; it does not report a successful OpenVPN check or
+prove node health. Node readiness and a client connection still require their
+own acceptance checks. Empty fleets, fleets containing only retired servers,
+and unknown backend types remain deployment errors.
