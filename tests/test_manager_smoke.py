@@ -195,12 +195,115 @@ async def test_main_rejects_unknown_backend_before_any_gateway_read(
 
 
 @pytest.mark.asyncio
-async def test_main_does_not_turn_node_only_fleet_into_manager_success(
+async def test_main_reports_manager_skip_without_node_health_claim(monkeypatch, capsys):
+    install_fleet(
+        monkeypatch,
+        [SimpleNamespace(id=51, backend_type="node-agent", lifecycle_state="active")],
+    )
+
+    await manager_smoke.main()
+
+    assert FakeGateway.inventory_calls == []
+    assert capsys.readouterr().out == (
+        "manager_smoke=skipped reason=no_nonretired_openvpn_managers "
+        "node_health=not_checked\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_main_does_not_contact_retired_manager_in_node_only_fleet(
     monkeypatch, capsys
 ):
-    install_fleet(monkeypatch, [SimpleNamespace(id=51, backend_type="node-agent")])
+    install_fleet(
+        monkeypatch,
+        [
+            SimpleNamespace(
+                id=61, backend_type="openvpn-manager", lifecycle_state="retired"
+            ),
+            SimpleNamespace(id=62, backend_type="node-agent", lifecycle_state="active"),
+        ],
+    )
 
-    with pytest.raises(RuntimeError, match="OpenVPN Manager backend"):
+    await manager_smoke.main()
+
+    assert FakeGateway.inventory_calls == []
+    output = capsys.readouterr().out
+    assert "manager_smoke=skipped" in output and "node_health=not_checked" in output
+    assert "manager_smoke=ok" not in output
+
+
+@pytest.mark.asyncio
+async def test_main_verifies_all_nonretired_managers_while_skipping_retired_nodes(
+    monkeypatch, capsys
+):
+    install_fleet(
+        monkeypatch,
+        [
+            SimpleNamespace(
+                id=71, backend_type="openvpn-manager", lifecycle_state="active"
+            ),
+            SimpleNamespace(
+                id=72, backend_type="openvpn-manager", lifecycle_state="retired"
+            ),
+            SimpleNamespace(
+                id=73, backend_type="node-agent", lifecycle_state="retired"
+            ),
+            SimpleNamespace(
+                id=74, backend_type="openvpn-manager", lifecycle_state="draining"
+            ),
+            SimpleNamespace(
+                id=75, backend_type="openvpn-manager", lifecycle_state="disabled"
+            ),
+        ],
+    )
+    FakeGateway.statuses = {
+        server_id: manager_status(f"manager-{server_id}") for server_id in (71, 74, 75)
+    }
+
+    await manager_smoke.main()
+
+    assert FakeGateway.inventory_calls == [71, 74, 75]
+    assert capsys.readouterr().out == "manager_smoke=ok\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "backends",
+    [
+        ["openvpn-manager"],
+        ["node-agent"],
+        ["openvpn-manager", "node-agent"],
+    ],
+)
+async def test_main_rejects_only_retired_fleet(monkeypatch, capsys, backends):
+    install_fleet(
+        monkeypatch,
+        [
+            SimpleNamespace(id=index, backend_type=backend, lifecycle_state="retired")
+            for index, backend in enumerate(backends, start=81)
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="requires at least one non-retired server"):
+        await manager_smoke.main()
+
+    assert FakeGateway.inventory_calls == []
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.asyncio
+async def test_main_rejects_unknown_backend_even_if_record_is_retired(
+    monkeypatch, capsys
+):
+    install_fleet(
+        monkeypatch,
+        [
+            SimpleNamespace(id=91, backend_type="node-agent", lifecycle_state="active"),
+            SimpleNamespace(id=92, backend_type="unknown", lifecycle_state="retired"),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="unsupported backend"):
         await manager_smoke.main()
 
     assert FakeGateway.inventory_calls == []

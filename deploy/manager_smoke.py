@@ -1,4 +1,4 @@
-"""Read-only production smoke test for the Manager mTLS control plane."""
+"""Read-only production smoke for non-retired Manager mTLS endpoints."""
 
 from __future__ import annotations
 
@@ -45,23 +45,30 @@ async def main() -> None:
         raise RuntimeError("Manager smoke test requires at least one server")
 
     managers = []
+    live_servers = []
     for server in servers:
         backend = getattr(server, "backend_type", None)
-        if backend == "openvpn-manager":
-            managers.append(server)
-        elif backend == "node-agent":
-            # This backend has its own authenticated readiness/capability gate.
-            # Sending Manager mTLS requests to its API would test the wrong
-            # protocol and listener.
-            continue
-        else:
+        if backend not in {"openvpn-manager", "node-agent"}:
             raise RuntimeError(
                 f"Manager smoke found an unsupported backend for {_server_label(server)}"
             )
-    if not managers:
+        if getattr(server, "lifecycle_state", None) == "retired":
+            continue
+        live_servers.append(server)
+        if backend == "openvpn-manager":
+            managers.append(server)
+        # Node readiness/capabilities require a separate check. Sending
+        # Manager mTLS requests to that API would test the wrong protocol.
+    if not live_servers:
         raise RuntimeError(
-            "Manager smoke test requires at least one OpenVPN Manager backend"
+            "Manager smoke test requires at least one non-retired server"
         )
+    if not managers:
+        print(
+            "manager_smoke=skipped reason=no_nonretired_openvpn_managers "
+            "node_health=not_checked"
+        )
+        return
 
     seen_instance_ids: set[str] = set()
     for server in managers:
